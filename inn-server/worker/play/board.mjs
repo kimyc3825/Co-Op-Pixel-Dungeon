@@ -604,22 +604,6 @@ export class Board {
     const placed = [];
     context.save();
     context.textBaseline = 'top';
-    if (fatigued) {
-      const headX = Math.round(((fatigued.x + .5) * TILE - this.viewX) * scaleX);
-      const feetY = Math.round(((fatigued.y + .87) * TILE - this.viewY) * scaleY);
-      if (headX >= 0 && headX <= width && feetY >= 0 && feetY - TILE * scaleY <= height) {
-        const label = '(지쳤음)';
-        context.font = '400 13px "Malgun Gothic", system-ui, sans-serif';
-        context.textAlign = 'center';
-        const labelWidth = Math.ceil(context.measureText(label).width) + 12;
-        const left = Math.max(margin, Math.min(width - margin - labelWidth, headX - labelWidth / 2));
-        const top = Math.max(margin, feetY - 43 * scaleY - 20);
-        paint(context, '#242019ed', left, top, labelWidth, 20);
-        context.fillStyle = '#f5d9a9';
-        context.fillText(label, left + labelWidth / 2, top + 3);
-        placed.push({ left, right: left + labelWidth, top, bottom: top + 20 });
-      }
-    }
     context.font = `400 ${fontSize}px "Malgun Gothic", system-ui, sans-serif`;
     context.textAlign = 'left';
     context.lineWidth = .75;
@@ -665,7 +649,41 @@ export class Board {
       context.fillStyle = '#fff0d0';
       for (const [index, line] of lines.entries()) context.fillText(line, left + pad, top + pad + index * lineHeight);
     }
+    if (fatigued) {
+      const headX = Math.round(((fatigued.x + .5) * TILE - this.viewX) * scaleX);
+      const feetY = Math.round(((fatigued.y + .87) * TILE - this.viewY) * scaleY);
+      if (headX >= 0 && headX <= width && feetY >= 0 && feetY - TILE * scaleY <= height) {
+        this.drawFatigueLabel(context, headX, feetY - 43 * scaleY, width, height, margin, placed);
+      }
+    }
     context.restore();
+  }
+
+  drawFatigueLabel(context, headX, bottom, width, height, margin, bubbles) {
+    const label = '(지쳤음)';
+    context.font = '400 13px "Malgun Gothic", system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.globalAlpha = 1;
+    const labelWidth = Math.ceil(context.measureText(label).width) + 12;
+    const labelHeight = 20;
+    const gap = 4;
+    let left = Math.max(margin, Math.min(width - margin - labelWidth, headX - labelWidth / 2));
+    let top = Math.max(margin, bottom - labelHeight);
+    const fits = (x, y) => x >= margin && x + labelWidth <= width - margin &&
+      y >= margin && y + labelHeight <= height - margin && bubbles.every(bubble =>
+        x + labelWidth + gap <= bubble.left || x >= bubble.right + gap ||
+        y + labelHeight + gap <= bubble.top || y >= bubble.bottom + gap);
+    if (!fits(left, top)) {
+      const beside = bubbles.flatMap(bubble => [bubble.left - gap - labelWidth, bubble.right + gap])
+        .sort((a, b) => Math.abs(a - left) - Math.abs(b - left)).find(x => fits(x, top));
+      if (beside != null) left = beside;
+      else top = bubbles.map(bubble => bubble.bottom + gap)
+        .sort((a, b) => a - b).find(y => fits(left, y));
+    }
+    if (top == null) return;
+    paint(context, '#242019ed', left, top, labelWidth, labelHeight);
+    context.fillStyle = '#f5d9a9';
+    context.fillText(label, left + labelWidth / 2, top + 3);
   }
 
   drawNpc(npc, now) {

@@ -128,7 +128,8 @@ public class EmoIcon extends Image {
 				Image drop = drops[i];
 				float phase = (elapsed / CYCLE + (float) i / drops.length) % 1f;
 				float side = i == 2 ? -1 : 1;
-				drop.x = PixelScene.align(camera, center + side * (7 + phase * 2) - drop.width() / 2f);
+				float lane = i == 1 ? 12 : 7;
+				drop.x = PixelScene.align(camera, center + side * (lane + phase * 2) - drop.width() / 2f);
 				drop.y = PixelScene.align(camera, head - (i == 1 ? 5 : 1) + phase * 8);
 				drop.alpha(1 - 0.45f * phase);
 			}
