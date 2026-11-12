@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules, PRISON } from './rules.mjs';
 import { Board, DIRECTIONS, canStep, canStrike, energyBand, nextToward } from './board.mjs';
-import { OriginalGame, warmOriginalRuntime } from './original.mjs';
+import { OriginalGame } from './original.mjs';
 import { PlaySession } from './session.mjs';
 import { AvatarCatalog, normalizeAppearance } from './avatar-catalog.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
@@ -150,6 +150,7 @@ const play = new PlaySession({
     }
     board.set(state, false);
     updateInn();
+    if (state) original.warm();
   },
   onBattle(frame) {
     if (!frame) {
@@ -1841,9 +1842,6 @@ function warmExpeditionAssets() {
   for (const { id: job } of AvatarCatalog.jobs) getAvatar({ job });
   void loadBattleRuntime({ simulate: true }).catch(() => {
     // Dungeon entry checks the current version again and handles an unavailable runtime.
-  });
-  void warmOriginalRuntime().catch(() => {
-    // The original game verifies the current build again at launch.
   });
 }
 

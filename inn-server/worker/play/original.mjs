@@ -1,39 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const MANIFEST = '/play/original/manifest.json';
+import { OriginalDownload } from './original-download.mjs';
+
 const BOOT_TIMEOUT = 120_000;
 const SAVE_TIMEOUT = 8_000;
 const RETREAT_TIMEOUT = 3_000;
-
-async function runtimeEntry(signal) {
-  const timeout = AbortSignal.timeout(6000);
-  const response = await fetch(MANIFEST, {
-    cache: 'no-store',
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  });
-  if (!response.ok) throw new Error('Original game manifest unavailable');
-  const { version, entry } = await response.json();
-  if (!/^[0-9a-f]{64}$/.test(version) || entry !== `/play/original/runtime/${version}/index.html`) {
-    throw new Error('Invalid original game manifest');
-  }
-  return entry;
-}
-
-export async function warmOriginalRuntime() {
-  if (navigator.connection?.saveData) return;
-  const entry = await runtimeEntry();
-  const response = await fetch(entry, { priority: 'low', signal: AbortSignal.timeout(6000) });
-  if (!response.ok) return;
-  const build = /data-build-base="(b\/[0-9a-f]{12}\/)"\s*/.exec(await response.text())?.[1];
-  if (!build) return;
-  const directory = entry.slice(0, -'index.html'.length);
-  for (const path of ['boot.js', build + 'spd.js', build + 'scripts/freetype.js']) {
-    const hint = document.createElement('link');
-    hint.rel = 'prefetch';
-    hint.as = 'script';
-    hint.href = directory + path;
-    document.head.append(hint);
-  }
-}
 
 export class OriginalGame {
   constructor({ suspend, resume, canLaunch, getProfile, getPreparation, usePreparation, onChange, tips }) {
@@ -52,6 +22,9 @@ export class OriginalGame {
     this.loading = document.getElementById('original-loading');
     this.ember = document.getElementById('original-ember');
     this.label = document.getElementById('original-phase');
+    this.download = new OriginalDownload(() => {
+      if (this.phase === 'loading' && this.progress < 0) this.label.textContent = this.download.label;
+    });
     this.tip = document.getElementById('original-tip');
     this.retry = document.getElementById('original-retry');
     this.back = document.getElementById('original-return');
@@ -74,6 +47,8 @@ export class OriginalGame {
 
   get active() { return !this.screen.hidden; }
   get atb() { return this.launchProfile?.get('atb') === '1'; }
+
+  warm() { this.download.warm(); }
 
   start(atb = false) {
     if (this.active || !this.canLaunch()) return;
@@ -107,9 +82,9 @@ export class OriginalGame {
         this.fail('여관을 나가지 못했습니다');
         return;
       }
-      const entry = await runtimeEntry(attempt.signal);
+      const entry = await this.download.enter(attempt.signal);
       if (attempt.signal.aborted) return;
-      this.setPhase('loading', '원본 게임 불러오는 중');
+      this.setPhase('loading', this.download.label);
       const frame = document.createElement('iframe');
       frame.title = this.title.textContent;
       frame.allow = 'fullscreen; autoplay';
