@@ -72,6 +72,14 @@
 
           <section class="card" aria-labelledby="expedition-heading">
             <h2 id="expedition-heading">던전 입장</h2>
+            <div class="theme-choice">
+              <label for="dungeon-theme">던전 테마</label>
+              <select id="dungeon-theme" aria-describedby="theme-hint">
+                <option value="sewers">하수도</option>
+                <option value="prison">버려진 감옥</option>
+              </select>
+              <p id="theme-hint">파티장이 고른 테마로 함께 입장합니다.</p>
+            </div>
             <button class="primary wide" id="match" type="button" disabled>동료 찾기</button>
             <div class="button-row">
               <button id="guide" type="button" disabled>길잡이와 입장</button>

@@ -8,6 +8,7 @@ import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Button;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndTextInput;
 import com.watabou.input.KeyEvent;
 import com.watabou.input.PointerEvent;
@@ -53,6 +54,7 @@ public final class NativeInnScene extends PixelScene {
     private FlatButton match;
     private FlatButton solo;
     private FlatButton guide;
+    private FlatButton theme;
     private FlatButton drink;
     private FlatButton compose;
     private FlatButton send;
@@ -65,7 +67,7 @@ public final class NativeInnScene extends PixelScene {
     private PredictedStep predictedStep;
     private boolean displayedTestMode;
     private boolean hasDisplayed;
-    private boolean editingName;
+    private boolean modalOpen;
     private boolean submitPending;
     private boolean sending;
 
@@ -109,9 +111,10 @@ public final class NativeInnScene extends PixelScene {
         solo = button("혼자 던전 입장", panelX, top + 22, panelWidth, 14, false, NativeClient::enterSolo);
         guide = button("길잡이와 입장", panelX + panelWidth / 2 + 1, top + 22, panelWidth / 2 - 1, 14,
             false, NativeClient::enterPractice);
-        add(label("여관 대화", 7, GOLD, panelX, top + 42));
+        theme = button(themeCaption(), panelX, top + 39, panelWidth, 14, false, this::chooseTheme);
+        add(label("여관 대화", 7, GOLD, panelX, top + 57));
 
-        float chatY = top + 52;
+        float chatY = top + 67;
         float chatHeight = Math.max(13, bottom - chatY - 20);
         add(block(panelX, chatY, panelWidth, chatHeight, FIELD));
         chatRows = new ChatRows(panelWidth - 5);
@@ -134,11 +137,11 @@ public final class NativeInnScene extends PixelScene {
     @Override
     public void update() {
         showSnapshot();
-        if (!editingName && Gdx.input.isKeyJustPressed(Input.Keys.F1)) toggleHelp();
+        if (!modalOpen && Gdx.input.isKeyJustPressed(Input.Keys.F1)) toggleHelp();
         if (editor != null) {
             if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) closeComposer();
             else if (submitPending) submitChat();
-        } else if (!editingName) {
+        } else if (!modalOpen) {
             if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) &&
                     !Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT) && !Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT)) {
                 openComposer();
@@ -173,6 +176,7 @@ public final class NativeInnScene extends PixelScene {
     private void showSnapshot() {
         LobbySession.Snapshot snapshot = NativeClient.innSnapshot();
         boolean testMode = NativeClient.isTestMode();
+        theme.enabled(NativeClient.canChooseExpeditionTheme());
         if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode) {
             boolean online = snapshot != null && snapshot.online() && snapshot.state() != null;
             InnApi.State state = snapshot == null ? null : snapshot.state();
@@ -257,7 +261,7 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private boolean onMovementKey(KeyEvent event) {
-        return editor == null && !editingName && keyboard.onKey(event.code, event.pressed);
+        return editor == null && !modalOpen && keyboard.onKey(event.code, event.pressed);
     }
 
     private void finishMove(PredictedStep step, boolean accepted) {
@@ -286,11 +290,11 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private void rename() {
-        if (editingName) return;
+        if (modalOpen) return;
         closeComposer();
         destination = null;
         keyboard.reset();
-        editingName = true;
+        modalOpen = true;
         add(new WndTextInput("닉네임", null, NativeClient.nickname(), 20, false, "변경", "취소") {
             @Override
             public void onSelect(boolean accepted, String value) {
@@ -304,7 +308,34 @@ public final class NativeInnScene extends PixelScene {
 
             @Override
             public void destroy() {
-                editingName = false;
+                modalOpen = false;
+                super.destroy();
+            }
+        });
+    }
+
+    private static String themeCaption() {
+        return "원정 지역 · " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme());
+    }
+
+    private void chooseTheme() {
+        if (modalOpen || !NativeClient.canChooseExpeditionTheme()) return;
+        closeComposer();
+        destination = null;
+        keyboard.reset();
+        modalOpen = true;
+        add(new WndOptions("원정 지역", "파티 원정은 파티장의 선택을 따릅니다. 길잡이 훈련에도 적용됩니다.",
+                NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS),
+                NativeClient.expeditionThemeTitle(DungeonLayout.PRISON)) {
+            @Override
+            protected void onSelect(int index) {
+                NativeClient.chooseExpeditionTheme(index == 1 ? DungeonLayout.PRISON : DungeonLayout.SEWERS);
+                theme.caption(themeCaption());
+            }
+
+            @Override
+            public void destroy() {
+                modalOpen = false;
                 super.destroy();
             }
         });
@@ -331,7 +362,7 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private void openComposer() {
-        if (editor != null || editingName || displayed == null || !displayed.online()) return;
+        if (editor != null || modalOpen || displayed == null || !displayed.online()) return;
         destination = null;
         keyboard.reset();
         editor = new TextInput(Chrome.get(Chrome.Type.TOAST_WHITE), false, defaultZoom * 7) {

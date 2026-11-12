@@ -63,6 +63,7 @@ public final class NativeDungeonScene extends PixelScene {
     private ColorBlock queuedTile;
     private Group waitingCard;
     private RenderedTextBlock waitingLabel;
+    private RenderedTextBlock floorTitle;
     private RenderedTextBlock floorStatus;
     private RenderedTextBlock queueLabel;
     private RenderedTextBlock notice;
@@ -102,7 +103,7 @@ public final class NativeDungeonScene extends PixelScene {
         float height = Camera.main.height - insets.top - insets.bottom - 10;
         ColorBlock background = panel(this, 0, 0, Camera.main.width, Camera.main.height, BACK);
         background.camera = Camera.main;
-        label(this, "하수도", 13, TEXT, left, top + 2, 95);
+        floorTitle = label(this, NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS), 13, TEXT, left, top + 2, 95);
         floorStatus = label(this, " ", 7, MUTED, left, top + 18, 145);
 
         StyledButton leave = button(this, "여관으로", this::leave);
@@ -213,8 +214,10 @@ public final class NativeDungeonScene extends PixelScene {
             showWaiting("던전을 불러오는 중…");
             return;
         }
-        if (tiles == null || prior == null || !next.map().equals(prior.map()) || !next.id().equals(prior.id())) {
-            buildMap(next.map());
+        if (tiles == null || prior == null || !next.map().equals(prior.map()) || !next.id().equals(prior.id()) ||
+                !next.theme().equals(prior.theme())) {
+            setText(floorTitle, NativeClient.expeditionThemeTitle(next.theme()));
+            buildMap(next.map(), next.theme());
             actorViews.values().forEach(view -> {
                 view.remove();
                 view.destroy();
@@ -324,7 +327,7 @@ public final class NativeDungeonScene extends PixelScene {
         }
     }
 
-    private void buildMap(List<String> map) {
+    private void buildMap(List<String> map, String theme) {
         rows = map.size();
         columns = map.getFirst().length();
         tile = Math.min(36, Math.min((boardWidth - 8) / columns, (boardHeight - 8) / rows));
@@ -334,7 +337,7 @@ public final class NativeDungeonScene extends PixelScene {
             tiles.remove();
             tiles.destroy();
         }
-        String texture = Assets.Environment.TILES_SEWERS;
+        String texture = DungeonLayout.PRISON.equals(theme) ? Assets.Environment.TILES_PRISON : Assets.Environment.TILES_SEWERS;
         tiles = new Tilemap(texture, new TextureFilm(texture, TILE, TILE));
         int[] indices = new int[columns * rows];
         for (int y = 0; y < rows; y++) {

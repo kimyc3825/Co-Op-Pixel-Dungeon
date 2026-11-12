@@ -23,6 +23,7 @@ final class NativeClient {
     private static String innNotice = "";
     private static long noticeUntil;
     private static String nickname;
+    private static String expeditionTheme = DungeonLayout.SEWERS;
     private static boolean testMode;
     private static boolean leftInn;
     private static volatile boolean shuttingDown;
@@ -33,6 +34,7 @@ final class NativeClient {
         api = connection;
         nickname = SETTINGS.get("nickname", "");
         if (!LobbySession.validName(nickname)) nickname = LobbySession.guestName();
+        expeditionTheme = DungeonLayout.themeOrDefault(SETTINGS.get("expeditionTheme", DungeonLayout.SEWERS));
         inn = new LobbySession(api, nickname, snapshot -> {
             if (!shuttingDown) Gdx.app.postRunnable(() -> onInn(snapshot));
         });
@@ -50,6 +52,23 @@ final class NativeClient {
     static String nickname() { return nickname; }
     static boolean isTestMode() { return testMode; }
     static void setTestMode(boolean enabled) { testMode = enabled; }
+
+    static String expeditionTheme() { return expeditionTheme; }
+
+    static String expeditionThemeTitle(String theme) {
+        return DungeonLayout.PRISON.equals(theme) ? "버려진 감옥" : "하수도";
+    }
+
+    static boolean canChooseExpeditionTheme() {
+        InnApi.State current = innSnapshot == null ? null : innSnapshot.state();
+        return view == View.INN && (current == null || !current.queued() && current.match() == null);
+    }
+
+    static void chooseExpeditionTheme(String theme) {
+        if (!canChooseExpeditionTheme()) return;
+        expeditionTheme = DungeonLayout.themeOrDefault(theme);
+        SETTINGS.put("expeditionTheme", expeditionTheme);
+    }
 
     static void rename(String value) {
         if (!LobbySession.validName(value)) {
@@ -78,7 +97,7 @@ final class NativeClient {
         view = View.ENTERING;
         leftInn = false;
         innNotice = matchId == null ? "길잡이와 던전에 들어가는 중…" : "파티 던전에 들어가는 중…";
-        dungeon = new DungeonSession(api, inn.sessionKey(), matchId, practicePlayer, (source, frame) -> {
+        dungeon = new DungeonSession(api, inn.sessionKey(), matchId, practicePlayer, expeditionTheme, (source, frame) -> {
             if (!shuttingDown) Gdx.app.postRunnable(() -> onDungeon(source, frame));
         });
     }

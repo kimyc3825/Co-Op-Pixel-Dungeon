@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { dungeonLayout, PRISON, SEWERS } from './layout.mjs';
 
 const ENERGY_CAP = 10;
 const MOVE_COST = 1;
@@ -13,18 +14,6 @@ const RAT_MOVE_COOLDOWN_MS = 380;
 const AWARENESS = 4;
 const ENERGY_CAP_UNITS = ENERGY_CAP * REGEN_POINT_MS;
 
-const MAP = Object.freeze([
-  '#############',
-  '#...........#',
-  '#.....#.....#',
-  '#.....#.....#',
-  '#...........#',
-  '#..##.......#',
-  '#...........#',
-  '#.....#.....#',
-  '#############',
-]);
-const WIDTH = MAP[0].length;
 const DIRECTIONS = [
   [1, 0], [-1, 0], [0, 1], [0, -1],
   [1, 1], [-1, 1], [1, -1], [-1, -1],
@@ -87,7 +76,7 @@ function normalize(action) {
   return null;
 }
 
-function createActor(id, name, kind, x, y, hp, now) {
+function createActor(id, name, kind, { x, y }, hp, now) {
   return {
     id, name, kind, x, y, hp, maxHp: hp, actionSeq: 0, lastAction: null, targetId: null, actionAt: 0,
     energyUnits: ENERGY_CAP_UNITS, energyAt: now,
@@ -110,22 +99,22 @@ function actorSnapshot(actor, now) {
   };
 }
 
-function walkable(x, y) {
-  return MAP[y]?.[x] === '.';
+function walkable(map, x, y) {
+  return map[y]?.[x] === '.';
 }
 
 function distance(x, y, target) {
   return Math.max(Math.abs(x - target.x), Math.abs(y - target.y));
 }
 
-function stepAllowed(x, y, dx, dy) {
-  return walkable(x + dx, y + dy) &&
-    (dx === 0 || dy === 0 || walkable(x + dx, y) || walkable(x, y + dy));
+function stepAllowed(map, x, y, dx, dy) {
+  return walkable(map, x + dx, y + dy) &&
+    (dx === 0 || dy === 0 || walkable(map, x + dx, y) || walkable(map, x, y + dy));
 }
 
-function inReach(x, y, target) {
-  return distance(x, y, target) === 1 && walkable(target.x, target.y) &&
-    (x === target.x || y === target.y || (walkable(target.x, y) && walkable(x, target.y)));
+function inReach(map, x, y, target) {
+  return distance(x, y, target) === 1 && walkable(map, target.x, target.y) &&
+    (x === target.x || y === target.y || (walkable(map, target.x, y) && walkable(map, x, target.y)));
 }
 
 function opponents(a, b) {
@@ -150,6 +139,7 @@ function lootRoll(seed, enemyId) {
 export class HostBattle {
   #id;
   #seed;
+  #layout;
   #actors;
   #drops = [];
   #battleAt;
@@ -158,16 +148,19 @@ export class HostBattle {
   #inCombat = false;
   #revision = 1;
 
-  constructor(id, host, guest, now, seed) {
+  constructor(id, host, guest, now, seed, theme = SEWERS) {
     this.#id = id;
     this.#seed = seed;
+    this.#layout = dungeonLayout(theme, seed);
+    const { host: entrance, partner, enemy1, enemy2 } = this.#layout;
+    const ratName = this.#layout.theme === PRISON ? '감옥 쥐' : '하수도 쥐';
     this.#battleAt = this.#observedAt = Math.trunc(now);
     this.#actors = [
-      createActor(host.id, host.name, 'player', 2, 2, 24, this.#battleAt),
-      guest ? createActor(guest.id, guest.name, 'player', 3, 2, 24, this.#battleAt)
-        : createActor('guide', '길잡이', 'guide', 3, 2, 24, this.#battleAt),
-      createActor('rat-1', '하수도 쥐', 'enemy', 9, 2, 12, this.#battleAt),
-      createActor('rat-2', '하수도 쥐', 'enemy', 10, 6, 12, this.#battleAt),
+      createActor(host.id, host.name, 'player', entrance, 24, this.#battleAt),
+      guest ? createActor(guest.id, guest.name, 'player', partner, 24, this.#battleAt)
+        : createActor('guide', '길잡이', 'guide', partner, 24, this.#battleAt),
+      createActor('rat-1', ratName, 'enemy', enemy1, 12, this.#battleAt),
+      createActor('rat-2', ratName, 'enemy', enemy2, 12, this.#battleAt),
     ];
   }
 
@@ -214,11 +207,11 @@ export class HostBattle {
     if (self?.kind !== 'player') throw new TypeError('Unknown player');
     const snapshotTime = Math.max(this.#observedAt, Math.trunc(now));
     return {
-      id: this.#id, selfId, now: snapshotTime, map: MAP,
+      id: this.#id, selfId, now: snapshotTime, map: this.#layout.map,
       actors: this.#actors.map((actor) => actorSnapshot(actor, snapshotTime)),
       queued: self.queued ? { ...self.queued } : null, status: this.#status, waitingForPartner: false,
       revision: this.#revision, drops: this.#drops.map((drop) => ({ ...drop })),
-      commandAck: self.commandAck, inCombat: this.#inCombat,
+      commandAck: self.commandAck, inCombat: this.#inCombat, theme: this.#layout.theme,
     };
   }
 
@@ -236,7 +229,7 @@ export class HostBattle {
   }
 
   #canMove(x, y, dx, dy) {
-    return stepAllowed(x, y, dx, dy) &&
+    return stepAllowed(this.#layout.map, x, y, dx, dy) &&
       !this.#actors.some((actor) => actor.hp > 0 && actor.x === x + dx && actor.y === y + dy);
   }
 
@@ -247,11 +240,11 @@ export class HostBattle {
   #actionAllowed(actor, action, queued) {
     if (action.type === 'move') {
       const { dx, dy } = action;
-      return queued ? stepAllowed(actor.x, actor.y, dx, dy) : this.#canMove(actor.x, actor.y, dx, dy);
+      return queued ? stepAllowed(this.#layout.map, actor.x, actor.y, dx, dy) : this.#canMove(actor.x, actor.y, dx, dy);
     }
     if (action.type === 'eat') return actor.rations > 0 && actor.hp < actor.maxHp;
     const target = this.#find(action.target);
-    return target && target.hp > 0 && opponents(actor, target) && inReach(actor.x, actor.y, target);
+    return target && target.hp > 0 && opponents(actor, target) && inReach(this.#layout.map, actor.x, actor.y, target);
   }
 
   #costUnits(actor, action) {
@@ -352,7 +345,7 @@ export class HostBattle {
 
   #botAction(actor) {
     const targets = this.#actors.filter((target) => awareOf(actor, target));
-    const adjacent = targets.find((target) => inReach(actor.x, actor.y, target));
+    const adjacent = targets.find((target) => inReach(this.#layout.map, actor.x, actor.y, target));
     if (adjacent) return attack(adjacent.id);
     if (targets.length) {
       const action = this.#approach(actor, targets);
@@ -366,17 +359,19 @@ export class HostBattle {
   }
 
   #approach(actor, targets) {
+    const { map } = this.#layout;
+    const width = map[0].length;
     const cells = [{ x: actor.x, y: actor.y, first: null }];
-    const visited = new Uint8Array(WIDTH * MAP.length);
-    visited[actor.y * WIDTH + actor.x] = 1;
+    const visited = new Uint8Array(width * map.length);
+    visited[actor.y * width + actor.x] = 1;
     for (let index = 0; index < cells.length; index++) {
       const cell = cells[index];
-      if (cell.first && targets.some((target) => inReach(cell.x, cell.y, target))) return cell.first;
+      if (cell.first && targets.some((target) => inReach(map, cell.x, cell.y, target))) return cell.first;
       for (const [dx, dy] of DIRECTIONS) {
         if (!this.#canMove(cell.x, cell.y, dx, dy)) continue;
         const x = cell.x + dx;
         const y = cell.y + dy;
-        const key = y * WIDTH + x;
+        const key = y * width + x;
         if (visited[key]) continue;
         visited[key] = 1;
         cells.push({ x, y, first: cell.first ?? move(dx, dy) });

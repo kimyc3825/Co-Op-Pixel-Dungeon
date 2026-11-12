@@ -26,7 +26,18 @@ final class InnApi {
     record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
     record DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
                         Action queued, String status, boolean waitingForPartner, int revision,
-                        List<Drop> drops, long commandAck, boolean inCombat) {}
+                        List<Drop> drops, long commandAck, boolean inCombat, String theme) {
+        DungeonState {
+            theme = DungeonLayout.themeOrDefault(theme);
+        }
+
+        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
+                     Action queued, String status, boolean waitingForPartner, int revision,
+                     List<Drop> drops, long commandAck, boolean inCombat) {
+            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
+                drops, commandAck, inCombat, DungeonLayout.SEWERS);
+        }
+    }
     record Signal(String type, String sdp) {}
     record LinkState(String id, String role, String selfId, String partnerId, String selfName,
                      String partnerName, boolean paired, boolean closed, Signal signal,

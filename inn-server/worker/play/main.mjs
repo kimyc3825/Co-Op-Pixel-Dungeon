@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules } from './battle.mjs';
 import { Board, canStep, canStrike, nextToward } from './board.mjs';
+import { PRISON } from './layout.mjs';
 import { PlaySession } from './session.mjs';
 
 const byId = (id) => document.getElementById(id);
 const board = new Board(byId('board'));
 const fields = Object.fromEntries([
   'scene-title', 'connection', 'board-title', 'board-status', 'help', 'help-toggle', 'battle-overlay', 'notice',
-  'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'match', 'guide', 'drink', 'seekers',
+  'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'match', 'guide', 'drink', 'seekers',
   'chat-form', 'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'queued', 'attack', 'eat', 'return',
   'touch-controls', 'touch-battle', 'touch-attack', 'touch-eat',
 ].map((id) => [id, byId(id)]));
@@ -124,13 +125,16 @@ function focusBoard() { board.canvas.focus({ preventScroll: true }); }
 
 function updateScene() {
   const dungeon = Boolean(play.frame);
+  const title = dungeon ? (play.frame.state.theme === PRISON ? '버려진 감옥' : '하수도') : '여관';
   fields['inn-panel'].hidden = dungeon;
   fields['dungeon-panel'].hidden = !dungeon;
   fields['touch-battle'].hidden = !dungeon;
-  text(fields['scene-title'], dungeon ? '하수도' : '여관');
-  text(fields['board-title'], dungeon ? '하수도 던전' : '여관 홀');
+  text(fields['scene-title'], title);
+  text(fields['board-title'], dungeon ? `${title} 던전` : '여관 홀');
+  const tabTitle = `${title} · Noxac Pixel Dungeon`;
+  if (document.title !== tabTitle) document.title = tabTitle;
   board.canvas.setAttribute('aria-label', dungeon
-    ? '하수도 지도. 방향키로 이동하고 스페이스로 평타를 사용합니다.' : '여관 지도. 방향키나 WASD로 이동합니다.');
+    ? `${title} 지도. 방향키로 이동하고 스페이스로 평타를 사용합니다.` : '여관 지도. 방향키나 WASD로 이동합니다.');
   if (dungeon) updateBattle();
   else updateInn();
 }
@@ -152,6 +156,8 @@ function updateInn() {
   fields['name-button'].disabled = busy.has('name') || entering || returning;
   fields['player-name'].disabled = entering || returning;
   const queued = Boolean(state?.queued);
+  fields['dungeon-theme'].value = play.theme;
+  fields['dungeon-theme'].disabled = queued || entering || returning || busy.has('match');
   text(fields.match, queued ? '동료 찾는 중 · 취소' : '동료 찾기');
   fields.match.dataset.waiting = String(queued);
   fields.match.disabled = !ready || busy.has('match');
@@ -450,6 +456,10 @@ function toggleHelp() {
 }
 
 fields['player-name'].value = loadName();
+fields['dungeon-theme'].addEventListener('change', () => {
+  play.setTheme(fields['dungeon-theme'].value);
+  updateInn();
+});
 fields['name-form'].addEventListener('submit', (event) => {
   event.preventDefault();
   const name = fields['player-name'].value.trim();

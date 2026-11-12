@@ -11,18 +11,6 @@ final class HostBattle {
     private static final int AWARENESS = 4;
     // One unit restores each ms after the inactivity delay, with no fractional time rounding.
     private static final int ENERGY_CAP_UNITS = BattleRules.ENERGY_CAP * BattleRules.REGEN_POINT_MS;
-    private static final List<String> MAP = List.of(
-        "#############",
-        "#...........#",
-        "#.....#.....#",
-        "#.....#.....#",
-        "#...........#",
-        "#..##.......#",
-        "#...........#",
-        "#.....#.....#",
-        "#############"
-    );
-    private static final int WIDTH = MAP.getFirst().length();
     private static final int[][] DIRECTIONS = {
         {1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1}
     };
@@ -59,12 +47,12 @@ final class HostBattle {
         long energyAt;
         int rations;
 
-        Actor(String id, String name, Kind kind, int x, int y, int hp, long now) {
+        Actor(String id, String name, Kind kind, DungeonLayout.Cell start, int hp, long now) {
             this.id = id;
             this.name = name;
             this.kind = kind;
-            this.x = x;
-            this.y = y;
+            x = start.x();
+            y = start.y();
             this.hp = maxHp = hp;
             moveReadyAt = kind == Kind.ENEMY ? now + RAT_MOVE_COOLDOWN_MS : now;
             attackReadyAt = kind == Kind.ENEMY ? now + BattleRules.ATTACK_COOLDOWN_MS : now;
@@ -88,6 +76,7 @@ final class HostBattle {
     private record Cell(int x, int y, InnApi.Action first) {}
 
     private final String id;
+    private final DungeonLayout layout;
     private final List<Actor> actors;
     private final List<InnApi.Drop> drops = new ArrayList<>(2);
     private final long seed;
@@ -98,16 +87,22 @@ final class HostBattle {
     private int revision = 1;
 
     HostBattle(String id, InnApi.Person host, InnApi.Person guestOrNull, long now, long seed) {
+        this(id, host, guestOrNull, now, seed, DungeonLayout.SEWERS);
+    }
+
+    HostBattle(String id, InnApi.Person host, InnApi.Person guestOrNull, long now, long seed, String theme) {
         this.id = id;
         this.seed = seed;
+        layout = DungeonLayout.create(theme, seed);
         this.battleAt = now;
         this.observedAt = now;
+        String ratName = DungeonLayout.PRISON.equals(layout.theme()) ? "감옥 쥐" : "하수도 쥐";
         actors = List.of(
-            new Actor(host.id(), host.name(), Kind.PLAYER, 2, 2, 24, now),
-            guestOrNull == null ? new Actor("guide", "길잡이", Kind.GUIDE, 3, 2, 24, now)
-                : new Actor(guestOrNull.id(), guestOrNull.name(), Kind.PLAYER, 3, 2, 24, now),
-            new Actor("rat-1", "하수도 쥐", Kind.ENEMY, 9, 2, 12, now),
-            new Actor("rat-2", "하수도 쥐", Kind.ENEMY, 10, 6, 12, now)
+            new Actor(host.id(), host.name(), Kind.PLAYER, layout.host(), 24, now),
+            guestOrNull == null ? new Actor("guide", "길잡이", Kind.GUIDE, layout.partner(), 24, now)
+                : new Actor(guestOrNull.id(), guestOrNull.name(), Kind.PLAYER, layout.partner(), 24, now),
+            new Actor("rat-1", ratName, Kind.ENEMY, layout.enemy1(), 12, now),
+            new Actor("rat-2", ratName, Kind.ENEMY, layout.enemy2(), 12, now)
         );
     }
 
@@ -155,9 +150,9 @@ final class HostBattle {
         Actor self = find(selfId);
         if (self == null || self.kind != Kind.PLAYER) throw new IllegalArgumentException("Unknown player");
         long snapshotTime = Math.max(observedAt, now);
-        return new InnApi.DungeonState(id, selfId, snapshotTime, MAP,
+        return new InnApi.DungeonState(id, selfId, snapshotTime, layout.map(),
             actors.stream().map(actor -> actor.snapshot(snapshotTime)).toList(), self.queued, status, false, revision,
-            List.copyOf(drops), self.commandAck, inCombat);
+            List.copyOf(drops), self.commandAck, inCombat, layout.theme());
     }
 
     void close(long now) {
@@ -192,22 +187,18 @@ final class HostBattle {
         return null;
     }
 
-    private static boolean walkable(int x, int y) {
-        return y >= 0 && y < MAP.size() && x >= 0 && x < WIDTH && MAP.get(y).charAt(x) == '.';
-    }
-
     private static int distance(int x, int y, Actor target) {
         return Math.max(Math.abs(x - target.x), Math.abs(y - target.y));
     }
 
-    private static boolean stepAllowed(int x, int y, int dx, int dy) {
-        return walkable(x + dx, y + dy) &&
-            (dx == 0 || dy == 0 || walkable(x + dx, y) || walkable(x, y + dy));
+    private boolean stepAllowed(int x, int y, int dx, int dy) {
+        return layout.walkable(x + dx, y + dy) &&
+            (dx == 0 || dy == 0 || layout.walkable(x + dx, y) || layout.walkable(x, y + dy));
     }
 
-    private static boolean inReach(int x, int y, Actor target) {
-        return distance(x, y, target) == 1 && walkable(target.x, target.y) &&
-            (x == target.x || y == target.y || (walkable(target.x, y) && walkable(x, target.y)));
+    private boolean inReach(int x, int y, Actor target) {
+        return distance(x, y, target) == 1 && layout.walkable(target.x, target.y) &&
+            (x == target.x || y == target.y || (layout.walkable(target.x, y) && layout.walkable(x, target.y)));
     }
 
     private boolean canMove(int x, int y, int dx, int dy) {
@@ -372,10 +363,11 @@ final class HostBattle {
     }
 
     private InnApi.Action approach(Actor actor, List<Actor> targets) {
+        int width = layout.map().getFirst().length();
         List<Cell> cells = new ArrayList<>();
-        boolean[] visited = new boolean[WIDTH * MAP.size()];
+        boolean[] visited = new boolean[width * layout.map().size()];
         cells.add(new Cell(actor.x, actor.y, null));
-        visited[actor.y * WIDTH + actor.x] = true;
+        visited[actor.y * width + actor.x] = true;
         for (int index = 0; index < cells.size(); index++) {
             Cell cell = cells.get(index);
             if (cell.first != null && targets.stream().anyMatch(target -> inReach(cell.x, cell.y, target))) {
@@ -387,7 +379,7 @@ final class HostBattle {
                 if (!canMove(cell.x, cell.y, dx, dy)) continue;
                 int x = cell.x + dx;
                 int y = cell.y + dy;
-                int key = y * WIDTH + x;
+                int key = y * width + x;
                 if (visited[key]) continue;
                 visited[key] = true;
                 InnApi.Action first = cell.first == null ? new InnApi.Action("move", dx, dy, null) : cell.first;

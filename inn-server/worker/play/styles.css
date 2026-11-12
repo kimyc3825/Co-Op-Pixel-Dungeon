@@ -15,7 +15,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button {
   min-height: 42px;
   padding: 8px 12px;
@@ -27,11 +27,11 @@ button {
 }
 button:hover:not(:disabled) { background: #3b3e30; border-color: #858170; }
 button:disabled { opacity: .46; cursor: default; }
-button:focus-visible, input:focus-visible, canvas:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-visible {
   outline: 2px solid var(--gold);
   outline-offset: 3px;
 }
-input {
+input, select {
   min-width: 0;
   width: 100%;
   padding: 9px 11px;
@@ -41,6 +41,7 @@ input {
   color: var(--paper);
 }
 input::placeholder { color: #aaa593; }
+select:disabled { opacity: .65; }
 kbd { font: inherit; font-size: .78em; color: inherit; opacity: .74; margin-left: .36em; }
 h1, h2, p { margin: 0; }
 .shell { width: min(1190px, 100%); margin: 0 auto; padding: 30px 24px 40px; }
@@ -79,6 +80,10 @@ canvas:focus-visible { outline-offset: -3px; }
 .sidebar > div { display: grid; gap: 13px; }
 .card { display: grid; gap: 12px; padding: 15px; }
 .card h2 { color: var(--paper); }
+.theme-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px 10px; font-size: .83rem; }
+.theme-choice label { color: var(--paper); }
+.theme-choice select { min-height: 38px; }
+.theme-choice p { grid-column: 1 / -1; color: var(--muted); font-size: .77rem; }
 .primary { background: #b88447; color: #17140d; border-color: #cf9b5a; font-weight: 750; }
 .primary:hover:not(:disabled) { background: #d0a168; border-color: #ebbd7b; }
 .primary[data-waiting="true"] { background: #5c5036; color: var(--paper); border-color: #89724d; }

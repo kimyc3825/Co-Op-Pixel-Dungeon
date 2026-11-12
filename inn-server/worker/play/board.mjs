@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { PRISON } from './layout.mjs';
+
 const TILE = 32;
 const ASSETS = ['warrior', 'rogue', 'rat', 'looking-sign', 'items', 'tiles_sewers'];
 const INN = ['############', '#BBBBBBBB..#', '#..........#', '#..TT..TT..#', '#..........#',
@@ -180,23 +182,30 @@ export class Board {
     this.canvas = canvas;
     this.context = canvas.getContext('2d');
     this.figures = new Map();
-    this.images = Object.fromEntries(ASSETS.map((name) => {
-      const image = new Image();
-      image.src = `/play/assets/${name}.png`;
-      if (name === 'tiles_sewers') image.addEventListener('load', () => { this.terrain = null; });
-      return [name, image];
-    }));
+    this.images = Object.fromEntries(ASSETS.map((name) => [name, this.loadImage(name)]));
     this.set(null, false);
+  }
+
+  loadImage(name) {
+    const image = new Image();
+    if (name.startsWith('tiles_')) image.addEventListener('load', () => {
+      if (this.textureName === name) this.terrain = null;
+    });
+    image.src = `/play/assets/${name}.png`;
+    return image;
   }
 
   set(snapshot, dungeon, now = performance.now()) {
     const scene = dungeon ? snapshot?.id : snapshot?.selfId;
-    if (scene !== this.scene || dungeon !== this.dungeon) {
+    const textureName = dungeon ? (snapshot?.theme === PRISON ? 'tiles_prison' : 'tiles_sewers') : null;
+    if (scene !== this.scene || dungeon !== this.dungeon || textureName !== this.textureName) {
       this.figures.clear();
       this.lastEvent = 0;
       this.terrain = null;
       this.scene = scene;
     }
+    this.textureName = textureName;
+    if (textureName && !this.images[textureName]) this.images[textureName] = this.loadImage(textureName);
     this.dungeon = dungeon;
     this.snapshot = snapshot;
     const map = snapshot?.map ?? INN;
@@ -242,17 +251,19 @@ export class Board {
     image.height = this.canvas.height;
     const context = image.getContext('2d');
     context.imageSmoothingEnabled = false;
+    const tiles = this.images[this.textureName];
+    const prison = this.textureName === 'tiles_prison';
+    const palette = prison ? ['#5b4f55', '#40373d', '#362e33'] : ['#4e5144', '#333b31', '#2e352d'];
     this.map.forEach((row, y) => {
       [...row].forEach((cell, x) => {
         if (!this.dungeon) return innTile(context, this.map, x, y);
-        const tiles = this.images.tiles_sewers;
         const variation = (x * 31 + y * 17) % 9 === 0;
         const wall = cell === '#';
         if (tiles.naturalWidth) {
           tileArt(context, tiles, wall ? Number(variation) : variation ? 6 : 0, wall ? 3 : 0,
             x * TILE, y * TILE, TILE);
         } else {
-          paint(context, wall ? '#4e5144' : variation ? '#333b31' : '#2e352d', x * TILE, y * TILE, TILE, TILE);
+          paint(context, palette[wall ? 0 : variation ? 1 : 2], x * TILE, y * TILE, TILE, TILE);
         }
       });
     });

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { HostBattle } from './battle.mjs';
+import { PRISON, SEWERS } from './layout.mjs';
 
 const INN = '/api/v2/inn/';
 const LINK = '/api/v4/link/';
@@ -72,6 +73,7 @@ export class PlaySession {
     this.inn = this.frame = this.battle = this.key = null;
     this.innSync = this.innTimer = null;
     this.name = '';
+    this.theme = SEWERS;
     this.history = [];
     this.after = this.generation = this.positionRevision = this.retryAt = this.nextMoveAt = 0;
     this.online = this.closed = this.moving = this.leftInn = this.renamePending = false;
@@ -111,6 +113,13 @@ export class PlaySession {
   }
 
   rename(name) { return this.join(name); }
+
+  setTheme(theme) {
+    if (this.closed || this.battle || this.inn?.queued || this.inn?.match ||
+        (theme !== SEWERS && theme !== PRISON)) return false;
+    this.theme = theme;
+    return true;
+  }
 
   moveInn(dx, dy) {
     if (!this.online || this.battle || this.moving || now() < this.nextMoveAt ||
@@ -264,7 +273,7 @@ export class PlaySession {
     this.leftInn = false;
     this.generation++;
     this.#status(matchId ? '파티 던전에 들어가는 중…' : '길잡이와 던전에 들어가는 중…');
-    const battle = new BattleSession(this.key, matchId, practicePlayer, this.relayOnly, this.iceServers,
+    const battle = new BattleSession(this.key, matchId, practicePlayer, this.theme, this.relayOnly, this.iceServers,
       frame => this.#battleFrame(battle, frame));
     this.battle = battle;
     battle.start();
@@ -297,10 +306,11 @@ export class PlaySession {
 }
 
 class BattleSession {
-  constructor(key, matchId, practicePlayer, relayOnly, iceServers, listener) {
+  constructor(key, matchId, practicePlayer, theme, relayOnly, iceServers, listener) {
     this.key = key;
     this.matchId = matchId;
     this.practicePlayer = practicePlayer;
+    this.theme = theme;
     this.relayOnly = relayOnly;
     this.iceServers = iceServers;
     this.listener = listener;
@@ -321,7 +331,7 @@ class BattleSession {
   start() {
     this.timer = setInterval(() => this.#tick(), 25);
     if (this.practicePlayer) {
-      this.engine = new HostBattle(crypto.randomUUID(), this.practicePlayer, null, now(), newSeed());
+      this.engine = new HostBattle(crypto.randomUUID(), this.practicePlayer, null, now(), newSeed(), this.theme);
       this.#tick();
       return;
     }
@@ -429,7 +439,7 @@ class BattleSession {
     if (!wasPaired) {
       this.host = link.role === 'host';
       if (this.host) this.engine = new HostBattle(link.id, { id: link.selfId, name: link.selfName },
-        { id: link.partnerId, name: link.partnerName }, now(), newSeed());
+        { id: link.partnerId, name: link.partnerName }, now(), newSeed(), this.theme);
       this.#openPeer();
     }
     if (this.peer && link.signal) this.#applySignal(link.signal);
