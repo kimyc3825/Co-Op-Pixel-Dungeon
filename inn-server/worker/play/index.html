@@ -37,6 +37,7 @@
               <div><dt>사격</dt><dd>1 · 칸 선택 · 행동력 2</dd></div>
               <div><dt>식량</dt><dd>2 · 행동력 3</dd></div>
               <div><dt>확인</dt><dd>E 살펴보기 · F / I 배낭 · H 상태</dd></div>
+              <div><dt>파티</dt><dd>동료 아이콘으로 상태와 배낭 확인</dd></div>
               <div><dt>기타</dt><dd>Space / Z / 숫자패드 5 대기 · C 줍기 · R 이어가기</dd></div>
               <div><dt>일시정지</dt><dd>P · 파티 공유</dd></div>
             </dl>
@@ -144,7 +145,7 @@
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 1인 저장</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.15.9/NoxacPixelDungeon-Inn-0.15.9-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.15.9</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.15.10/NoxacPixelDungeon-Inn-0.15.10-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.15.10</a>
             </div>
           </section>
 
@@ -176,6 +177,7 @@
           <section id="backpack-window" class="game-window backpack-window" aria-labelledby="backpack-heading" hidden>
             <header class="window-title"><h2 id="backpack-heading">배낭</h2><button type="button" data-close-window="backpack" aria-label="닫기">×</button></header>
             <div id="backpack" class="backpack" role="group" aria-label="배낭 칸"></div>
+            <button id="backpack-use" class="backpack-use" type="button" hidden>마시기</button>
             <p id="backpack-hint" class="backpack-hint">아이템 칸을 누른 뒤 옮길 칸을 선택하세요.</p>
           </section>
           <section class="chat-hud dungeon-chat" aria-labelledby="dungeon-chat-heading">

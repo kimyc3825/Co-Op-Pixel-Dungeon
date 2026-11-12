@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { PRISON, SEWERS } from './rules.mjs';
+import { isPotion, PRISON, SEWERS } from './rules.mjs';
 import { loadBattleRuntime } from './runtime-loader.mjs';
 import { normalizeAppearance } from './avatar-catalog.mjs';
 
@@ -67,6 +67,7 @@ function normalizeAction(type, dx, dy, target) {
     return { type, dx: 0, dy: 0, target };
   }
   if (type === 'eat') return { type, dx: 0, dy: 0, target: null };
+  if (type === 'use-item' && isPotion(target)) return { type, dx: 0, dy: 0, target };
   if (type === 'pause' && (target === 'begin' || target === 'resume')) return { type, dx: 0, dy: 0, target };
   if (type === 'chat' && typeof target === 'string') {
     const message = target.trim();
@@ -80,7 +81,22 @@ function maySend(action, state) {
   if (action.type === 'chat') return true;
   if (!active(state.status)) return false;
   if (action.type === 'pause') return true;
-  return !(state.pausedUntil > 0) && (state.status !== 'won' || action.type === 'move' || action.type === 'eat');
+  return !(state.pausedUntil > 0) && (state.status !== 'won' ||
+    action.type === 'move' || action.type === 'eat' || action.type === 'use-item');
+}
+
+function validInventory(inventory) {
+  return inventory == null || Array.isArray(inventory) && inventory.length <= 4 && inventory.every(entry =>
+    Number.isSafeInteger(entry?.amount) && entry.amount > 0 &&
+    (entry.item === 'ration' || entry.item === 'gold' || isPotion(entry.item))) &&
+    new Set(inventory.map(entry => entry.item)).size === inventory.length;
+}
+
+function validKnowledge(knowledge) {
+  return knowledge == null || Array.isArray(knowledge) && knowledge.length <= 2 && knowledge.every(entry =>
+    isPotion(entry?.item) && (entry.effect === 'healing' || entry.effect === 'energy')) &&
+    new Set(knowledge.map(entry => entry.item)).size === knowledge.length &&
+    new Set(knowledge.map(entry => entry.effect)).size === knowledge.length;
 }
 
 export class PlaySession {
@@ -335,7 +351,7 @@ export class PlaySession {
     const appearance = this.appearance;
     const wasOnline = this.online;
     this.innSync = request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST',
-      enter ? { name, appearance, after: this.after, dungeonProtocol: 8 } : { after: this.after }).then(fresh => {
+      enter ? { name, appearance, after: this.after, dungeonProtocol: 9 } : { after: this.after }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
       if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;
       // The roster read can have started before movement reached the server.
@@ -699,7 +715,8 @@ class BattleSession {
       state.map.every(row => typeof row === 'string' && row.length === state.map[0].length) &&
       Array.isArray(state.actors) && state.actors.some(actor => actor?.id === state.selfId) && state.actors.every(actor =>
         typeof actor?.id === 'string' && typeof actor.name === 'string' && typeof actor.kind === 'string' && actor.kind !== 'dummy' &&
-        Number.isFinite(actor.energy) && Number.isSafeInteger(actor.rations) && actor.rations >= 0) &&
+        Number.isFinite(actor.energy) && Number.isSafeInteger(actor.rations) && actor.rations >= 0 && validInventory(actor.inventory)) &&
+      validKnowledge(state.identifiedItems) &&
       Array.isArray(state.drops) && state.drops.every(drop => typeof drop?.id === 'string' && typeof drop.item === 'string') &&
       (state.trainingTools == null || (Array.isArray(state.trainingTools) && state.trainingTools.length === 0)) &&
       Array.isArray(state.messages) && state.messages.length <= 16 && state.messages.every(message =>

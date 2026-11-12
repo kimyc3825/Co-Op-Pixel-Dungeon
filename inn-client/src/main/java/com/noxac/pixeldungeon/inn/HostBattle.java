@@ -3,7 +3,9 @@ package com.noxac.pixeldungeon.inn;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.SplittableRandom;
 import java.util.regex.Pattern;
 
@@ -61,6 +63,8 @@ final class HostBattle {
         int energyUnits = ENERGY_CAP_UNITS;
         long energyAt;
         int rations;
+        int gold;
+        final Set<String> potions = new LinkedHashSet<>(2);
 
         Actor(String id, String name, Kind kind, DungeonLayout.Cell start, int hp, long now,
               InnApi.Appearance appearance) {
@@ -86,7 +90,16 @@ final class HostBattle {
             double energy = energyUnitsAt(now) / (double) BattleRules.REGEN_POINT_MS;
             return new InnApi.Combatant(id, name, kind.wireName, x, y, hp, maxHp,
                 actionSeq, lastAction, targetId, actionAt, energy, energyAt, moveReadyAt, attackReadyAt, rations,
-                appearance);
+                appearance, inventory());
+        }
+
+        private List<InnApi.InventoryItem> inventory() {
+            if (kind != Kind.PLAYER) return List.of();
+            List<InnApi.InventoryItem> items = new ArrayList<>(4);
+            if (rations > 0) items.add(new InnApi.InventoryItem("ration", rations));
+            if (gold > 0) items.add(new InnApi.InventoryItem("gold", gold));
+            for (String potion : potions) items.add(new InnApi.InventoryItem(potion, 1));
+            return List.copyOf(items);
         }
     }
 
@@ -123,6 +136,7 @@ final class HostBattle {
     private final Actor trainingDummy;
     private final List<InnApi.TrainingTool> trainingTools;
     private final List<InnApi.Drop> drops = new ArrayList<>(2);
+    private final Set<String> identifiedPotions = new LinkedHashSet<>(2);
     private final ArrayDeque<InnApi.PartyChat> messages = new ArrayDeque<>(CHAT_HISTORY);
     private final ArrayDeque<InnApi.BattleEvent> attackEvents = new ArrayDeque<>(ATTACK_HISTORY);
     private final List<Shot> projectiles = new ArrayList<>(2);
@@ -172,9 +186,13 @@ final class HostBattle {
         String ratName = DungeonLayout.PRISON.equals(layout.theme()) ? "감옥 쥐" : "하수도 쥐";
         boolean practice = guestOrNull == null && !solo;
         List<Actor> participants = new ArrayList<>(5);
-        participants.add(player(host, layout.host(), now, practice ? 0 : hostHp, practice ? 0 : hostFood));
+        Actor hostActor = player(host, layout.host(), now, practice ? 0 : hostHp, practice ? 0 : hostFood);
+        participants.add(hostActor);
         if (guestOrNull != null) {
-            participants.add(player(guestOrNull, layout.partner(), now, guestHp, guestFood));
+            Actor guestActor = player(guestOrNull, layout.partner(), now, guestHp, guestFood);
+            hostActor.potions.addAll(BattleRules.POTIONS);
+            guestActor.potions.addAll(BattleRules.POTIONS);
+            participants.add(guestActor);
         } else if (practice) {
             participants.add(new Actor("guide", "길잡이", Kind.GUIDE, layout.partner(), 24, now, null));
         }
@@ -282,7 +300,8 @@ final class HostBattle {
             actors.stream().map(actor -> actor.snapshot(snapshotTime)).toList(), self.queued, status, false, revision,
             List.copyOf(drops), self.commandAck, inCombat, layout.theme(), wallNow, pausedUntil, pauseReadyAt,
             List.copyOf(messages), friendlyFire, List.copyOf(attackEvents),
-            projectiles.stream().map(Shot::snapshot).toList(), trainingTools);
+            projectiles.stream().map(Shot::snapshot).toList(), trainingTools,
+            identifiedPotions.stream().map(item -> new InnApi.ItemKnowledge(item, potionEffect(item))).toList());
     }
 
     void close(long now) {
@@ -335,6 +354,8 @@ final class HostBattle {
             return new InnApi.Action("shoot", 0, 0, action.target());
         } else if ("eat".equals(action.type())) {
             return new InnApi.Action("eat", 0, 0, null);
+        } else if ("use-item".equals(action.type()) && BattleRules.isPotion(action.target())) {
+            return new InnApi.Action("use-item", 0, 0, action.target());
         } else if ("pause".equals(action.type()) && ("begin".equals(action.target()) || "resume".equals(action.target()))) {
             return new InnApi.Action("pause", 0, 0, action.target());
         } else if ("chat".equals(action.type()) && action.target() != null) {
@@ -395,6 +416,7 @@ final class HostBattle {
                 : canMove(actor.x, actor.y, action.dx(), action.dy());
         }
         if ("eat".equals(action.type())) return actor.rations > 0 && actor.hp < actor.maxHp;
+        if ("use-item".equals(action.type())) return actor.potions.contains(action.target());
         if ("shoot".equals(action.type())) {
             DungeonLayout.Cell aim = aimCell(action.target());
             int distance = Math.max(Math.abs(aim.x() - actor.x), Math.abs(aim.y() - actor.y));
@@ -488,6 +510,7 @@ final class HostBattle {
                 actor.hp = Math.min(actor.maxHp, actor.hp + BattleRules.RATION_HEAL);
                 actor.targetId = null;
             }
+            case "use-item" -> usePotion(actor, action.target());
             default -> throw new IllegalArgumentException("Unknown battle action");
         }
         battleAt = at;
@@ -495,6 +518,23 @@ final class HostBattle {
         actor.actionSeq++;
         actor.lastAction = action.type();
         updateBattleState();
+    }
+
+    private String potionEffect(String item) {
+        boolean violetHeals = seed % 2 == 0;
+        boolean heals = BattleRules.VIOLET_POTION.equals(item) ? violetHeals : !violetHeals;
+        return heals ? "healing" : "energy";
+    }
+
+    private void usePotion(Actor actor, String item) {
+        actor.potions.remove(item);
+        identifiedPotions.add(item);
+        if ("healing".equals(potionEffect(item))) {
+            actor.hp = Math.min(actor.maxHp, actor.hp + BattleRules.POTION_HEAL);
+        } else {
+            actor.energyUnits = Math.min(ENERGY_CAP_UNITS, actor.energyUnits + BattleRules.POTION_ENERGY * BattleRules.REGEN_POINT_MS);
+        }
+        actor.targetId = null;
     }
 
     private void updateBattleState() {
@@ -592,6 +632,7 @@ final class HostBattle {
             if (drop.pickedBy() == null && drop.x() == player.x && drop.y() == player.y) {
                 drops.set(i, new InnApi.Drop(drop.id(), drop.item(), drop.x(), drop.y(), drop.amount(), player.id));
                 if ("ration".equals(drop.item())) player.rations += drop.amount();
+                else if ("gold".equals(drop.item())) player.gold += drop.amount();
             }
         }
     }

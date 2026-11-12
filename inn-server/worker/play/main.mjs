@@ -15,7 +15,7 @@ const fields = Object.fromEntries([
   'profile-preview', 'profile-summary', 'profile-name', 'profile-job-label', 'profile-change', 'profile-cancel', 'profile-notice',
   'profile-job', 'profile-hair-style', 'profile-hair-color', 'profile-hair-swatch', 'profile-outfit-color', 'profile-outfit-swatch', 'profile-accessory',
   'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
-  'touch-controls', 'touch-battle', 'touch-attack', 'touch-shoot', 'touch-eat', 'backpack', 'backpack-hint', 'attack-log', 'aim-hint',
+  'touch-controls', 'touch-battle', 'touch-attack', 'touch-shoot', 'touch-eat', 'backpack', 'backpack-hint', 'backpack-use', 'attack-log', 'aim-hint',
   'dungeon-chat-log', 'dungeon-chat-message', 'dungeon-chat-send',
   'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
@@ -104,8 +104,10 @@ let hudDungeon = false;
 let previewAvatar;
 let lastPreviewAvatar;
 let lastPreviewFrame = -1;
-const itemNames = { ration: '식량', gold: '금화' };
-const backpack = ['ration', 'gold', null, null, null, null];
+const potionNames = { 'violet-potion': '보랏빛 물약', 'amber-potion': '호박빛 물약' };
+const effectNames = { healing: '치유 물약', energy: '활력 물약' };
+const itemNames = { ration: '식량', gold: '금화', ...potionNames };
+const backpack = ['ration', 'gold', ...Object.keys(potionNames), null, null];
 const slotViews = [];
 let direction;
 let tap;
@@ -184,7 +186,7 @@ const play = new PlaySession({
     const now = performance.now();
     syncVisualClock(isPaused(state), now);
     board.set(state, true, visualTime(now), frame.assetVersion, frame.wallTime());
-    if (artChanged) fields.backpack.style.setProperty('--items-atlas', `url("${board.images.items.src}")`);
+    if (artChanged) fields['dungeon-panel'].style.setProperty('--items-atlas', `url("${board.images.items.src}")`);
     const attackEvents = recentAttackEvents(state, frame.serverTime());
     board.showAttackEvents(attackEvents, visualTime(now));
     showAttackResults(state, attackEvents);
@@ -197,6 +199,7 @@ const play = new PlaySession({
     }
     showDrops(state, prior);
     showTrainingUse(state, prior);
+    showIdentification(state, prior);
     if (prior?.id === state.id && dungeonRoute) {
       const previous = ownActor(prior);
       const player = ownActor(state);
@@ -628,7 +631,7 @@ function updateBattle() {
   const queued = state.queued;
   if (!canAttack(state, player) && aimCell) setAim(null);
   fields.queued.hidden = !queued;
-  if (queued) text(fields.queued, `예약 · ${{ move: '이동', attack: '평타', shoot: '사격', eat: '식량' }[queued.type]}`);
+  if (queued) text(fields.queued, `예약 · ${{ move: '이동', attack: '평타', shoot: '사격', eat: '식량', 'use-item': '물약' }[queued.type]}`);
   text(fields['party-rules'], state.friendlyFire ? '아군 공격 허용 · 동료를 클릭해 평타' : '아군 공격 차단');
   fields['party-rules'].hidden = solo;
   fields['party-rules'].dataset.enabled = String(state.friendlyFire === true);
@@ -657,24 +660,34 @@ function updateParty(state) {
       const root = document.createElement('div');
       const name = document.createElement('strong');
       const inspect = document.createElement('button');
+      const portrait = document.createElement('canvas');
       const inspectLabel = document.createElement('span');
       const stats = document.createElement('div');
       const health = document.createElement('span');
       const energy = document.createElement('span');
       const hpMeter = document.createElement('progress');
       const energyMeter = document.createElement('progress');
-      const details = document.createElement('dl');
+      const details = document.createElement('section');
+      const detailList = document.createElement('dl');
+      const allyInventory = own ? null : document.createElement('ul');
       const detailValues = {};
       root.className = 'party-slot';
       inspect.type = 'button';
       inspect.className = 'party-inspect';
+      inspect.setAttribute('aria-controls', `party-details-${actor.id}`);
       inspect.setAttribute('aria-expanded', 'false');
       inspectLabel.textContent = '상태';
+      portrait.className = 'party-portrait';
+      portrait.width = AvatarCatalog.frameWidth;
+      portrait.height = AvatarCatalog.frameHeight;
+      portrait.setAttribute('aria-hidden', 'true');
       stats.className = 'stats';
       energy.className = 'energy-text';
       energyMeter.className = 'energy';
       details.className = 'party-details';
+      details.id = `party-details-${actor.id}`;
       details.hidden = true;
+      detailList.className = 'party-detail-values';
       hpMeter.setAttribute('aria-label', '체력');
       energyMeter.setAttribute('aria-label', '행동력');
       energyMeter.max = BattleRules.ENERGY_CAP;
@@ -684,7 +697,16 @@ function updateParty(state) {
         const value = document.createElement('dd');
         label.textContent = title;
         detailValues[key] = value;
-        details.append(label, value);
+        detailList.append(label, value);
+      }
+      details.append(detailList);
+      if (allyInventory) {
+        const title = document.createElement('h3');
+        title.textContent = '배낭';
+        details.classList.add('party-ally-details');
+        allyInventory.className = 'party-inventory';
+        allyInventory.setAttribute('aria-label', '동료 배낭');
+        details.append(title, allyInventory);
       }
       inspect.addEventListener('click', () => {
         const open = details.hidden;
@@ -694,21 +716,29 @@ function updateParty(state) {
           details.hidden = false;
           inspect.setAttribute('aria-expanded', 'true');
           text(inspectLabel, '닫기');
+          updateAllyInventory(slot, play.frame.state);
         } else focusBoard();
         updateCombatUi();
       });
-      inspect.append(name, inspectLabel);
+      inspect.append(portrait, name, inspectLabel);
       stats.append(health, energy);
       root.append(inspect, stats, hpMeter, energyMeter, details);
       fields.party.append(root);
-      slot = { root, name, health, energy, hpMeter, energyMeter, details, detailValues, inspect, inspectLabel };
+      slot = { root, name, health, energy, hpMeter, energyMeter, details, detailValues, inspect, inspectLabel,
+        allyInventory, portrait: portrait.getContext('2d') };
       party.set(actor.id, slot);
     }
     text(slot.name, `${actor.name}${own ? ' (나)' : ''}`);
+    const inspectLabel = `${actor.name} ${own ? '상태' : '상태와 배낭'}`;
+    slot.inspect.setAttribute('aria-label', inspectLabel);
+    slot.inspect.title = inspectLabel;
+    slot.details.setAttribute('aria-label', inspectLabel);
     text(slot.health, `HP ${actor.hp}/${actor.maxHp}`);
     slot.hpMeter.max = actor.maxHp;
     slot.hpMeter.value = actor.hp;
     slot.actor = actor;
+    slot.avatar = getAvatar(actor.appearance ?? { job: 'rogue' });
+    updateAllyInventory(slot, state);
   }
 }
 
@@ -716,36 +746,78 @@ function buttonLabel(button, label) {
   if (button.firstChild.nodeValue !== label + ' ') button.firstChild.nodeValue = label + ' ';
 }
 
-function backpackCounts() {
-  const state = play.frame?.state;
-  const actor = ownActor(state);
+function itemName(item, state) {
+  const known = state?.identifiedItems?.find((entry) => entry.item === item);
+  return effectNames[known?.effect] ?? itemNames[item] ?? '아이템';
+}
+
+function inventoryFor(actor, state) {
+  if (!actor) return [];
+  if (actor.inventory) return actor.inventory;
   const gold = (state?.drops ?? []).reduce((total, drop) =>
-    actor && drop.item === 'gold' && drop.pickedBy === actor.id ? total + drop.amount : total, 0);
-  return { ration: actor?.rations ?? 0, gold };
+    drop.item === 'gold' && drop.pickedBy === actor.id ? total + drop.amount : total, 0);
+  return [{ item: 'ration', amount: actor.rations ?? 0 }, { item: 'gold', amount: gold }].filter(({ amount }) => amount > 0);
+}
+
+function updateAllyInventory(slot, state) {
+  const list = slot.allyInventory;
+  if (!list || slot.details.hidden) return;
+  const inventory = inventoryFor(slot.actor, state).map(({ item, amount }) => ({ item, amount, name: itemName(item, state) }));
+  const key = JSON.stringify(inventory);
+  if (key === slot.inventoryKey) return;
+  slot.inventoryKey = key;
+  const rows = inventory.map(({ item, amount, name }) => {
+    const row = document.createElement('li');
+    const icon = document.createElement('span');
+    const count = document.createElement('span');
+    icon.className = 'bag-icon';
+    icon.dataset.item = item;
+    icon.setAttribute('aria-hidden', 'true');
+    count.textContent = `${amount}개`;
+    row.append(icon, document.createTextNode(name), count);
+    return row;
+  });
+  if (!rows.length) {
+    const empty = document.createElement('li');
+    empty.textContent = '비어 있음';
+    rows.push(empty);
+  }
+  list.replaceChildren(...rows);
+}
+
+function backpackCounts(state = play.frame?.state) {
+  return new Map(inventoryFor(ownActor(state), state).map(({ item, amount }) => [item, amount]));
 }
 
 function updateBackpack() {
-  const paused = isPaused(play.frame?.state);
-  const counts = backpackCounts();
-  if (paused || selectedSlot !== -1 && !counts[backpack[selectedSlot]]) selectedSlot = -1;
+  const state = play.frame?.state;
+  const paused = isPaused(state);
+  const counts = backpackCounts(state);
+  if (paused || selectedSlot !== -1 && !counts.has(backpack[selectedSlot])) selectedSlot = -1;
   for (let index = 0; index < slotViews.length; index++) {
     const { button, icon, label, count } = slotViews[index];
     const item = backpack[index];
-    const amount = counts[item] ?? 0;
+    const amount = counts.get(item) ?? 0;
+    const name = itemName(item, state);
     icon.hidden = label.hidden = count.hidden = amount === 0;
     icon.dataset.item = item ?? '';
     button.dataset.empty = String(amount === 0);
     button.disabled = paused;
     button.draggable = !paused && amount > 0;
     button.setAttribute('aria-pressed', String(selectedSlot === index));
-    button.setAttribute('aria-label', amount > 0 ? `${index + 1}번 칸 · ${itemNames[item]} ${amount}` : `${index + 1}번 빈 칸`);
+    button.setAttribute('aria-label', amount > 0 ? `${index + 1}번 칸 · ${name} ${amount}` : `${index + 1}번 빈 칸`);
     if (amount > 0) {
-      text(label, itemNames[item]);
+      text(label, name);
       text(count, String(amount));
     }
   }
+  const selectedItem = backpack[selectedSlot];
+  const use = fields['backpack-use'];
+  use.hidden = !Object.hasOwn(potionNames, selectedItem);
+  use.disabled = !canAct(state, ownActor(state)) || state?.queued?.type === 'use-item';
+  if (!use.hidden) text(use, `마시기 · 행동력 ${BattleRules.cost('use-item')}`);
   const hint = paused ? '일시정지 중 · 배낭 보기' : selectedSlot === -1 ? '아이템 칸을 누른 뒤 옮길 칸을 선택하세요.' :
-    `${itemNames[backpack[selectedSlot]]}을 옮길 칸을 선택하세요.`;
+    `${itemName(selectedItem, state)} · 옮길 칸을 선택하세요.`;
   text(fields['backpack-hint'], hint);
 }
 
@@ -773,13 +845,13 @@ function buildBackpack() {
       if (isPaused(play.frame?.state)) return;
       if (selectedSlot !== -1) {
         swapSlots(selectedSlot, index);
-      } else if (backpackCounts()[backpack[index]] > 0) {
+      } else if (backpackCounts().has(backpack[index])) {
         selectedSlot = index;
         updateBackpack();
       }
     });
     button.addEventListener('dragstart', (event) => {
-      if (isPaused(play.frame?.state) || !(backpackCounts()[backpack[index]] > 0)) {
+      if (isPaused(play.frame?.state) || !backpackCounts().has(backpack[index])) {
         event.preventDefault();
         return;
       }
@@ -842,6 +914,11 @@ function updateCombatUi() {
   const now = frame.serverTime();
   for (const slot of party.values()) {
     const actor = slot.actor;
+    if (slot.drawnAvatar !== slot.avatar) {
+      const { width, height } = slot.portrait.canvas;
+      slot.portrait.clearRect(0, 0, width, height);
+      if (drawAvatar(slot.portrait, slot.avatar, 0, 0, 0, width, height)) slot.drawnAvatar = slot.avatar;
+    }
     const energy = actor.hp > 0 ? BattleRules.energyAt(actor, state.now, now) : 0;
     if (slot.energyMeter.value !== energy) slot.energyMeter.value = energy;
     const { name, color } = energyBand(energy);
@@ -918,8 +995,15 @@ function showDrops(state, prior) {
   for (const drop of state.drops) {
     if (!drop.pickedBy || prior.drops.some((item) => item.id === drop.id && item.pickedBy)) continue;
     const player = state.actors.find((actor) => actor.id === drop.pickedBy);
-    if (player) flash(`${player.name} · ${drop.item === 'gold' ? '금화' : '식량'} ${drop.amount} 획득`);
+    if (player) flash(`${player.name} · ${itemName(drop.item, state)} ${drop.amount} 획득`);
   }
+}
+
+function showIdentification(state, prior) {
+  if (prior?.id !== state.id) return;
+  const revealed = (state.identifiedItems ?? []).filter(({ item }) =>
+    !prior.identifiedItems?.some((entry) => entry.item === item));
+  if (revealed.length) flash(`파티 감정 · ${revealed.map(({ item }) => `${itemNames[item]} → ${itemName(item, state)}`).join(' · ')}`);
 }
 
 function showTrainingUse(state, prior) {
@@ -1034,6 +1118,13 @@ function eat() {
   if (!player.rations) flash('보유한 식량이 없습니다.');
   else if (player.hp >= player.maxHp) flash('체력이 이미 가득 찼습니다.');
   else requestAction('eat', 0, 0, null, performance.now());
+}
+
+function drinkBackpackPotion() {
+  const state = play.frame?.state;
+  const item = backpack[selectedSlot];
+  if (!canAct(state, ownActor(state)) || !Object.hasOwn(potionNames, item) || !backpackCounts(state).has(item)) return;
+  requestAction('use-item', 0, 0, item, performance.now());
 }
 
 function moveDungeon(dx, dy, fresh, now) {
@@ -1206,13 +1297,19 @@ function examineCell(x, y) {
   const tile = state?.map[y]?.[x];
   if (tile == null) return;
   const actor = (state.actors ?? state.people)?.find((person) => person.x === x && person.y === y && person.hp !== 0);
+  const member = actor && actor.id !== state.selfId && party.get(actor.id);
+  if (play.frame && member) {
+    setExamining(false);
+    member.inspect.click();
+    return;
+  }
   const npc = state.npcs?.find((person) => person.x === x && person.y === y);
   const tool = state.trainingTools?.find((item) => item.x === x && item.y === y);
   const drop = state.drops?.find((item) => item.x === x && item.y === y && item.pickedBy == null);
   if (actor) flash(actor.hp == null ? actor.name : `${actor.name} · HP ${actor.hp}/${actor.maxHp}`);
   else if (npc) flash(`${npc.name} · ${npc.dialogue}`);
   else if (tool) flash(tool.id === 'ration-rack' ? '식량 상자 · 식량을 3개까지 채웁니다.' : '회복 도구 · 체력과 행동력이 찹니다.');
-  else if (drop) flash(`${itemNames[drop.item] ?? drop.item} · ${drop.amount}개`);
+  else if (drop) flash(`${itemName(drop.item, state)} · ${drop.amount}개`);
   else flash(tile === '#' ? '벽' : tile === 'D' ? '문' : '통로');
   setExamining(false);
 }
@@ -1303,6 +1400,7 @@ profileCard.addEventListener('cancel', (event) => {
 });
 fields['expedition-toggle'].addEventListener('click', () => toggleGameWindow(0));
 fields['backpack-toggle'].addEventListener('click', toggleBackpack);
+fields['backpack-use'].addEventListener('click', drinkBackpackPotion);
 for (const close of document.querySelectorAll('[data-close-window]')) {
   close.addEventListener('click', () => toggleGameWindow(close.dataset.closeWindow === 'expedition' ? 0 : 1));
 }

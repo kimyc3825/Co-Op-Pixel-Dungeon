@@ -225,7 +225,8 @@ final class DungeonSession implements AutoCloseable {
         if ("pause".equals(action.type())) return "active".equals(status) || "won".equals(status);
         if (state.pausedUntil() > 0) return false;
         return "active".equals(status) ||
-            "won".equals(status) && ("move".equals(action.type()) || "eat".equals(action.type()));
+            "won".equals(status) && ("move".equals(action.type()) || "eat".equals(action.type()) ||
+                "use-item".equals(action.type()));
     }
 
     private void sync(long now, boolean direct) {
@@ -376,8 +377,10 @@ final class DungeonSession implements AutoCloseable {
             state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
             state.actors() != null && state.actors().stream().allMatch(actor ->
                 actor != null && actor.id() != null && actor.name() != null && actor.kind() != null &&
-                    !"dummy".equals(actor.kind()) && Double.isFinite(actor.energy()) && actor.rations() >= 0) &&
+                    !"dummy".equals(actor.kind()) && Double.isFinite(actor.energy()) && actor.rations() >= 0 &&
+                    validInventory(actor.inventory())) &&
             state.actors().stream().anyMatch(actor -> state.selfId().equals(actor.id())) &&
+            validKnowledge(state.identifiedItems()) &&
             state.trainingTools().isEmpty() &&
             state.drops() != null && state.drops().stream().allMatch(drop ->
                 drop != null && drop.id() != null && drop.item() != null) &&
@@ -394,6 +397,19 @@ final class DungeonSession implements AutoCloseable {
                     mapCell(state, projectile.nextX(), projectile.nextY()) &&
                     Math.max(Math.abs(projectile.nextX() - projectile.x()), Math.abs(projectile.nextY() - projectile.y())) == 1) &&
             ("active".equals(state.status()) || "won".equals(state.status()) || "lost".equals(state.status()));
+    }
+
+    private static boolean validInventory(List<InnApi.InventoryItem> inventory) {
+        return inventory.size() <= 4 && inventory.stream().allMatch(entry -> entry != null && entry.amount() > 0 &&
+            ("ration".equals(entry.item()) || "gold".equals(entry.item()) || BattleRules.isPotion(entry.item()))) &&
+            inventory.stream().map(InnApi.InventoryItem::item).distinct().count() == inventory.size();
+    }
+
+    private static boolean validKnowledge(List<InnApi.ItemKnowledge> knowledge) {
+        return knowledge.size() <= 2 && knowledge.stream().allMatch(entry -> entry != null && BattleRules.isPotion(entry.item()) &&
+            ("healing".equals(entry.effect()) || "energy".equals(entry.effect()))) &&
+            knowledge.stream().map(InnApi.ItemKnowledge::item).distinct().count() == knowledge.size() &&
+            knowledge.stream().map(InnApi.ItemKnowledge::effect).distinct().count() == knowledge.size();
     }
 
     private static boolean validAttackResult(String result) {
@@ -439,7 +455,7 @@ final class DungeonSession implements AutoCloseable {
                 state = new InnApi.DungeonState(state.id(), state.selfId(), time, state.map(), state.actors(),
                     null, "closed", false, state.revision(), state.drops(), state.commandAck(), false, state.theme(),
                     frame.wallTime(), 0, state.pauseReadyAt(), state.messages(), state.friendlyFire(), state.attackEvents(),
-                    List.of(), state.trainingTools());
+                    List.of(), state.trainingTools(), state.identifiedItems());
             }
             publish(state, frame.hostAtReceipt(), frame.receivedAt(), notice);
         }

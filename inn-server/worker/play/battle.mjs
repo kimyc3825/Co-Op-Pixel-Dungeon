@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { dungeonLayout } from './layout.mjs';
-import { actionGate, BattleRules, offensive, PRISON, SEWERS } from './rules.mjs';
+import { actionGate, BattleRules, isPotion, offensive, POTIONS, PRISON, SEWERS, VIOLET_POTION } from './rules.mjs';
 import { normalizeAppearance } from './avatar-catalog.mjs';
 
 export { BattleRules };
 
 const { ENERGY_CAP, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS, SHOOT_RANGE, SHOOT_DAMAGE, PROJECTILE_STEP_MS,
-  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS, CHAT_LIMIT, cost } = BattleRules;
+  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, POTION_HEAL, POTION_ENERGY, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS,
+  CHAT_LIMIT, cost } = BattleRules;
 const RAT_MOVE_COOLDOWN_MS = 380;
 const AWARENESS = 4;
 const CHAT_HISTORY = 16;
@@ -69,6 +70,8 @@ function normalize(action) {
     return { type: 'shoot', dx: 0, dy: 0, target: action.target };
   } else if (action?.type === 'eat') {
     return { type: 'eat', dx: 0, dy: 0, target: null };
+  } else if (action?.type === 'use-item' && isPotion(action.target)) {
+    return { type: 'use-item', dx: 0, dy: 0, target: action.target };
   } else if (action?.type === 'pause' && (action.target === 'begin' || action.target === 'resume')) {
     return { type: 'pause', dx: 0, dy: 0, target: action.target };
   } else if (action?.type === 'chat' && typeof action.target === 'string') {
@@ -85,7 +88,7 @@ function createActor(id, name, kind, { x, y }, hp, now, appearance) {
     energyUnits: ENERGY_CAP_UNITS, energyAt: now,
     moveReadyAt: kind === 'enemy' ? now + RAT_MOVE_COOLDOWN_MS : now,
     attackReadyAt: kind === 'enemy' ? now + ATTACK_COOLDOWN_MS : now,
-    rations: kind === 'player' ? 1 : 0, queued: null, commandAck: 0,
+    rations: kind === 'player' ? 1 : 0, gold: 0, potions: new Set(), queued: null, commandAck: 0,
     appearance: kind === 'player' ? normalizeAppearance(appearance) : undefined,
   };
 }
@@ -108,8 +111,17 @@ function actorSnapshot(actor, now) {
   return {
     id, name, kind, x, y, hp, maxHp, actionSeq, lastAction, targetId, actionAt,
     energy: energyUnitsAt(actor, now) / REGEN_POINT_MS, energyAt, moveReadyAt, attackReadyAt, rations,
+    inventory: inventory(actor),
     ...(appearance && { appearance }),
   };
+}
+
+function inventory(actor) {
+  const items = [];
+  if (actor.rations > 0) items.push({ item: 'ration', amount: actor.rations });
+  if (actor.gold > 0) items.push({ item: 'gold', amount: actor.gold });
+  for (const item of actor.potions) items.push({ item, amount: 1 });
+  return items;
 }
 
 function walkable(map, x, y) {
@@ -161,6 +173,7 @@ export class HostBattle {
   #messages = [];
   #attackEvents = [];
   #projectiles = [];
+  #identifiedPotions = new Set();
   #battleAt;
   #gameObservedAt;
   #wallObservedAt;
@@ -183,8 +196,14 @@ export class HostBattle {
     const { host: entrance, partner, enemy1, enemy2 } = this.#layout;
     const ratName = this.#layout.theme === PRISON ? '감옥 쥐' : '하수도 쥐';
     this.#battleAt = this.#gameObservedAt = this.#wallObservedAt = Math.trunc(now);
-    this.#actors = [createPlayer(host, entrance, this.#battleAt, practice && !guest)];
-    if (guest) this.#actors.push(createPlayer(guest, partner, this.#battleAt));
+    const hostActor = createPlayer(host, entrance, this.#battleAt, practice && !guest);
+    this.#actors = [hostActor];
+    if (guest) {
+      const guestActor = createPlayer(guest, partner, this.#battleAt);
+      hostActor.potions = new Set(POTIONS);
+      guestActor.potions = new Set(POTIONS);
+      this.#actors.push(guestActor);
+    }
     else if (practice) this.#actors.push(createActor('guide', '길잡이', 'guide', partner, 24, this.#battleAt));
     this.#actors.push(
       createActor('rat-1', ratName, 'enemy', enemy1, 12, this.#battleAt),
@@ -277,6 +296,7 @@ export class HostBattle {
       actors: this.#actors.map((actor) => actorSnapshot(actor, snapshotTime)),
       queued: self.queued ? { ...self.queued } : null, status: this.#status, waitingForPartner: false,
       revision: this.#revision, drops: this.#drops.map((drop) => ({ ...drop })),
+      identifiedItems: Array.from(this.#identifiedPotions, item => ({ item, effect: this.#potionEffect(item) })),
       commandAck: self.commandAck, inCombat: this.#inCombat, theme: this.#layout.theme,
       ...(this.#trainingTools.length > 0 && { trainingTools: this.#trainingTools.map((tool) => ({ ...tool })) }),
       wallNow, pausedUntil: this.#pausedUntil, pauseReadyAt: this.#pauseReadyAt,
@@ -345,6 +365,7 @@ export class HostBattle {
       return queued ? stepAllowed(this.#layout.map, actor.x, actor.y, dx, dy) : this.#canMove(actor.x, actor.y, dx, dy);
     }
     if (action.type === 'eat') return actor.rations > 0 && actor.hp < actor.maxHp;
+    if (action.type === 'use-item') return actor.potions.has(action.target);
     if (action.type === 'shoot') {
       const aim = shotCell(action.target);
       const inBounds = this.#layout.map[aim.y]?.[aim.x] !== undefined;
@@ -409,10 +430,12 @@ export class HostBattle {
       });
       actor.targetId = null;
       actor.attackReadyAt = at + ATTACK_COOLDOWN_MS;
-    } else {
+    } else if (action.type === 'eat') {
       actor.rations--;
       actor.hp = Math.min(actor.maxHp, actor.hp + RATION_HEAL);
       actor.targetId = null;
+    } else {
+      this.#usePotion(actor, action.target);
     }
     this.#battleAt = at;
     actor.actionAt = at;
@@ -420,6 +443,23 @@ export class HostBattle {
     actor.lastAction = action.type;
     this.#updateOutcome();
     this.#inCombat = this.#status === 'active' && this.#engaged();
+  }
+
+  #potionEffect(item) {
+    const violetHeals = this.#seed % 2 === 0;
+    const heals = item === VIOLET_POTION ? violetHeals : !violetHeals;
+    return heals ? 'healing' : 'energy';
+  }
+
+  #usePotion(actor, item) {
+    actor.potions.delete(item);
+    this.#identifiedPotions.add(item);
+    if (this.#potionEffect(item) === 'healing') {
+      actor.hp = Math.min(actor.maxHp, actor.hp + POTION_HEAL);
+    } else {
+      actor.energyUnits = Math.min(ENERGY_CAP_UNITS, actor.energyUnits + POTION_ENERGY * REGEN_POINT_MS);
+    }
+    actor.targetId = null;
   }
 
   #recordAttack(actor, action, result, at, { x, y }, targetId = null, amount = 0) {
@@ -487,6 +527,7 @@ export class HostBattle {
       if (drop.pickedBy === null && drop.x === actor.x && drop.y === actor.y) {
         drop.pickedBy = actor.id;
         if (drop.item === 'ration') actor.rations += drop.amount;
+        else if (drop.item === 'gold') actor.gold += drop.amount;
       }
     }
   }

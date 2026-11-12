@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 export const SEWERS = 'sewers';
 export const PRISON = 'prison';
+export const VIOLET_POTION = 'violet-potion';
+export const AMBER_POTION = 'amber-potion';
+export const POTIONS = Object.freeze([VIOLET_POTION, AMBER_POTION]);
 
 const ENERGY_CAP = 10;
 const MOVE_COST = 1;
 const ATTACK_COST = 1;
 const SHOOT_COST = 2;
 const EAT_COST = 3;
+const ITEM_USE_COST = 3;
 const MOVE_COOLDOWN_MS = 180;
 const ATTACK_COOLDOWN_MS = 800;
 const SHOOT_RANGE = 5;
@@ -15,9 +19,15 @@ const PROJECTILE_STEP_MS = 100;
 const REGEN_DELAY_MS = 500;
 const REGEN_POINT_MS = 800;
 const RATION_HEAL = 6;
+const POTION_HEAL = 6;
+const POTION_ENERGY = 5;
 const PAUSE_LIMIT_MS = 60_000;
 const PAUSE_COOLDOWN_MS = 60_000;
 const CHAT_LIMIT = 160;
+
+export function isPotion(item) {
+  return POTIONS.includes(item);
+}
 
 export function offensive(type) {
   return type === 'attack' || type === 'shoot';
@@ -29,6 +39,7 @@ function cost(type, inCombat) {
     case 'attack': return ATTACK_COST;
     case 'shoot': return SHOOT_COST;
     case 'eat': return EAT_COST;
+    case 'use-item': return ITEM_USE_COST;
     default: throw new TypeError('Unknown battle action');
   }
 }
@@ -58,7 +69,8 @@ function readyAt(actor, type, snapshotNow, inCombat) {
 }
 
 export const BattleRules = Object.freeze({
-  ENERGY_CAP, MOVE_COST, ATTACK_COST, SHOOT_COST, EAT_COST, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS,
+  ENERGY_CAP, MOVE_COST, ATTACK_COST, SHOOT_COST, EAT_COST, ITEM_USE_COST, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS,
   SHOOT_RANGE, SHOOT_DAMAGE, PROJECTILE_STEP_MS,
-  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS, CHAT_LIMIT, cost, energyAt, lacksEnergy, readyAt,
+  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, POTION_HEAL, POTION_ENERGY, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS,
+  CHAT_LIMIT, cost, energyAt, lacksEnergy, readyAt,
 });

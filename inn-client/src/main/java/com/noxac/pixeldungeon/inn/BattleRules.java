@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.noxac.pixeldungeon.inn;
 
+import java.util.List;
+
 final class BattleRules {
+    static final String VIOLET_POTION = "violet-potion";
+    static final String AMBER_POTION = "amber-potion";
+    static final List<String> POTIONS = List.of(VIOLET_POTION, AMBER_POTION);
     static final int ENERGY_CAP = 10;
     static final int MOVE_COST = 1;
     static final int ATTACK_COST = 1;
@@ -10,13 +15,20 @@ final class BattleRules {
     static final int SHOOT_DAMAGE = 3;
     static final int PROJECTILE_STEP_MS = 100;
     static final int EAT_COST = 3;
+    static final int ITEM_USE_COST = 3;
     static final int MOVE_COOLDOWN_MS = 180;
     static final int ATTACK_COOLDOWN_MS = 800;
     static final int REGEN_DELAY_MS = 500;
     static final int REGEN_POINT_MS = 800;
     static final int RATION_HEAL = 6;
+    static final int POTION_HEAL = 6;
+    static final int POTION_ENERGY = 5;
 
     private BattleRules() {}
+
+    static boolean isPotion(String item) {
+        return VIOLET_POTION.equals(item) || AMBER_POTION.equals(item);
+    }
 
     static int cost(String type, boolean inCombat) {
         return switch (type) {
@@ -24,6 +36,7 @@ final class BattleRules {
             case "attack" -> ATTACK_COST;
             case "shoot" -> SHOOT_COST;
             case "eat" -> EAT_COST;
+            case "use-item" -> ITEM_USE_COST;
             default -> throw new IllegalArgumentException("Unknown battle action");
         };
     }

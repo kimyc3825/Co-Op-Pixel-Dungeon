@@ -174,6 +174,10 @@ final class NativeClient {
         if (view == View.DUNGEON) dungeon.action(new InnApi.Action("eat", 0, 0, null));
     }
 
+    static void dungeonUseItem(String item) {
+        if (view == View.DUNGEON) dungeon.action(new InnApi.Action("use-item", 0, 0, item));
+    }
+
     static void toggleDungeonPause() {
         InnApi.DungeonState state = dungeonState();
         if (view == View.DUNGEON && state != null) {

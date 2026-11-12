@@ -41,12 +41,23 @@ final class InnApi {
         private static String delta(int value) { return value > 0 ? "+" + value : "−" + -value; }
     }
     record Action(String type, int dx, int dy, String target) {}
+    record InventoryItem(String item, int amount) {}
+    record ItemKnowledge(String item, String effect) {}
     record Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
                      int actionSeq, String lastAction, String targetId, long actionAt,
                      double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations,
-                     Appearance appearance) {
+                     Appearance appearance, List<InventoryItem> inventory) {
         Combatant {
             appearance = AvatarProfile.normalize(appearance);
+            if (inventory == null) inventory = List.of();
+        }
+
+        Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
+                  int actionSeq, String lastAction, String targetId, long actionAt,
+                  double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations,
+                  Appearance appearance) {
+            this(id, name, kind, x, y, hp, maxHp, actionSeq, lastAction, targetId, actionAt,
+                energy, energyAt, moveReadyAt, attackReadyAt, rations, appearance, List.of());
         }
 
         Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
@@ -59,7 +70,7 @@ final class InnApi {
         Combatant withAppearance(Appearance value) {
             return value == null || value.equals(appearance) ? this : new Combatant(id, name, kind, x, y, hp,
                 maxHp, actionSeq, lastAction, targetId, actionAt, energy, energyAt, moveReadyAt, attackReadyAt,
-                rations, value);
+                rations, value, inventory);
         }
     }
     record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
@@ -73,7 +84,7 @@ final class InnApi {
                         List<Drop> drops, long commandAck, boolean inCombat, String theme,
                         long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
                         boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles,
-                        List<TrainingTool> trainingTools) {
+                        List<TrainingTool> trainingTools, List<ItemKnowledge> identifiedItems) {
         DungeonState {
             theme = DungeonLayout.themeOrDefault(theme);
             if (wallNow == 0) wallNow = now;
@@ -81,6 +92,18 @@ final class InnApi {
             if (attackEvents == null) attackEvents = List.of();
             if (projectiles == null) projectiles = List.of();
             if (trainingTools == null) trainingTools = List.of();
+            if (identifiedItems == null) identifiedItems = List.of();
+        }
+
+        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
+                     Action queued, String status, boolean waitingForPartner, int revision,
+                     List<Drop> drops, long commandAck, boolean inCombat, String theme,
+                     long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
+                     boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles,
+                     List<TrainingTool> trainingTools) {
+            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
+                drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt, messages,
+                friendlyFire, attackEvents, projectiles, trainingTools, List.of());
         }
 
         DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
@@ -119,7 +142,7 @@ final class InnApi {
         DungeonState withActors(List<Combatant> updated) {
             return actors.equals(updated) ? this : new DungeonState(id, selfId, now, map, updated, queued, status,
                 waitingForPartner, revision, drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt,
-                messages, friendlyFire, attackEvents, projectiles, trainingTools);
+                messages, friendlyFire, attackEvents, projectiles, trainingTools, identifiedItems);
         }
     }
     record Signal(String type, String sdp) {}
@@ -207,12 +230,12 @@ final class InnApi {
     }
 
     State enter(String name, String key, long after) throws IOException, InterruptedException {
-        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 8)));
+        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 9)));
     }
 
     State enter(String name, Appearance appearance, String key, long after) throws IOException, InterruptedException {
         return decode(send("PUT", API + "session", key,
-            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 8)));
+            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 9)));
     }
 
     State sync(String key, long after) throws IOException, InterruptedException {

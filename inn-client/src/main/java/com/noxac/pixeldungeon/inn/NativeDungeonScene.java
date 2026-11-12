@@ -37,6 +37,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 public final class NativeDungeonScene extends PixelScene {
@@ -58,6 +59,7 @@ public final class NativeDungeonScene extends PixelScene {
     private static final long COMMAND_ACK_WAIT_NS = 550_000_000L;
     private static final long SPEECH_MS = 4_500;
     private static final int CHAT_HISTORY_LIMIT = 80;
+    private static final List<String> POTIONS = List.of("violet-potion", "amber-potion");
 
     private record Step(int dx, int dy) {}
     private record SubmittedAction(InnApi.Action action, long acknowledgement, long sentAt) {}
@@ -364,6 +366,8 @@ public final class NativeDungeonScene extends PixelScene {
         if (next == null) {
             self = null;
             submitted = null;
+            if (panelWindow != null) panelWindow.hide();
+            for (PartySlot slot : party) slot.set(null, false);
             showWaiting("던전을 불러오는 중…");
             return;
         }
@@ -468,6 +472,7 @@ public final class NativeDungeonScene extends PixelScene {
             case "move" -> "예약  " + directionName(queued.dx(), queued.dy()) + " 이동";
             case "eat" -> "예약  식량";
             case "shoot" -> "예약  화살";
+            case "use-item" -> "예약  " + itemName(queued.target());
             default -> "예약  평타";
         });
         updateMarkers();
@@ -510,9 +515,7 @@ public final class NativeDungeonScene extends PixelScene {
         for (InnApi.Drop drop : next.drops()) {
             if (drop.pickedBy() == null) {
                 Image image = dropViews.computeIfAbsent(drop.id(), id -> {
-                    Image sprite = new Image(Assets.Sprites.ITEMS);
-                    sprite.frame(ItemSpriteSheet.film.get("gold".equals(drop.item())
-                        ? ItemSpriteSheet.GOLD : ItemSpriteSheet.RATION));
+                    Image sprite = itemIcon(drop.item());
                     sprite.scale.set(tile / TILE);
                     loot.add(sprite);
                     return sprite;
@@ -530,8 +533,7 @@ public final class NativeDungeonScene extends PixelScene {
                     old.id().equals(drop.id()) && old.pickedBy() != null)) {
                     InnApi.Combatant collector = find(drop.pickedBy());
                     if (collector != null) {
-                        String item = "gold".equals(drop.item()) ? "금화 " + drop.amount() : "식량 " + drop.amount();
-                        tell(collector.name() + " · " + item + " 획득");
+                        tell(collector.name() + " · " + itemName(drop.item()) + " " + drop.amount() + " 획득");
                     }
                 }
             }
@@ -869,6 +871,10 @@ public final class NativeDungeonScene extends PixelScene {
             showPanel(StatusWindow::new);
             return;
         }
+        if (actor != null && ("player".equals(actor.kind()) || "guide".equals(actor.kind()))) {
+            inspectAlly(actor.id());
+            return;
+        }
         String description = actor == null ? describeGround(x, y)
             : actor.name() + " · 체력 " + actor.hp() + "/" + actor.maxHp();
         showPanel(() -> {
@@ -887,7 +893,7 @@ public final class NativeDungeonScene extends PixelScene {
         }
         for (InnApi.Drop drop : state.drops()) {
             if (drop.pickedBy() == null && drop.x() == x && drop.y() == y) {
-                return ("gold".equals(drop.item()) ? "금화 " : "식량 ") + drop.amount();
+                return itemName(drop.item()) + " " + drop.amount();
             }
         }
         return passable(x, y) ? "던전 바닥" : "던전 벽";
@@ -1017,6 +1023,18 @@ public final class NativeDungeonScene extends PixelScene {
             tell("체력이 이미 가득 찼습니다.");
         } else if (beginRequest(new InnApi.Action("eat", 0, 0, null), System.nanoTime())) {
             NativeClient.dungeonEat();
+        }
+    }
+
+    private boolean canUsePotion(String item) {
+        if (leaving || paused() || !activePlayer() || inventoryAmount(self, item) <= 0) return false;
+        InnApi.Action action = new InnApi.Action("use-item", 0, 0, item);
+        return !action.equals(state.queued()) && !awaitingAcknowledgement(System.nanoTime());
+    }
+
+    private void usePotion(String item) {
+        if (canUsePotion(item) && beginRequest(new InnApi.Action("use-item", 0, 0, item), System.nanoTime())) {
+            NativeClient.dungeonUseItem(item);
         }
     }
 
@@ -1180,6 +1198,10 @@ public final class NativeDungeonScene extends PixelScene {
         add(panelWindow);
     }
 
+    private void inspectAlly(String actorId) {
+        showPanel(() -> new AllyWindow(actorId));
+    }
+
     private void openGameMenu() {
         showPanel(() -> {
             DungeonWindow menu = new DungeonWindow("원정 메뉴", 112, 67);
@@ -1272,6 +1294,75 @@ public final class NativeDungeonScene extends PixelScene {
         return button;
     }
 
+    private int inventoryAmount(InnApi.Combatant actor, String item) {
+        if (actor == null) return 0;
+        for (InnApi.InventoryItem entry : actor.inventory()) {
+            if (item.equals(entry.item())) return entry.amount();
+        }
+        return switch (item) {
+            case "ration" -> actor.rations();
+            case "gold" -> state.drops().stream().filter(drop ->
+                "gold".equals(drop.item()) && actor.id().equals(drop.pickedBy())).mapToInt(InnApi.Drop::amount).sum();
+            default -> 0;
+        };
+    }
+
+    private List<InnApi.InventoryItem> inventory(InnApi.Combatant actor) {
+        if (actor == null) return List.of();
+        if (!actor.inventory().isEmpty()) return actor.inventory();
+        List<InnApi.InventoryItem> items = new ArrayList<>();
+        for (String item : List.of("ration", "gold")) {
+            int amount = inventoryAmount(actor, item);
+            if (amount > 0) items.add(new InnApi.InventoryItem(item, amount));
+        }
+        return items;
+    }
+
+    private String itemName(String item) {
+        if (item == null) return "물품";
+        String known = knownPotionEffect(item);
+        if (!known.isEmpty()) return known + " 물약";
+        return switch (item) {
+            case "ration" -> "식량";
+            case "gold" -> "금화";
+            case "violet-potion" -> "보랏빛 물약";
+            case "amber-potion" -> "호박빛 물약";
+            default -> "물품";
+        };
+    }
+
+    private String knownPotionEffect(String item) {
+        for (InnApi.ItemKnowledge known : state.identifiedItems()) {
+            if (item.equals(known.item())) {
+                if ("healing".equals(known.effect())) return "치유";
+                if ("energy".equals(known.effect())) return "활력";
+            }
+        }
+        return "";
+    }
+
+    private String partyKnowledge() {
+        List<String> known = new ArrayList<>();
+        for (String item : POTIONS) {
+            String effect = knownPotionEffect(item);
+            if (!effect.isEmpty()) known.add(("violet-potion".equals(item) ? "보라" : "호박") + " → " + effect);
+        }
+        return known.isEmpty() ? "공용 감정 · 아직 감정된 물약이 없습니다."
+            : "공용 감정 · " + String.join(" / ", known);
+    }
+
+    private static Image itemIcon(String item) {
+        Image image = new Image(Assets.Sprites.ITEMS);
+        int frame = switch (item) {
+            case "gold" -> ItemSpriteSheet.GOLD;
+            case "violet-potion" -> ItemSpriteSheet.POTION_INDIGO;
+            case "amber-potion" -> ItemSpriteSheet.POTION_AMBER;
+            default -> ItemSpriteSheet.RATION;
+        };
+        image.frame(ItemSpriteSheet.film.get(frame));
+        return image;
+    }
+
     private class DungeonWindow extends Window {
         DungeonWindow(String title, int width, int height) {
             super(width, height);
@@ -1290,16 +1381,35 @@ public final class NativeDungeonScene extends PixelScene {
     private final class BackpackWindow extends DungeonWindow {
         private final StyledButton[] slots = new StyledButton[2];
         private final RenderedTextBlock instructions;
+        private final Group[] potionRows = new Group[POTIONS.size()];
+        private final RenderedTextBlock[] potionLabels = new RenderedTextBlock[POTIONS.size()];
+        private final StyledButton[] potionButtons = new StyledButton[POTIONS.size()];
+        private final RenderedTextBlock knowledge;
+        private List<InnApi.ItemKnowledge> lastKnown;
         private int selectedSlot = -1;
 
         BackpackWindow() {
-            super("가방", 148, 69);
-            instructions = label(this, " ", 7, MUTED, 5, 22, 138);
+            super("가방", 154, 121);
+            instructions = label(this, " ", 7, MUTED, 5, 22, 144);
             for (int index = 0; index < slots.length; index++) {
                 int slot = index;
                 slots[index] = button(this, "", () -> select(slot));
-                slots[index].setRect(5 + index * 71, 38, 67, 23);
+                slots[index].setRect(5 + index * 74, 37, 70, 21);
             }
+            for (int index = 0; index < POTIONS.size(); index++) {
+                String item = POTIONS.get(index);
+                int y = 62 + 19 * index;
+                Group row = potionRows[index] = new Group();
+                add(row);
+                Image icon = itemIcon(item);
+                icon.x = 8;
+                icon.y = y + 2;
+                row.add(icon);
+                potionLabels[index] = label(row, "", 8, TEXT, 23, y + 4, 74);
+                StyledButton use = potionButtons[index] = button(row, "마시기", () -> usePotion(item));
+                use.setRect(101, y, 47, 16);
+            }
+            knowledge = label(this, "", 7, ALLY, 5, 103, 144);
             refresh();
         }
 
@@ -1323,11 +1433,11 @@ public final class NativeDungeonScene extends PixelScene {
         private void refresh() {
             boolean readOnly = paused();
             if (readOnly) selectedSlot = -1;
-            setText(instructions, readOnly ? "전술 정지 · 열람만 가능" : "두 칸을 선택해 위치를 바꿉니다.");
-            int gold = self == null ? 0 : state.drops().stream().filter(drop ->
-                "gold".equals(drop.item()) && self.id().equals(drop.pickedBy())).mapToInt(InnApi.Drop::amount).sum();
-            String ration = "식량  " + (self == null ? 0 : self.rations());
-            String coins = "금화  " + gold;
+            boolean hasPotion = POTIONS.stream().anyMatch(item -> inventoryAmount(self, item) > 0);
+            setText(instructions, readOnly ? "전술 정지 · 열람만 가능" : hasPotion
+                ? "두 칸을 선택해 위치를 바꿉니다.\n물약 마시기 · 행동력 3" : "두 칸을 선택해 위치를 바꿉니다.");
+            String ration = "식량  " + inventoryAmount(self, "ration");
+            String coins = "금화  " + inventoryAmount(self, "gold");
             for (int index = 0; index < slots.length; index++) {
                 StyledButton slot = slots[index];
                 slot.active = !readOnly;
@@ -1335,6 +1445,107 @@ public final class NativeDungeonScene extends PixelScene {
                 if (!text.equals(slot.text())) slot.text(text);
                 slot.textColor(index == selectedSlot ? SELF : TEXT);
             }
+            for (int index = 0; index < POTIONS.size(); index++) {
+                String item = POTIONS.get(index);
+                int amount = inventoryAmount(self, item);
+                Group row = potionRows[index];
+                row.visible = row.active = amount > 0;
+                if (amount > 0) {
+                    setText(potionLabels[index], itemName(item) + " ×" + amount);
+                    potionButtons[index].enable(canUsePotion(item));
+                }
+            }
+            if (!state.identifiedItems().equals(lastKnown)) {
+                lastKnown = state.identifiedItems();
+                setText(knowledge, partyKnowledge());
+            }
+        }
+    }
+
+    private final class AllyWindow extends DungeonWindow {
+        private final String actorId;
+        private final RenderedTextBlock identity;
+        private final RenderedTextBlock vitals;
+        private final RenderedTextBlock cooldowns;
+        private final RenderedTextBlock knowledge;
+        private final InventoryRows items = new InventoryRows();
+        private final ScrollPane itemScroll = new ScrollPane(items);
+        private List<InnApi.InventoryItem> lastItems;
+        private List<InnApi.ItemKnowledge> lastKnown;
+
+        AllyWindow(String actorId) {
+            super("동료 살펴보기", 154, 147);
+            this.actorId = actorId;
+            identity = label(this, "", 8, ALLY, 5, 22, 144);
+            vitals = label(this, "", 7, TEXT, 5, 36, 144);
+            cooldowns = label(this, "", 7, MUTED, 5, 48, 144);
+            label(this, "동료 가방 · 열람만 가능", 8, ALLY, 5, 64, 144);
+            panel(this, 4, 77, 146, 52, 0x59121817);
+            add(itemScroll);
+            itemScroll.setRect(5, 78, 144, 50);
+            knowledge = label(this, "", 7, ALLY, 5, 133, 144);
+            refresh();
+        }
+
+        @Override
+        public void update() {
+            refresh();
+            super.update();
+        }
+
+        private void refresh() {
+            InnApi.Combatant actor = find(actorId);
+            long now = NativeClient.dungeonNow();
+            if (actor == null) {
+                setText(identity, "동료를 찾을 수 없습니다.");
+                setText(vitals, "");
+                setText(cooldowns, "");
+            } else {
+                String name = partyName(actor, false);
+                if ("player".equals(actor.kind())) {
+                    List<AvatarProfile.Option> jobs = AvatarProfile.catalog().jobs();
+                    name += " · " + jobs.get(AvatarSprites.indexOf(jobs, actor.appearance().job())).label();
+                }
+                setText(identity, name);
+                int energy = actor.hp() > 0 && battleOngoing()
+                    ? (int) (BattleRules.energyAt(actor, state.now(), now) + 1e-8) : 0;
+                setText(vitals, "HP " + actor.hp() + "/" + actor.maxHp() +
+                    "    ·    행동력 " + energy + "/" + BattleRules.ENERGY_CAP);
+                setText(cooldowns, actor.hp() == 0 ? "쓰러짐" : cooldownSummary(actor, now));
+            }
+            List<InnApi.InventoryItem> contents = inventory(actor);
+            List<InnApi.ItemKnowledge> known = state.identifiedItems();
+            if (contents.equals(lastItems) && known.equals(lastKnown)) return;
+            lastItems = contents;
+            lastKnown = known;
+            float scrollY = items.camera.scroll.y;
+            items.rebuild(contents);
+            itemScroll.setSize(itemScroll.width(), itemScroll.height());
+            itemScroll.scrollTo(0, scrollY);
+            setText(knowledge, partyKnowledge());
+        }
+    }
+
+    private final class InventoryRows extends Component {
+        void rebuild(List<InnApi.InventoryItem> contents) {
+            for (Gizmo child : members) if (child != null) child.destroy();
+            clear();
+            float y = 2;
+            if (contents.isEmpty()) {
+                label(this, "소지한 물품이 없습니다.", 7, MUTED, 4, y + 2, 132);
+                y += 14;
+            } else {
+                for (InnApi.InventoryItem item : contents) {
+                    if (item.amount() <= 0) continue;
+                    Image icon = itemIcon(item.item());
+                    icon.x = 5;
+                    icon.y = y;
+                    add(icon);
+                    label(this, itemName(item.item()) + " ×" + item.amount(), 8, TEXT, 22, y + 2, 112);
+                    y += 14;
+                }
+            }
+            setSize(144, y);
         }
     }
 
@@ -1373,17 +1584,20 @@ public final class NativeDungeonScene extends PixelScene {
                 int energy = (int) (BattleRules.energyAt(actor, state.now(), now) + 1e-8);
                 setText(balances[index], "HP " + actor.hp() + "/" + actor.maxHp() +
                     "    ·    행동력 " + energy + "/" + BattleRules.ENERGY_CAP);
-                setText(cooldowns[index], actor.hp() == 0 ? "쓰러짐" :
-                    "이동 " + actionCooldown(actor, "move", now) + "    ·    평타 " + actionCooldown(actor, "attack", now));
+                setText(cooldowns[index], actor.hp() == 0 ? "쓰러짐" : cooldownSummary(actor, now));
             }
         }
+    }
 
-        private String actionCooldown(InnApi.Combatant actor, String type, long now) {
-            long remaining = BattleRules.readyAt(actor, type, state.now(), state.inCombat()) - now;
-            if (remaining <= 0) return "준비";
-            long tenths = Math.ceilDiv(remaining, 100);
-            return (tenths / 10) + "." + (tenths % 10) + "초";
-        }
+    private String cooldownSummary(InnApi.Combatant actor, long now) {
+        return "이동 " + actionCooldown(actor, "move", now) + "    ·    평타 " + actionCooldown(actor, "attack", now);
+    }
+
+    private String actionCooldown(InnApi.Combatant actor, String type, long now) {
+        long remaining = BattleRules.readyAt(actor, type, state.now(), state.inCombat()) - now;
+        if (remaining <= 0) return "준비";
+        long tenths = Math.ceilDiv(remaining, 100);
+        return (tenths / 10) + "." + (tenths % 10) + "초";
     }
 
     private void createChatLog() {
@@ -1562,7 +1776,14 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private final class PartySlot {
-        private final Group group = new Group();
+        private final Group group = new Group() {
+            @Override
+            public void destroy() {
+                super.destroy();
+                if (portraitOutfit != null) portraitOutfit.close();
+            }
+        };
+        private final Image portrait = new Image(Assets.Sprites.ROGUE);
         private final RenderedTextBlock name;
         private final RenderedTextBlock health;
         private final RenderedTextBlock energyLabel;
@@ -1570,6 +1791,9 @@ public final class NativeDungeonScene extends PixelScene {
         private final ColorBlock charge;
         private final float width;
         private InnApi.Combatant actor;
+        private AvatarSprites portraitOutfit;
+        private InnApi.Appearance portraitAppearance;
+        private boolean own;
 
         private PartySlot(float x, float y, float width) {
             this.width = width;
@@ -1579,12 +1803,19 @@ public final class NativeDungeonScene extends PixelScene {
             group.add(new PointerArea(plate) {
                 @Override
                 protected void onClick(PointerEvent event) {
-                    showPanel(StatusWindow::new);
+                    if (actor == null) return;
+                    if (own) showPanel(StatusWindow::new);
+                    else inspectAlly(actor.id());
                 }
             });
-            name = label(group, " ", 8, TEXT, x + 2, y + 1, width - 3);
-            health = label(group, " ", 6, MUTED, x + 2, y + 10, width);
-            energyLabel = label(group, " ", 6, ALLY, x + width / 2 - 2, y + 10, width / 2 + 2);
+            panel(group, x + 1, y + 1, 14, 17, 0xB0131715);
+            portrait.frame(0, 0, AvatarSprites.FRAME_WIDTH, AvatarSprites.FRAME_HEIGHT);
+            portrait.x = x + 2;
+            portrait.y = y + 2;
+            group.add(portrait);
+            name = label(group, " ", 8, TEXT, x + 17, y + 1, width - 18);
+            health = label(group, " ", 6, MUTED, x + 17, y + 10, width - 17);
+            energyLabel = label(group, " ", 6, ALLY, x + width - 32, y + 10, 32);
             panel(group, x, y + 19, width, 3, 0xFF414B41);
             hpBar = panel(group, x, y + 19, width, 3, 0xFFA67F66);
             panel(group, x, y + 23, width, 2, 0xFF414B41);
@@ -1594,10 +1825,26 @@ public final class NativeDungeonScene extends PixelScene {
 
         private void set(InnApi.Combatant actor, boolean own) {
             this.actor = actor;
+            this.own = own;
             group.visible = group.active = actor != null;
             if (actor == null) return;
+            InnApi.Appearance appearance = "player".equals(actor.kind()) ? actor.appearance() : null;
+            if (!Objects.equals(appearance, portraitAppearance)) {
+                AvatarSprites prior = portraitOutfit;
+                portraitOutfit = appearance == null ? null : AvatarSprites.acquire(appearance,
+                    own ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE);
+                portrait.texture(portraitOutfit == null ? Assets.Sprites.ROGUE : portraitOutfit.texture());
+                portrait.frame(0, 0, AvatarSprites.FRAME_WIDTH, AvatarSprites.FRAME_HEIGHT);
+                portraitAppearance = appearance;
+                if (prior != null) prior.close();
+            }
             name.hardlight(own ? SELF : TEXT);
-            setText(name, partyName(actor, own));
+            String nick = partyName(actor, own);
+            int length = Math.max(1, (int) (width - 18) / 7);
+            if (nick.codePointCount(0, nick.length()) > length) {
+                nick = nick.substring(0, nick.offsetByCodePoints(0, length - 1)) + "…";
+            }
+            setText(name, nick);
             setText(health, "HP " + actor.hp() + "/" + actor.maxHp());
             hpBar.size(width * fraction(actor.hp(), actor.maxHp()), 3);
         }
@@ -1615,7 +1862,7 @@ public final class NativeDungeonScene extends PixelScene {
             if (view != null) view.showAtb(remaining, color);
             energyLabel.hardlight(active && actor.hp() > 0 ? color : MUTED);
             String balance = "행동 " + (int) (energy + 1e-8) + "/" + BattleRules.ENERGY_CAP;
-            setText(energyLabel, actor.hp() == 0 ? "쓰러짐" : active ? balance : "대기");
+            setText(energyLabel, width < 77 ? "" : actor.hp() == 0 ? "쓰러짐" : active ? balance : "대기");
         }
     }
 
