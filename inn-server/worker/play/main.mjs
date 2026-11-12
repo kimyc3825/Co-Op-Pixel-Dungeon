@@ -38,6 +38,7 @@ const keys = new Map([
 const MOVE_QUEUE_LEAD = 70;
 const ACK_WAIT = 550;
 const MOVE_RETRY = 60;
+const INN_TAP_MS = 350;
 const ATTACK_FEEDBACK_AGE = 1800;
 const ATTACK_RESULTS = {
   out_of_reach: '사거리 벗어남',
@@ -131,8 +132,12 @@ let loadingTipIndex = Math.floor(Math.random() * LOADING_TIPS.length);
 let loadingTipTimer = null;
 
 const play = new PlaySession({
-  onInn(state) {
+  onInn(state, moved) {
     if (play.frame) return;
+    if (moved) {
+      board.moveInn(state, moved);
+      return;
+    }
     board.set(state, false);
     updateInn();
   },
@@ -1025,10 +1030,6 @@ function moveDungeon(dx, dy, fresh, now) {
   if (ready && state.queued?.type !== 'move') board.predict(dx, dy, visualTime(now));
 }
 
-function moveInn(dx, dy, now) {
-  if (play.moveInn(dx, dy)) board.predict(dx, dy, now);
-}
-
 function clearMovement() {
   held.clear();
   direction = tap = destination = null;
@@ -1168,12 +1169,13 @@ function changeDirection(now, releasing = false) {
   const dy = Number(sides.some((item) => item[1] > 0)) - Number(sides.some((item) => item[1] < 0));
   if (direction?.dx === dx && direction?.dy === dy) return;
   if (!dx && !dy) {
-    if (!held.size && direction?.fresh && direction.tap) tap = direction;
+    if (!held.size && direction?.fresh && direction.tap) tap = { ...direction, expires: now + INN_TAP_MS };
     direction = null;
     return;
   }
   const cardinalRelease = releasing && direction?.dx && direction?.dy && !(dx && dy);
-  direction = { dx, dy, at: now + (cardinalRelease ? 45 : dx && dy ? 0 : 75), fresh: true, tap: !cardinalRelease };
+  const chordWait = !(dx && dy) && (play.frame || !direction) ? 75 : 0;
+  direction = { dx, dy, at: now + (cardinalRelease ? 45 : chordWait), fresh: true, tap: !cardinalRelease };
   tap = null;
   destination = null;
   dungeonRoute = interruptedRoute = null;
@@ -1182,11 +1184,12 @@ function changeDirection(now, releasing = false) {
 function movement(now) {
   if (aimCell || examining || gameUiBlocksMovement() || isRuntimeLoading() ||
       isPaused(play.frame?.state) || typing(document.activeElement)) return;
+  if (!play.frame && tap?.expires <= now) tap = null;
   const command = tap ?? (direction?.at <= now ? direction : null);
   if (command) {
     if (play.frame && tap && now - lastMoveAt < MOVE_RETRY) return;
     if (play.frame) moveDungeon(command.dx, command.dy, command.fresh, now);
-    else moveInn(command.dx, command.dy, now);
+    else if (play.moveInn(command.dx, command.dy) === 'waiting') return;
     command.fresh = false;
     tap = null;
   } else if (play.frame && !held.size) {
@@ -1195,8 +1198,8 @@ function movement(now) {
     const state = play.inn;
     const player = state.people.find((person) => person.id === state.selfId);
     const step = player && nextToward(state.map, player.x, player.y, ...destination);
-    if (step) moveInn(...step, now);
-    else destination = null;
+    if (step) play.moveInn(...step);
+    else if (!play.innMovePending) destination = null;
   }
   const frame = play.frame;
   const state = frame?.state;
@@ -1605,7 +1608,9 @@ for (const button of document.querySelectorAll('[data-direction]')) {
   button.addEventListener('click', (event) => {
     if (chatFocused() || event.detail !== 0 || aimCell) return;
     if (play.frame) moveDungeon(...step, true, performance.now());
-    else moveInn(...step, performance.now());
+    else if (play.moveInn(...step) === 'waiting') {
+      tap = { dx: step[0], dy: step[1], fresh: true, expires: performance.now() + INN_TAP_MS };
+    }
   });
 }
 

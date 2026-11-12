@@ -7,7 +7,8 @@ const INN = '/api/v2/inn/';
 const LINK = '/api/v4/link/';
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 const INN_POLL_MS = 700;
-const MOVE_MS = 150;
+export const INN_MOVE_MS = 150;
+const MAX_INN_STEPS = 2;
 const RELAY_POLL_MS = 165;
 const DIRECT_POLL_MS = 2500;
 const SIGNAL_RETRY_MS = 450;
@@ -93,14 +94,14 @@ export class PlaySession {
     this.relayOnly = relayOnly;
     this.iceServers = iceServers;
     this.inn = this.frame = this.battle = this.key = null;
-    this.innSync = this.innTimer = null;
+    this.innSync = this.innTimer = this.innMoves = this.innMoveRecovery = null;
     this.name = '';
     this.appearance = normalizeAppearance();
     this.theme = SEWERS;
     this.friendlyFire = false;
     this.history = [];
-    this.after = this.generation = this.positionRevision = this.retryAt = this.nextMoveAt = 0;
-    this.online = this.closed = this.moving = this.leftInn = this.renamePending = this.innSuspended = false;
+    this.after = this.generation = this.positionRevision = this.retryAt = this.nextMoveAt = this.nextMoveSendAt = 0;
+    this.online = this.closed = this.leftInn = this.renamePending = this.innSuspended = false;
     this.ignoredMatch = null;
     this.status = '';
     this.visibilityChanged = () => {
@@ -152,27 +153,74 @@ export class PlaySession {
     return true;
   }
 
+  get innMovePending() { return this.innMoves !== null; }
+
   moveInn(dx, dy) {
-    if (!this.online || this.battle || this.innSuspended || this.moving || now() < this.nextMoveAt ||
-        !Number.isInteger(dx) || !Number.isInteger(dy) || Math.max(Math.abs(dx), Math.abs(dy)) !== 1) return false;
+    if (!this.online || this.closed || this.battle || this.innSuspended ||
+        !Number.isInteger(dx) || !Number.isInteger(dy) || Math.max(Math.abs(dx), Math.abs(dy)) !== 1) return 'blocked';
     const self = this.inn?.people.find(person => person.id === this.inn.selfId);
-    if (!self) return false;
+    if (!self) return 'blocked';
     const x = self.x + dx;
     const y = self.y + dy;
     const map = this.inn.map;
-    if (!walkable(map, x, y) || (dx && dy && !walkable(map, x, self.y) && !walkable(map, self.x, y))) return false;
-    this.moving = true;
-    this.nextMoveAt = now() + MOVE_MS;
-    const key = this.key;
-    void request(INN + 'move', key, 'POST', { x, y }).then(() => {
-      if (key !== this.key || this.battle || this.closed || this.innSuspended || this.inn?.selfId !== self.id) return;
+    if (!walkable(map, x, y) || (dx && dy && !walkable(map, x, self.y) && !walkable(map, self.x, y))) return 'blocked';
+    const time = now();
+    if (this.innMoveRecovery || time < this.nextMoveAt || this.innMoves?.steps.length >= MAX_INN_STEPS) return 'waiting';
+    // Predict on the walk cadence and send ordered, adjacent positions to the inn.
+    const moves = this.innMoves ??= { key: this.key, id: self.id, confirmed: { x: self.x, y: self.y }, steps: [] };
+    moves.steps.push({ x, y });
+    this.nextMoveAt = time + INN_MOVE_MS;
+    this.#showInnPosition(moves.id, { x, y });
+    this.#sendInnMove(moves);
+    return 'accepted';
+  }
+
+  #showInnPosition(id, { x, y }) {
+    const self = this.inn?.people.find(person => person.id === id);
+    if (!self || self.x === x && self.y === y) return;
+    const updated = { ...self, x, y };
+    this.inn = { ...this.inn, people: this.inn.people.map(person => person === self ? updated : person) };
+    this.onInn(this.inn, updated);
+  }
+
+  #sendInnMove(moves) {
+    if (moves !== this.innMoves || moves.sending || moves.timer != null) return;
+    const time = now();
+    if (time < this.nextMoveSendAt) {
+      moves.timer = setTimeout(() => {
+        moves.timer = null;
+        this.#sendInnMove(moves);
+      }, this.nextMoveSendAt - time);
+      return;
+    }
+    const step = moves.steps[0];
+    moves.sending = true;
+    this.nextMoveSendAt = time + INN_MOVE_MS;
+    void request(INN + 'move', moves.key, 'POST', step).then(() => {
+      if (moves !== this.innMoves) return;
+      moves.steps.shift();
+      moves.confirmed = step;
       this.positionRevision++;
-      this.inn = { ...this.inn, people: this.inn.people.map(person => person.id === self.id ? { ...person, x, y } : person) };
-      this.onInn(this.inn);
+      moves.sending = false;
+      if (moves.steps.length) this.#sendInnMove(moves);
+      else this.innMoves = null;
     }, error => {
-      if (key === this.key && !this.closed && !this.battle && !this.innSuspended) this.#innActionError(error);
-    }).finally(() => { if (key === this.key) this.moving = false; });
-    return true;
+      if (moves !== this.innMoves) return;
+      this.#stopInnMoves();
+      this.#innActionError(error);
+      const recovery = this.#refreshInn('sync');
+      this.innMoveRecovery = recovery;
+      void recovery.finally(() => { if (this.innMoveRecovery === recovery) this.innMoveRecovery = null; });
+    });
+  }
+
+  #stopInnMoves() {
+    const moves = this.innMoves;
+    this.innMoves = this.innMoveRecovery = null;
+    if (!moves) return;
+    clearTimeout(moves.timer);
+    this.positionRevision++;
+    this.#showInnPosition(moves.id, moves.confirmed);
   }
 
   chat(message) { return this.#innAction('chat', 'POST', { message }); }
@@ -205,6 +253,7 @@ export class PlaySession {
     if (this.closed || this.battle || this.innSuspended || this.inn?.match) return false;
     this.innSuspended = true;
     this.generation++;
+    this.#stopInnMoves();
     // Wait for an in-flight join before deleting its membership and queue.
     await this.innSync;
     if (this.closed) return false;
@@ -213,6 +262,7 @@ export class PlaySession {
       await request(INN + 'session', this.key, 'DELETE');
     } catch {
       this.innSuspended = false;
+      void this.#refreshInn('sync');
       return false;
     }
     this.leftInn = true;
@@ -227,9 +277,9 @@ export class PlaySession {
     this.innSuspended = false;
     if (!this.key) return true;
     this.key = newKey();
-    this.leftInn = this.moving = false;
+    this.leftInn = false;
     this.ignoredMatch = null;
-    this.retryAt = this.nextMoveAt = 0;
+    this.retryAt = this.nextMoveAt = this.nextMoveSendAt = 0;
     return this.#refreshInn('enter');
   }
 
@@ -242,8 +292,8 @@ export class PlaySession {
     this.onBattle(null);
     if (this.leftInn) {
       this.key = newKey();
-      this.leftInn = this.moving = false;
-      this.nextMoveAt = this.retryAt = this.after = 0;
+      this.leftInn = false;
+      this.nextMoveAt = this.nextMoveSendAt = this.retryAt = this.after = 0;
       this.history = [];
     } else if (battle.matchId) {
       await this.cancelMatch();
@@ -254,6 +304,7 @@ export class PlaySession {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.#stopInnMoves();
     clearInterval(this.innTimer);
     globalThis.document?.removeEventListener('visibilitychange', this.visibilityChanged);
     globalThis.removeEventListener?.('pagehide', this.pageHidden);
@@ -279,7 +330,8 @@ export class PlaySession {
       enter ? { name, appearance, after: this.after, dungeonProtocol: 7 } : { after: this.after }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
       if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;
-      if (positionRevision !== this.positionRevision && fresh.selfId === this.inn?.selfId) {
+      // The roster read can have started before movement reached the server.
+      if ((this.innMoves || positionRevision !== this.positionRevision) && fresh.selfId === this.inn?.selfId) {
         const self = this.inn.people.find(person => person.id === fresh.selfId);
         if (self) fresh.people = fresh.people.map(person => person.id === self.id ? { ...person, x: self.x, y: self.y } : person);
       }
@@ -301,6 +353,7 @@ export class PlaySession {
   #innSyncError(error) {
     this.online = false;
     if (error.status === 404) {
+      this.#stopInnMoves();
       this.inn = null;
       this.history = [];
       this.after = 0;
@@ -345,6 +398,7 @@ export class PlaySession {
     this.ignoredMatch = matchId;
     this.leftInn = false;
     this.generation++;
+    this.#stopInnMoves();
     const battle = new BattleSession({ key: this.key, matchId, matchRole, localPlayer, localMode,
       theme: this.theme, friendlyFire: this.friendlyFire, relayOnly: this.relayOnly, iceServers: this.iceServers,
       runtimeLoader: this.runtimeLoader, onLoading: this.onLoading, listener: frame => this.#battleFrame(battle, frame) });

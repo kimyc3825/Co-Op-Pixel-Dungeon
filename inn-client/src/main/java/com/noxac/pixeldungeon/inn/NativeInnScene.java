@@ -3,6 +3,7 @@ package com.noxac.pixeldungeon.inn;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
+import com.badlogic.gdx.InputAdapter;
 import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
@@ -11,7 +12,6 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndTitledMessage;
-import com.watabou.input.KeyEvent;
 import com.watabou.input.PointerEvent;
 import com.watabou.noosa.Camera;
 import com.watabou.noosa.ColorBlock;
@@ -22,7 +22,6 @@ import com.watabou.noosa.PointerArea;
 import com.watabou.noosa.TextInput;
 import com.watabou.noosa.ui.Component;
 import com.watabou.utils.RectF;
-import com.watabou.utils.Signal;
 
 import java.util.List;
 
@@ -37,15 +36,17 @@ public final class NativeInnScene extends PixelScene {
     private static final float EDGE = 8;
 
     private record PredictedStep(String playerId, InnMotion.Cell origin, InnMotion.Cell target) {
-        boolean awaiting(InnApi.State state) {
-            if (!playerId.equals(state.selfId())) return false;
+        boolean startsAt(InnApi.State state) {
             InnApi.Person self = state.self();
-            return self.x() == origin.x() && self.y() == origin.y();
+            return playerId.equals(self.id()) && self.x() == origin.x() && self.y() == origin.y();
         }
     }
 
     private final KeyboardMovement keyboard = new KeyboardMovement();
-    private final Signal.Listener<KeyEvent> movementKeys = this::onMovementKey;
+    private final InputAdapter movementKeys = new InputAdapter() {
+        @Override public boolean keyDown(int code) { return onMovementKey(code, true); }
+        @Override public boolean keyUp(int code) { return onMovementKey(code, false); }
+    };
     private NativeInnBoard board;
     private ChatRows chatRows;
     private ScrollPane chat;
@@ -62,7 +63,9 @@ public final class NativeInnScene extends PixelScene {
     private LobbySession.Snapshot displayed;
     private List<InnApi.Event> displayedChat = List.of();
     private InnMotion.Cell destination;
-    private PredictedStep predictedStep;
+    private PredictedStep sentStep;
+    private PredictedStep queuedStep;
+    private long nextStepAt;
     private boolean displayedTestMode;
     private boolean hasDisplayed;
     private boolean chatPinned;
@@ -75,7 +78,7 @@ public final class NativeInnScene extends PixelScene {
     @Override
     public void create() {
         super.create();
-        KeyEvent.addKeyListener(movementKeys);
+        Game.inputHandler.addInputProcessor(movementKeys);
         float w = Camera.main.width;
         float h = Camera.main.height;
         RectF insets = getCommonInsets();
@@ -136,6 +139,7 @@ public final class NativeInnScene extends PixelScene {
     @Override
     public void update() {
         showSnapshot();
+        sendQueuedStep(NativeClient.inn());
         if (!modalOpen && Gdx.input.isKeyJustPressed(Input.Keys.F1)) toggleHelp();
         if (editor != null) {
             if (!Gdx.input.isKeyPressed(Input.Keys.ENTER)) openingEnterHeld = false;
@@ -162,14 +166,16 @@ public final class NativeInnScene extends PixelScene {
     public void onPause() {
         destination = null;
         keyboard.reset();
-        clearPredictedStep();
+        queuedStep = null;
+        nextStepAt = 0;
+        board.correctSelfVisual(sentStep == null ? null : sentStep.target());
         super.onPause();
     }
 
     @Override
     public void destroy() {
-        KeyEvent.removeKeyListener(movementKeys);
-        predictedStep = null;
+        Game.inputHandler.removeInputProcessor(movementKeys);
+        queuedStep = sentStep = null;
         super.destroy();
     }
 
@@ -191,10 +197,12 @@ public final class NativeInnScene extends PixelScene {
                 chat.scrollTo(0, bottom ? chatRows.height() : scroll);
                 displayedChat = history;
             }
-            if (predictedStep != null && (!online || !predictedStep.awaiting(state))) {
-                predictedStep = null;
+            PredictedStep visualStep = visualStep();
+            if (visualStep != null && (!online || !visualStep.playerId().equals(state.selfId()))) {
+                queuedStep = sentStep = visualStep = null;
+                nextStepAt = 0;
             }
-            board.showState(state, history, testMode, predictedStep == null ? null : predictedStep.target(), NativeClient.appearance());
+            board.showState(state, history, testMode, visualStep == null ? null : visualStep.target(), NativeClient.appearance());
             replace(presence, online ? "접속 " + state.people().size() + "명" : profileConfirmed ? "서버 연결 중" : "프로필 설정");
             presence.hardlight(online ? GREEN : MUTED);
             expeditions.caption(state != null && state.match() != null ? "연결 중" :
@@ -227,13 +235,15 @@ public final class NativeInnScene extends PixelScene {
         keyboard.sample(Gdx.input::isKeyPressed);
         if (keyboard.active()) destination = null;
         LobbySession session = NativeClient.inn();
-        if (predictedStep != null || session == null || !session.canRequestMove()) return;
+        long now = System.nanoTime();
+        if (queuedStep != null || session == null || nextStepAt != 0 && now - nextStepAt < 0) return;
         KeyboardMovement.Input input = keyboard.next(0);
         int dx = input == null ? 0 : input.dx();
         int dy = input == null ? 0 : input.dy();
         InnApi.State state = displayed.state();
         InnApi.Person self = state.self();
-        InnMotion.Cell from = new InnMotion.Cell(self.x(), self.y());
+        PredictedStep previous = visualStep();
+        InnMotion.Cell from = previous == null ? new InnMotion.Cell(self.x(), self.y()) : previous.target();
         if (dx == 0 && dy == 0 && destination != null) {
             List<InnMotion.Cell> route = InnMotion.path(from, destination, state);
             if (route.isEmpty()) {
@@ -250,36 +260,55 @@ public final class NativeInnScene extends PixelScene {
             else if (dx != 0 && dy != 0 && state.walkable(from.x(), to.y())) dx = 0;
             else return;
         }
-        PredictedStep step = new PredictedStep(self.id(), from, new InnMotion.Cell(from.x() + dx, from.y() + dy));
-        if (session.moveBy(dx, dy, accepted -> Gdx.app.postRunnable(() -> finishMove(step, accepted)))) {
-            predictedStep = step;
-            board.moveSelfVisual(step.target());
-        }
+        queuedStep = new PredictedStep(self.id(), from, new InnMotion.Cell(from.x() + dx, from.y() + dy));
+        long cadenceStart = nextStepAt != 0 && now - nextStepAt < InnMotion.LOCAL_FRAME_SLACK ? nextStepAt : now;
+        nextStepAt = cadenceStart + LobbySession.MOVE_INTERVAL;
+        board.moveSelfVisual(queuedStep.target(), now);
+        sendQueuedStep(session);
     }
 
-    private boolean onMovementKey(KeyEvent event) {
+    private boolean onMovementKey(int code, boolean pressed) {
         if (editor != null || modalOpen) return false;
-        if (event.pressed && (event.code == Input.Keys.PLUS || event.code == Input.Keys.EQUALS)) {
+        if (pressed && (code == Input.Keys.PLUS || code == Input.Keys.EQUALS)) {
             board.zoom(1);
             return true;
         }
-        if (event.pressed && event.code == Input.Keys.MINUS) {
+        if (pressed && code == Input.Keys.MINUS) {
             board.zoom(-1);
             return true;
         }
-        return keyboard.onKey(event.code, event.pressed);
+        return keyboard.onKey(code, pressed);
+    }
+
+    private PredictedStep visualStep() {
+        return queuedStep == null ? sentStep : queuedStep;
+    }
+
+    private void sendQueuedStep(LobbySession session) {
+        if (queuedStep == null || sentStep != null || session == null || !session.canRequestMove()) return;
+        PredictedStep step = queuedStep;
+        if (!step.startsAt(displayed.state())) {
+            correctMovement();
+            return;
+        }
+        if (session.moveTo(step.origin().x(), step.origin().y(), step.target().x(), step.target().y(),
+                accepted -> Gdx.app.postRunnable(() -> finishMove(step, accepted)))) {
+            sentStep = step;
+            queuedStep = null;
+        }
     }
 
     private void finishMove(PredictedStep step, boolean accepted) {
-        if (Game.scene() != this || predictedStep != step) return;
+        if (Game.scene() != this || sentStep != step) return;
+        sentStep = null;
+        if (!accepted) correctMovement();
         showSnapshot();
-        if (!accepted && predictedStep == step) clearPredictedStep();
     }
 
-    private void clearPredictedStep() {
-        if (predictedStep == null) return;
-        predictedStep = null;
-        board.moveSelfVisual(null);
+    private void correctMovement() {
+        queuedStep = null;
+        nextStepAt = System.nanoTime() + LobbySession.MOVE_INTERVAL;
+        board.correctSelfVisual(null);
     }
 
     private void match() {

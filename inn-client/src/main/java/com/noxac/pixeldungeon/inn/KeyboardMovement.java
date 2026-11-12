@@ -60,7 +60,7 @@ final class KeyboardMovement {
         return false;
     }
 
-    // Events preserve short taps. Sampling also covers keys unbound in the original game settings.
+    // Events preserve short taps. Sampling recovers held keys after closing a menu.
     void sample(IntPredicate pressed) {
         boolean changed = false;
         boolean pressedNew = false;
@@ -82,16 +82,16 @@ final class KeyboardMovement {
     Input next(long repeatMillis) {
         long now = clock.getAsLong();
         finishRelease(now);
+        if (tap != 0) {
+            Input input = input(tap, true);
+            tap = 0;
+            nextAt = Math.max(nextAt, now + repeatMillis);
+            return input;
+        }
         if (direction != 0 && now >= nextAt && (releasedDirection == 0 || fresh)) {
             Input input = input(direction, fresh);
             fresh = false;
-            tap = 0;
             nextAt = now + repeatMillis;
-            return input;
-        }
-        if (direction == 0 && tap != 0) {
-            Input input = input(tap, true);
-            tap = 0;
             return input;
         }
         return null;
@@ -135,7 +135,8 @@ final class KeyboardMovement {
             releaseAt = now + RELEASE_MILLIS;
             return;
         }
-        select(next, now + (diagonal(next) ? 0 : CHORD_MILLIS), nextComposed, pressed && !opposed);
+        long chord = direction == 0 && !diagonal(next) ? CHORD_MILLIS : 0;
+        select(next, now + chord, nextComposed, pressed && !opposed);
     }
 
     private void finishRelease(long now) {

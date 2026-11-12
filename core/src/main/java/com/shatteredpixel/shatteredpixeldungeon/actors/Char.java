@@ -621,7 +621,7 @@ public abstract class Char extends Actor {
 		float defStat = defender.defenseSkill( attacker );
 
 		if (defender instanceof Hero && ((Hero) defender).damageInterrupt){
-			((Hero) defender).interrupt();
+			((Hero) defender).interruptForCombat();
 		}
 
 		//invisible chars always hit (for the hero this is surprise attacking)

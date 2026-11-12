@@ -28,8 +28,11 @@ public class HeroAction {
 	public int dst;
 	
 	public static class Move extends HeroAction {
-		public Move( int dst ) {
+		public final boolean singleStep;
+
+		public Move( int dst, boolean singleStep ) {
 			this.dst = dst;
+			this.singleStep = singleStep;
 		}
 	}
 	

@@ -27,7 +27,7 @@ final class LobbySession implements AutoCloseable {
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final long MOVE_INTERVAL = Duration.ofMillis(150).toNanos();
+    static final long MOVE_INTERVAL = Duration.ofMillis(150).toNanos();
     private final InnApi api;
     private final Consumer<Snapshot> listener;
     private final ScheduledThreadPoolExecutor network = new ScheduledThreadPoolExecutor(1,
@@ -176,7 +176,7 @@ final class LobbySession implements AutoCloseable {
         return !moving.get() && System.nanoTime() - nextMoveAt >= 0;
     }
 
-    boolean moveBy(int dx, int dy, Consumer<Boolean> result) {
+    boolean moveTo(int fromX, int fromY, int targetX, int targetY, Consumer<Boolean> result) {
         if (!canRequestMove() || !moving.compareAndSet(false, true)) return false;
         boolean scheduled = submit(() -> {
             boolean accepted = false;
@@ -184,9 +184,8 @@ final class LobbySession implements AutoCloseable {
                 long started = System.nanoTime();
                 if (!online || suspended || state == null) return;
                 InnApi.Person current = state.self();
-                int targetX = current.x() + dx;
-                int targetY = current.y() + dy;
-                if (!state.canStep(current.x(), current.y(), targetX, targetY)) return;
+                if (current.x() != fromX || current.y() != fromY ||
+                        !state.canStep(fromX, fromY, targetX, targetY)) return;
                 nextMoveAt = started + MOVE_INTERVAL;
                 accepted = perform(() -> api.move(key, targetX, targetY));
                 if (accepted) {

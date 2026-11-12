@@ -174,7 +174,8 @@ final class NativeInnBoard extends Group {
             guest.rename(person.name());
             guest.appearance(own && ownAppearance != null ? ownAppearance : person.appearance());
             guest.seeking(person.queued());
-            guest.motion.moveTo(own && predictedSelf != null ? predictedSelf : cell, state, now);
+            if (own) guest.motion.moveLocalTo(predictedSelf == null ? cell : predictedSelf, state, now);
+            else guest.motion.moveTo(cell, state, now);
         }
         InnApi.Person self = state.self();
         InnMotion.Cell player = new InnMotion.Cell(self.x(), self.y());
@@ -204,13 +205,19 @@ final class NativeInnBoard extends Group {
         }
     }
 
-    void moveSelfVisual(InnMotion.Cell target) {
+    void moveSelfVisual(InnMotion.Cell target, long now) {
+        if (state == null) return;
+        Figure figure = guests.get(state.selfId());
+        if (figure != null) figure.motion.moveLocalTo(target, state, now);
+    }
+
+    void correctSelfVisual(InnMotion.Cell target) {
         if (state == null) return;
         InnApi.Person self = state.self();
         Figure figure = guests.get(self.id());
         if (figure == null) return;
         InnMotion.Cell cell = target == null ? new InnMotion.Cell(self.x(), self.y()) : target;
-        figure.motion.moveTo(cell, state, System.nanoTime());
+        figure.motion.correctTo(cell, state, System.nanoTime());
     }
 
     @Override

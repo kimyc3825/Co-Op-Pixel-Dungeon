@@ -1082,13 +1082,30 @@ public class Hero extends Char {
 	}
 	
 	public void interrupt() {
+		interrupt(true);
+	}
+
+	public void interruptForCombat() {
+		boolean timed = innAtbActive();
+		HeroAction action = curAction;
+		// Keep a single escape step queued while its ATB movement gate recovers.
+		if (timed && action instanceof HeroAction.Move && ((HeroAction.Move)action).singleStep
+				&& Dungeon.level.adjacent(pos, action.dst)) {
+			resting = false;
+			return;
+		}
+		// Stop automatic travel and resting without forgetting physically held directions.
+		interrupt(!timed);
+	}
+
+	private void interrupt(boolean resetKeyHold) {
 		if (isAlive() && curAction != null &&
 			((curAction instanceof HeroAction.Move && curAction.dst != pos) ||
 			(curAction instanceof HeroAction.LvlTransition))) {
 			lastAction = curAction;
 		}
 		curAction = null;
-		GameScene.resetKeyHold();
+		if (resetKeyHold) GameScene.resetKeyHold();
 		resting = false;
 	}
 	
@@ -1740,7 +1757,7 @@ public class Hero extends Char {
 		//regular damage interrupt, triggers on any damage except specific mild DOT effects
 		// unless the player recently hit 'continue moving', in which case this is ignored
 		if (!(src instanceof Hunger || src instanceof Viscosity.DeferedDamage) && damageInterrupt) {
-			interrupt();
+			interruptForCombat();
 		}
 
 		if (this.buff(Drowsy.class) != null){
@@ -1811,8 +1828,8 @@ public class Hero extends Char {
 				} else {
 					Sample.INSTANCE.play(Assets.Sounds.HEALTH_WARN, 1/3f + flashIntensity * 4f);
 				}
-				//hero gets interrupted on taking serious damage, regardless of any other factor
-				interrupt();
+				//serious damage interrupts even if the player recently chose to continue moving
+				interruptForCombat();
 				damageInterrupt = true;
 			}
 		}
@@ -1865,7 +1882,7 @@ public class Hero extends Char {
 			if (resting){
 				Dungeon.observe();
 			}
-			interrupt();
+			interruptForCombat();
 		}
 
 		visibleEnemies = visible;
@@ -2110,7 +2127,7 @@ public class Hero extends Char {
 			
 		}  else {
 			
-			curAction = new HeroAction.Move( cell );
+			curAction = new HeroAction.Move( cell, Dungeon.level.adjacent(pos, cell) );
 			lastAction = null;
 			
 		}

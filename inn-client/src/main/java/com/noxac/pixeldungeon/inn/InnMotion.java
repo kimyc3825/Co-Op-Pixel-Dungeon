@@ -17,7 +17,10 @@ final class InnMotion {
 
     record Pose(double x, double y, int frame, boolean facingLeft, double drinkSeconds) {}
 
+    static final long LOCAL_FRAME_SLACK = TimeUnit.MILLISECONDS.toNanos(17);
     private static final long STEP = TimeUnit.MILLISECONDS.toNanos(142);
+    private static final long LOCAL_STEP = LobbySession.MOVE_INTERVAL + LOCAL_FRAME_SLACK;
+    private static final long CORRECTION_STEP = TimeUnit.MILLISECONDS.toNanos(70);
     private static final long FAST_STEP = TimeUnit.MILLISECONDS.toNanos(80);
     private static final long CATCH_UP = TimeUnit.MILLISECONDS.toNanos(560);
     private static final long RUN_FRAME = TimeUnit.MILLISECONDS.toNanos(50);
@@ -34,6 +37,8 @@ final class InnMotion {
     private final ArrayDeque<Cell> route = new ArrayDeque<>();
     private final int idlePhase;
     private Cell cell;
+    private double startX;
+    private double startY;
     private long stepAt;
     private long stepDuration = STEP;
     private long followingStepDuration = STEP;
@@ -46,6 +51,8 @@ final class InnMotion {
 
     InnMotion(Cell cell, int idlePhase) {
         this.cell = cell;
+        startX = cell.x();
+        startY = cell.y();
         this.idlePhase = Math.floorMod(idlePhase, IDLE_FRAMES.length);
     }
 
@@ -63,6 +70,14 @@ final class InnMotion {
     }
 
     void moveTo(Cell target, InnApi.State state, long now) {
+        moveTo(target, state, now, STEP);
+    }
+
+    void moveLocalTo(Cell target, InnApi.State state, long now) {
+        moveTo(target, state, now, LOCAL_STEP);
+    }
+
+    private void moveTo(Cell target, InnApi.State state, long now, long maxStep) {
         advance(now);
         if (target.equals(destination())) return;
 
@@ -73,21 +88,48 @@ final class InnMotion {
 
         if (remaining.isEmpty() && !start.equals(target)) {
             // A disconnected path can happen when the server replaces the map.
-            cell = target;
-            stoppedAt = now;
+            settleAt(target, now);
             return;
         }
 
         if (next != null) route.addLast(next);
         route.addAll(remaining);
-        followingStepDuration = Math.max(FAST_STEP, Math.min(STEP, CATCH_UP / route.size()));
+        // Once the next prediction is available, playback can continue at the input cadence.
+        long cadence = maxStep == LOCAL_STEP && next != null ? LobbySession.MOVE_INTERVAL : maxStep;
+        followingStepDuration = Math.max(FAST_STEP, Math.min(cadence, CATCH_UP / route.size()));
         if (next == null) {
             stepAt = now;
             stepDuration = followingStepDuration;
             if (!walked || now - stoppedAt > KEEP_STRIDE) walkAt = now;
             walked = true;
-            face(route.getFirst());
+            faceNext();
         }
+    }
+
+    void correctTo(Cell target, InnApi.State state, long now) {
+        Pose current = pose(now);
+        if (target.equals(destination())) return;
+        route.clear();
+        if (current.x() != cell.x() || current.y() != cell.y()) route.addLast(cell);
+        List<Cell> remaining = path(cell, target, state);
+        if (remaining.isEmpty() && !cell.equals(target)) {
+            settleAt(target, now);
+            return;
+        }
+        route.addAll(remaining);
+        if (route.isEmpty()) return;
+        startX = current.x();
+        startY = current.y();
+        stepAt = now;
+        stepDuration = followingStepDuration = CORRECTION_STEP;
+        faceNext();
+    }
+
+    private void settleAt(Cell target, long now) {
+        cell = target;
+        startX = cell.x();
+        startY = cell.y();
+        stoppedAt = now;
     }
 
     Pose pose(long now) {
@@ -102,8 +144,8 @@ final class InnMotion {
             return new Pose(cell.x(), cell.y(), frame, facingLeft, drinkSeconds);
         }
         double progress = (double) (now - stepAt) / stepDuration;
-        double x = cell.x() + (next.x() - cell.x()) * progress;
-        double y = cell.y() + (next.y() - cell.y()) * progress;
+        double x = startX + (next.x() - startX) * progress;
+        double y = startY + (next.y() - startY) * progress;
         int frame = 2 + (int) ((now - walkAt) / RUN_FRAME) % 6;
         return new Pose(x, y, frame, facingLeft, drinkSeconds);
     }
@@ -111,14 +153,21 @@ final class InnMotion {
     private void advance(long now) {
         while (!route.isEmpty() && now - stepAt >= stepDuration) {
             cell = route.removeFirst();
+            startX = cell.x();
+            startY = cell.y();
             stepAt += stepDuration;
             stepDuration = followingStepDuration;
             if (route.isEmpty()) {
                 stoppedAt = stepAt;
             } else {
-                face(route.getFirst());
+                faceNext();
             }
         }
+    }
+
+    private void faceNext() {
+        int x = route.getFirst().x();
+        if (x != startX) facingLeft = x < startX;
     }
 
     static boolean canStep(InnApi.State state, Cell from, Cell to) {

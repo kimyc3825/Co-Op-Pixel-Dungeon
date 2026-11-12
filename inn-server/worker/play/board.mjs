@@ -2,6 +2,7 @@
 import { BattleRules, PRISON } from './rules.mjs';
 import { runtimeImage } from './runtime-loader.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
+import { INN_MOVE_MS } from './session.mjs';
 
 const TILE = 32;
 const ATLAS_TILE = 16;
@@ -431,7 +432,13 @@ export class Board {
 
   predict(dx, dy, now) {
     this.panX = this.panY = 0;
-    this.figures.get(this.snapshot?.selfId)?.predict(dx, dy, now, this.dungeon ? 180 : 145, now + 550);
+    this.figures.get(this.snapshot?.selfId)?.predict(dx, dy, now, 180, now + 550);
+  }
+
+  moveInn(snapshot, actor, now = performance.now()) {
+    this.snapshot = snapshot;
+    this.panX = this.panY = 0;
+    this.figures.get(actor.id)?.accept(actor, null, now, INN_MOVE_MS + 10, false);
   }
 
   cancel(now) { this.figures.get(this.snapshot?.selfId)?.cancel(now); }
