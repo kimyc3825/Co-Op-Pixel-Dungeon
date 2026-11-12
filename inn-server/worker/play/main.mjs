@@ -20,6 +20,7 @@ const fields = Object.fromEntries([
   'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
   'original-launch', 'expedition-window', 'expedition-toggle', 'backpack-window', 'backpack-toggle', 'chat-toggle', 'hud-scrim',
+  'prepare-expedition', 'preparation-result',
 ].map((id) => [id, byId(id)]));
 
 const trainingHint = document.createElement('p');
@@ -34,6 +35,12 @@ const keys = new Map([
   ['KeyS', [0, 1]], ['ArrowDown', [0, 1]], ['Numpad2', [0, 1]],
   ['KeyD', [1, 0]], ['ArrowRight', [1, 0]], ['Numpad6', [1, 0]],
   ['Numpad7', [-1, -1]], ['Numpad9', [1, -1]], ['Numpad1', [-1, 1]], ['Numpad3', [1, 1]],
+]);
+const movementLabels = new Map([
+  ['w', 'KeyW'], ['ᄌ', 'KeyW'], ['ᄍ', 'KeyW'],
+  ['a', 'KeyA'], ['ᄆ', 'KeyA'],
+  ['s', 'KeyS'], ['ᄂ', 'KeyS'],
+  ['d', 'KeyD'], ['ᄋ', 'KeyD'],
 ]);
 const MOVE_QUEUE_LEAD = 70;
 const ACK_WAIT = 550;
@@ -213,6 +220,8 @@ const original = new OriginalGame({
   resume: () => play.resumeInn(),
   canLaunch: canLaunchOriginal,
   getProfile: ownProfile,
+  getPreparation: () => play.inn?.preparation,
+  usePreparation: id => play.usePreparation(id),
   onChange(active) {
     clearMovement();
     setExamining(false);
@@ -418,7 +427,7 @@ function isRuntimeLoading() {
 
 function canLaunchOriginal() {
   return play.online && !profileOpen && !play.frame && !play.battle && !play.inn?.match && !play.inn?.queued && !isRuntimeLoading() &&
-    !busy.has('match') && !busy.has('name') && !busy.has('return');
+    !busy.has('match') && !busy.has('name') && !busy.has('return') && !busy.has('prepare');
 }
 
 function updateLoading(state) {
@@ -487,7 +496,7 @@ function updateInn() {
   else status('입장 대기', 'idle');
   text(fields['board-status'], online ? `모험가 ${state.people.length}명` : '모험가 대기 중');
   const queued = Boolean(state?.queued);
-  const rulesLocked = queued || entering || returning || busy.has('match');
+  const rulesLocked = queued || entering || returning || busy.has('match') || busy.has('prepare');
   updateProfile(state, online, rulesLocked || busy.has('name'));
   fields['dungeon-theme'].value = play.theme;
   fields['dungeon-theme'].disabled = rulesLocked;
@@ -497,7 +506,16 @@ function updateInn() {
   fields.match.dataset.waiting = String(queued);
   fields['expedition-toggle'].dataset.waiting = String(queued);
   text(fields['expedition-toggle'], queued ? '동료 찾는 중' : '원정');
-  fields.match.disabled = !ready || busy.has('match');
+  fields.match.disabled = !ready || busy.has('match') || busy.has('prepare');
+  const preparation = state?.preparation;
+  fields['prepare-expedition'].disabled = !ready || rulesLocked || profileOpen || busy.has('prepare') || Boolean(preparation);
+  fields['preparation-result'].hidden = !preparation;
+  if (preparation) {
+    const { hp, food } = preparation;
+    const delta = value => value > 0 ? `+${value}` : `−${-value}`;
+    text(fields['preparation-result'], hp || food ? `다음 원정 · 최대 체력 ${delta(hp)} · 식량 ${delta(food)}` :
+      '다음 원정 · 아무 일도 없었습니다.');
+  }
   fields.drink.disabled = !ready || busy.has('drink');
   fields.guide.disabled = !ready || rulesLocked || profileOpen;
   fields.solo.disabled = original.active || !canLaunchOriginal();
@@ -916,6 +934,7 @@ function showTrainingUse(state, prior) {
 }
 
 function match(id) {
+  if (busy.has('prepare')) return;
   return run('match', async () => {
     if (id) await play.match(id);
     else if (play.inn?.queued) await play.cancelMatch();
@@ -1210,7 +1229,7 @@ function changeDirection(now, releasing = false) {
   }
   const cardinalRelease = releasing && direction?.dx && direction?.dy && !(dx && dy);
   const chordWait = !(dx && dy) && (play.frame || !direction) ? 75 : 0;
-  tap = !play.frame && cardinalRelease && direction.fresh ? { ...direction, expires: now + INN_TAP_MS } : null;
+  tap = cardinalRelease && direction.fresh ? { ...direction, expires: now + INN_TAP_MS } : null;
   direction = { dx, dy, at: now + (cardinalRelease ? 45 : chordWait), fresh: true, tap: !cardinalRelease };
   destination = null;
   dungeonRoute = interruptedRoute = null;
@@ -1360,6 +1379,7 @@ for (const input of chatInputs) {
   });
 }
 fields.match.addEventListener('click', () => void match());
+fields['prepare-expedition'].addEventListener('click', () => void run('prepare', () => play.prepare()));
 fields.guide.addEventListener('click', () => { if (play.practice()) focusBoard(); });
 fields.solo.addEventListener('click', () => original.start(true));
 for (const [id, action, returnFocus] of [
@@ -1494,6 +1514,14 @@ board.canvas.addEventListener('wheel', (event) => {
 
 function typing(target) { return target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable); }
 
+function movementCode(event) {
+  if (event.code && event.code !== 'Unidentified') return event.code;
+  // Some Korean IME events only supply the key label. NFKC also handles compatibility jamo.
+  const label = event.key?.normalize('NFKC').toLowerCase();
+  if (event.location === KeyboardEvent.DOM_KEY_LOCATION_NUMPAD && /^[1-9]$/.test(label)) return `Numpad${label}`;
+  return movementLabels.get(label) ?? event.key;
+}
+
 window.addEventListener('keydown', (event) => {
   if (original.active || event.defaultPrevented) return;
   const enter = event.key === 'Enter' || event.code === 'Enter' || event.code === 'NumpadEnter';
@@ -1559,7 +1587,8 @@ window.addEventListener('keydown', (event) => {
     setExamining(false);
     return;
   }
-  const step = keys.get(event.code);
+  const code = movementCode(event);
+  const step = keys.get(code);
   if (aimCell) {
     if (escape) { event.preventDefault(); setAim(null); return; }
     if (enter && event.target === board.canvas && !event.repeat) {
@@ -1590,8 +1619,8 @@ window.addEventListener('keydown', (event) => {
   if (step) {
     event.preventDefault();
     setExamining(false);
-    if (!isPaused(play.frame?.state) && !event.repeat && !held.has(event.code)) {
-      held.set(event.code, step);
+    if (!isPaused(play.frame?.state) && !held.has(code)) {
+      held.set(code, step);
       changeDirection(performance.now());
     }
   } else if (play.frame && !event.repeat) {
@@ -1620,7 +1649,7 @@ window.addEventListener('keydown', (event) => {
   }
 });
 window.addEventListener('keyup', (event) => {
-  if (held.delete(event.code)) { event.preventDefault(); changeDirection(performance.now(), true); }
+  if (held.delete(movementCode(event))) { event.preventDefault(); changeDirection(performance.now(), true); }
 });
 window.addEventListener('blur', () => {
   clearMovement();

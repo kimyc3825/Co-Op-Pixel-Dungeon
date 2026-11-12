@@ -30,6 +30,7 @@ final class NativeClient {
     private static boolean friendlyFire;
     private static boolean testMode;
     private static boolean leftInn;
+    private static boolean preparing;
     private static volatile boolean shuttingDown;
 
     private NativeClient() {}
@@ -79,7 +80,7 @@ final class NativeClient {
 
     static boolean canChooseExpeditionTheme() {
         InnApi.State current = innSnapshot == null ? null : innSnapshot.state();
-        return view == View.INN && (current == null || !current.queued() && current.match() == null);
+        return view == View.INN && !preparing && (current == null || !current.queued() && current.match() == null);
     }
 
     static void chooseExpeditionTheme(String theme) {
@@ -143,7 +144,7 @@ final class NativeClient {
         dungeonFrame = frame;
         if (!leftInn && !frame.state().waitingForPartner() && "active".equals(frame.state().status())) {
             leftInn = true;
-            inn.enterDungeon();
+            inn.enterDungeon(ignoredMatch != null, null);
         }
         if (view == View.ENTERING) {
             view = View.DUNGEON;
@@ -198,13 +199,29 @@ final class NativeClient {
         enterOriginal(true);
     }
 
+    static InnApi.Preparation preparation() {
+        return innSnapshot == null || innSnapshot.state() == null ? null : innSnapshot.state().preparation();
+    }
+
+    static void prepareExpedition() {
+        if (!canEnterSolo() || innSnapshot == null || !innSnapshot.online() || preparation() != null) return;
+        preparing = true;
+        inn.prepare(() -> Gdx.app.postRunnable(() -> {
+            preparing = false;
+            InnApi.Preparation result = preparation();
+            if (result != null) notice("다음 원정 · " + result.description());
+        }));
+    }
+
     private static void enterOriginal(boolean atb) {
         if (!canEnterSolo()) return;
+        InnApi.Preparation preparation = atb ? preparation() : null;
         InnAdventure.configure(nickname, appearance.job(), appearance.hairColor(), appearance.outfitColor(),
-            appearance.hairStyle(), appearance.accessory(), atb);
+            appearance.hairStyle(), appearance.accessory(), atb,
+            InnApi.Preparation.health(preparation), InnApi.Preparation.rations(preparation));
         view = View.SOLO;
         leftInn = true;
-        inn.enterDungeon();
+        inn.enterDungeon(false, preparation);
         ShatteredPixelDungeon.switchNoFade(InnAdventureScene.class);
     }
 

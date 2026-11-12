@@ -36,11 +36,13 @@ export async function warmOriginalRuntime() {
 }
 
 export class OriginalGame {
-  constructor({ suspend, resume, canLaunch, getProfile, onChange, tips }) {
+  constructor({ suspend, resume, canLaunch, getProfile, getPreparation, usePreparation, onChange, tips }) {
     this.suspend = suspend;
     this.resume = resume;
     this.canLaunch = canLaunch;
     this.getProfile = getProfile;
+    this.getPreparation = getPreparation;
+    this.usePreparation = usePreparation;
     this.onChange = onChange;
     this.tips = tips;
     this.shell = document.getElementById('play-shell');
@@ -77,7 +79,13 @@ export class OriginalGame {
     if (this.active || !this.canLaunch()) return;
     const { name, appearance: { job, hairColor, outfitColor, hairStyle, accessory } } = this.getProfile();
     this.launchProfile = new URLSearchParams({ name, job, hairColor, outfitColor, hairStyle, accessory });
+    this.preparation = atb ? this.getPreparation?.() : null;
+    this.consumingPreparation = null;
     if (atb) this.launchProfile.set('atb', '1');
+    if (this.preparation) {
+      this.launchProfile.set('prepHp', this.preparation.hp);
+      this.launchProfile.set('prepFood', this.preparation.food);
+    }
     this.title.textContent = atb ? '원본 던전 · ATB' : '원본 1인 저장';
     this.shell.hidden = true;
     this.screen.hidden = false;
@@ -158,6 +166,9 @@ export class OriginalGame {
       this.resetBootDeadline();
     } else if (type === 'noxac-original-ready' && this.phase === 'loading') {
       clearTimeout(this.deadline);
+      if (this.preparation && !this.consumingPreparation) {
+        this.consumingPreparation = this.usePreparation(this.preparation.id);
+      }
       this.setPhase('ready');
       this.frame.focus();
     } else if (type === 'noxac-original-error') {
@@ -186,6 +197,7 @@ export class OriginalGame {
   clearFrame() {
     clearTimeout(this.deadline);
     this.deadline = null;
+    if (this.phase === 'retreating') this.frame?.contentDocument?.defaultView?.spd?.prepareForDetach?.();
     this.frame?.remove();
     this.frame = null;
   }
@@ -200,6 +212,7 @@ export class OriginalGame {
     this.attempt?.abort();
     this.clearFrame();
     this.setPhase('returning', '여관으로 돌아가는 중');
+    await this.consumingPreparation;
     if (await this.suspending) await this.resume();
     this.suspending = this.attempt = this.phase = this.launchProfile = null;
     this.screen.hidden = true;

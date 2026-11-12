@@ -49,8 +49,9 @@
 	var ready = false;
 	var finished = false;
 	var exiting = false;
+	spd.prepareForDetach = function () { exiting = true; };
 	document.addEventListener("visibilitychange", function (event) {
-		// Returning already finalized the adventure on the game thread. The backend listener can be gone on detach.
+		// Detaching the frame can dispatch this after the backend input has been disposed.
 		if (exiting) event.stopImmediatePropagation();
 	}, true);
 	function notifyParent(type, percent) {
@@ -152,8 +153,10 @@
 	// ---- on-screen keyboard for touch devices ---------------------------------------------
 	var kb = $("kb");
 	var kbWanted = false;
+	var textInputActive = false;
 	var isTouch = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
 	spd.keyboard = function (visible, multiline) {
+		textInputActive = visible;
 		if (!isTouch) return;
 		kbWanted = visible;
 		if (visible) {
@@ -195,6 +198,31 @@
 			}
 		});
 	});
+
+	// Supply the movement code when an IME only reports a key label. Let libGDX track key state.
+	var movementLabels = new Map([
+		["w", "KeyW"], ["ᄌ", "KeyW"], ["ᄍ", "KeyW"],
+		["a", "KeyA"], ["ᄆ", "KeyA"], ["s", "KeyS"], ["ᄂ", "KeyS"], ["d", "KeyD"], ["ᄋ", "KeyD"]
+	]);
+	function normalizeMovement(event) {
+		if (event.target !== canvas || textInputActive || event.defaultPrevented ||
+				(event.code && event.code !== "Unidentified")) return;
+		if (event.type === "keydown" && (event.altKey || event.ctrlKey || event.metaKey)) return;
+		var label = event.key.normalize("NFKC").toLowerCase();
+		var code = movementLabels.get(label);
+		if (event.location === KeyboardEvent.DOM_KEY_LOCATION_NUMPAD && /^[1-9]$/.test(label)) code = "Numpad" + label;
+		if (/^Arrow(Up|Down|Left|Right)$/.test(event.key)) code = event.key;
+		if (!code) return;
+		event.preventDefault();
+		event.stopImmediatePropagation();
+		canvas.dispatchEvent(new KeyboardEvent(event.type, {
+			key: event.key, code: code, location: event.location, repeat: event.repeat,
+			shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+			bubbles: true, cancelable: true
+		}));
+	}
+	document.addEventListener("keydown", normalizeMovement, true);
+	document.addEventListener("keyup", normalizeMovement, true);
 
 	// ---- user gestures: audio unlock, deferred fullscreen and keyboard focus --------------
 	function onGesture() {

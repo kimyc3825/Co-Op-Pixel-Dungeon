@@ -157,6 +157,11 @@ final class HostBattle {
 
     HostBattle(String id, InnApi.Person host, InnApi.Person guestOrNull, long now, long seed, String theme,
                boolean friendlyFire, boolean solo) {
+        this(id, host, guestOrNull, now, seed, theme, friendlyFire, solo, 0, 0, 0, 0);
+    }
+
+    HostBattle(String id, InnApi.Person host, InnApi.Person guestOrNull, long now, long seed, String theme,
+               boolean friendlyFire, boolean solo, int hostHp, int hostFood, int guestHp, int guestFood) {
         this.id = id;
         this.seed = seed;
         this.friendlyFire = friendlyFire;
@@ -167,10 +172,9 @@ final class HostBattle {
         String ratName = DungeonLayout.PRISON.equals(layout.theme()) ? "감옥 쥐" : "하수도 쥐";
         boolean practice = guestOrNull == null && !solo;
         List<Actor> participants = new ArrayList<>(5);
-        participants.add(new Actor(host.id(), host.name(), Kind.PLAYER, layout.host(), 24, now, host.appearance()));
+        participants.add(player(host, layout.host(), now, practice ? 0 : hostHp, practice ? 0 : hostFood));
         if (guestOrNull != null) {
-            participants.add(new Actor(guestOrNull.id(), guestOrNull.name(), Kind.PLAYER, layout.partner(), 24, now,
-                guestOrNull.appearance()));
+            participants.add(player(guestOrNull, layout.partner(), now, guestHp, guestFood));
         } else if (practice) {
             participants.add(new Actor("guide", "길잡이", Kind.GUIDE, layout.partner(), 24, now, null));
         }
@@ -190,6 +194,13 @@ final class HostBattle {
         }
         actors = List.copyOf(participants);
         if (trainingDummy != null) inCombat = engaged();
+    }
+
+    private static Actor player(InnApi.Person person, DungeonLayout.Cell start, long now, int hp, int food) {
+        int startingHp = 24 + (Math.abs(hp) == 2 ? hp : 0);
+        Actor player = new Actor(person.id(), person.name(), Kind.PLAYER, start, startingHp, now, person.appearance());
+        if (Math.abs(food) == 1) player.rations += food;
+        return player;
     }
 
     int revision() {

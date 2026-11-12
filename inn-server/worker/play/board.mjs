@@ -3,6 +3,7 @@ import { BattleRules, PRISON } from './rules.mjs';
 import { runtimeImage } from './runtime-loader.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
 import { INN_MOVE_MS } from './session.mjs';
+import { animateInn, bardNotes, decorateInn, innRug } from './inn-decor.mjs';
 
 const TILE = 32;
 const ATLAS_TILE = 16;
@@ -125,12 +126,13 @@ function innTile(context, map, x, y) {
     }
     return;
   }
-  box(['#705039', '#76523c', '#6a4a35'][shade % 3], 0, 0, 32, 32);
+  box(['#61432f', '#65452f', '#6b4832', '#5b3e2e'][shade % 4], 0, 0, 32, 32);
   for (let row = 0; row < 4; row++) {
     box('#493426', 0, row * 8 + 7, 32, 1);
-    box('#8a6245', 0, row * 8, 32, 1);
+    box('#78533b', 0, row * 8, 32, 1);
     box('#493426', (shade * 3 + row * 13) % 31, row * 8 + 1, 1, 6);
   }
+  innRug(context, x, y);
   if (tile === 'D') {
     box('#392c22', 0, 17, 32, 15);
     box('#87644c', 0, 19, 32, 4);
@@ -501,6 +503,7 @@ export class Board {
         if (wallRows.at(-1) !== y) wallRows.push(y);
       });
     });
+    if (!this.dungeon) decorateInn(context, this.map);
     this.wallEdges = { image: foreground, rows: wallRows };
     this.terrain = image;
     return image;
@@ -515,6 +518,7 @@ export class Board {
     context.translate(-this.viewX, -this.viewY);
     context.imageSmoothingEnabled = false;
     context.drawImage(this.getTerrain(), 0, 0);
+    if (!this.dungeon) animateInn(context, this.map, now);
     const snapshot = this.snapshot;
     const selfFigure = this.figures.get(snapshot?.selfId);
     const self = selfFigure?.actor;
@@ -708,6 +712,7 @@ export class Board {
     } else {
       paint(this.context, NPC_COLORS[role] ?? '#a98b6c', x + 10, y - 22, 12, 22);
     }
+    if (npc.role === 'bard') bardNotes(this.context, x, y, now);
   }
 
   drawProjectile({ x, y, dx, dy }) {

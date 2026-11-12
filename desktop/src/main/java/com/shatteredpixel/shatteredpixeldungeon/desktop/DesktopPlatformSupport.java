@@ -36,6 +36,8 @@ import com.watabou.utils.Point;
 import org.lwjgl.glfw.GLFWNativeWin32;
 import org.lwjgl.system.JNI;
 import org.lwjgl.system.Platform;
+import org.lwjgl.system.windows.User32;
+import org.lwjgl.system.windows.WindowProc;
 import org.lwjgl.system.windows.WindowsLibrary;
 
 import java.util.HashMap;
@@ -78,6 +80,8 @@ public class DesktopPlatformSupport extends PlatformSupport {
 		private final WindowsLibrary library;
 		private final long associate;
 		private final long hwnd;
+		private final WindowProc windowProc;
+		private final long previousWindowProc;
 		private long context;
 		private int editors;
 		private boolean detached;
@@ -87,6 +91,48 @@ public class DesktopPlatformSupport extends PlatformSupport {
 			this.library = library;
 			this.associate = associate;
 			this.hwnd = hwnd;
+			WindowProc callback = WindowProc.create(this::handleWindowMessage);
+			previousWindowProc = User32.SetWindowLongPtr(hwnd, User32.GWL_WNDPROC, callback.address());
+			if (previousWindowProc == 0) {
+				callback.free();
+				windowProc = null;
+			} else {
+				windowProc = callback;
+			}
+		}
+
+		private synchronized long handleWindowMessage(long window, int message, long key, long data) {
+			// GLFW ignores VK_PROCESSKEY. Some Windows IMEs can still mark a movement
+			// key as processed after the context is detached. Keep GLFW's key state
+			// in sync, including releases if a text editor opens while a key is held.
+			if (!closed && key == User32.VK_PROCESSKEY
+					&& ((message == User32.WM_KEYDOWN && editors == 0) || message == User32.WM_KEYUP)) {
+				int movementKey = movementVirtualKey((int) (data >>> 16) & 0x1FF);
+				if (movementKey != 0) key = movementKey;
+			}
+			return User32.nCallWindowProc(previousWindowProc, window, message, key, data);
+		}
+
+		private static int movementVirtualKey(int scanCode) {
+			switch (scanCode) {
+				case 0x011: return 'W';
+				case 0x01E: return 'A';
+				case 0x01F: return 'S';
+				case 0x020: return 'D';
+				case 0x148: return User32.VK_UP;
+				case 0x14B: return User32.VK_LEFT;
+				case 0x150: return User32.VK_DOWN;
+				case 0x14D: return User32.VK_RIGHT;
+				case 0x047: return User32.VK_NUMPAD7;
+				case 0x048: return User32.VK_NUMPAD8;
+				case 0x049: return User32.VK_NUMPAD9;
+				case 0x04B: return User32.VK_NUMPAD4;
+				case 0x04D: return User32.VK_NUMPAD6;
+				case 0x04F: return User32.VK_NUMPAD1;
+				case 0x050: return User32.VK_NUMPAD2;
+				case 0x051: return User32.VK_NUMPAD3;
+				default: return 0;
+			}
 		}
 
 		synchronized void setTextInputActive(boolean active) {
@@ -107,8 +153,13 @@ public class DesktopPlatformSupport extends PlatformSupport {
 		}
 
 		synchronized void close() {
-			if (detached) JNI.invokePPP(hwnd, context, associate);
+			if (closed) return;
 			closed = true;
+			if (detached) JNI.invokePPP(hwnd, context, associate);
+			if (windowProc != null) {
+				User32.SetWindowLongPtr(hwnd, User32.GWL_WNDPROC, previousWindowProc);
+				windowProc.free();
+			}
 			library.free();
 		}
 	}

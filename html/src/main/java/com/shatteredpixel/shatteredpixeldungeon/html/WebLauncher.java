@@ -112,10 +112,18 @@ public class WebLauncher {
 		if (fromInn) {
 			InnAdventure.configure(innName, WebJS.innProfileField("job"), WebJS.innProfileField("hairColor"),
 					WebJS.innProfileField("outfitColor"), WebJS.innProfileField("hairStyle"), WebJS.innProfileField("accessory"),
-					"1".equals(WebJS.innProfileField("atb")));
+					"1".equals(WebJS.innProfileField("atb")), preparationValue("prepHp", 2),
+					preparationValue("prepFood", 1));
 		}
 		GameThread game = new GameThread(new WebInnGame(fromInn));
 		new SPDWebApplication(game, new WebPreloader(), config);
+	}
+
+	private static int preparationValue(String field, int magnitude) {
+		String value = WebJS.innProfileField(field);
+		if (Integer.toString(magnitude).equals(value)) return magnitude;
+		if (Integer.toString(-magnitude).equals(value)) return -magnitude;
+		return 0;
 	}
 
 }

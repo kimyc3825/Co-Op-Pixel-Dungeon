@@ -90,6 +90,14 @@ function createActor(id, name, kind, { x, y }, hp, now, appearance) {
   };
 }
 
+function createPlayer({ id, name, appearance, preparation }, start, now, practice = false) {
+  const { hp, food } = (!practice && preparation) || {};
+  const startingHp = 24 + (hp === 2 || hp === -2 ? hp : 0);
+  const player = createActor(id, name, 'player', start, startingHp, now, appearance);
+  if (food === 1 || food === -1) player.rations += food;
+  return player;
+}
+
 function energyUnitsAt(actor, now) {
   return Math.min(ENERGY_CAP_UNITS, actor.energyUnits + Math.max(0, now - actor.energyAt));
 }
@@ -175,8 +183,8 @@ export class HostBattle {
     const { host: entrance, partner, enemy1, enemy2 } = this.#layout;
     const ratName = this.#layout.theme === PRISON ? '감옥 쥐' : '하수도 쥐';
     this.#battleAt = this.#gameObservedAt = this.#wallObservedAt = Math.trunc(now);
-    this.#actors = [createActor(host.id, host.name, 'player', entrance, 24, this.#battleAt, host.appearance)];
-    if (guest) this.#actors.push(createActor(guest.id, guest.name, 'player', partner, 24, this.#battleAt, guest.appearance));
+    this.#actors = [createPlayer(host, entrance, this.#battleAt, practice && !guest)];
+    if (guest) this.#actors.push(createPlayer(guest, partner, this.#battleAt));
     else if (practice) this.#actors.push(createActor('guide', '길잡이', 'guide', partner, 24, this.#battleAt));
     this.#actors.push(
       createActor('rat-1', ratName, 'enemy', enemy1, 12, this.#battleAt),

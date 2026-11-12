@@ -262,7 +262,9 @@ final class DungeonSession implements AutoCloseable {
                 battle = new HostBattle(next.id(),
                     new InnApi.Person(next.selfId(), next.selfName(), 0, 0, false, next.selfAppearance()),
                     new InnApi.Person(next.partnerId(), next.partnerName(), 0, 0, false, next.partnerAppearance()),
-                    now(), seed(), theme, friendlyFire);
+                    now(), seed(), theme, friendlyFire, false,
+                    InnApi.Preparation.health(next.selfPreparation()), InnApi.Preparation.rations(next.selfPreparation()),
+                    InnApi.Preparation.health(next.partnerPreparation()), InnApi.Preparation.rations(next.partnerPreparation()));
             }
             openPeer();
         }

@@ -15,6 +15,7 @@ import com.watabou.noosa.Image;
 import com.watabou.noosa.ScrollArea;
 import com.watabou.utils.PointF;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -30,7 +31,16 @@ final class NativeInnBoard extends Group {
     private static final long SPEECH_MILLIS = 4_500;
     private static final String SIGN = "inn/looking-sign.png";
     private static final String NPC_SPRITES = "inn/inn-npcs.png";
-    private static final int[] FLOOR = {0x72503b, 0x79543e, 0x805840, 0x754b36};
+    private static final int[] FLOOR = {0x61432f, 0x65452f, 0x6b4832, 0x5b3e2e};
+    private static final int[][] CANDLES = {{3, 3}, {7, 5}, {11, 9}, {15, 11}, {19, 9}};
+    private static final int[][] PATRONS = {{4, 3}, {8, 5}, {20, 9}, {14, 11}};
+    private static final int HEARTH_WIDTH = 24, HEARTH_HEIGHT = 12;
+    private static final int CANDLE_WIDTH = 7, CANDLE_HEIGHT = 9;
+    private static final int NOTE_WIDTH = 12, NOTE_HEIGHT = 12;
+    private static final int PATRON_WIDTH = 14, PATRON_HEIGHT = 13;
+    private static final int CANDLE_ROW = HEARTH_HEIGHT;
+    private static final int NOTE_ROW = CANDLE_ROW + CANDLE_HEIGHT;
+    private static final int PATRON_ROW = NOTE_ROW + NOTE_HEIGHT;
 
     private final Consumer<InnMotion.Cell> goTo;
     private final Consumer<String> join;
@@ -39,13 +49,17 @@ final class NativeInnBoard extends Group {
     private final int viewportWidth;
     private final int viewportHeight;
     private final Group world = new Group();
+    private final Group decorations = new Group();
     private final Group figures = new Group();
     private final Group speechBubbles = new Group();
+    private final List<AmbientSprite> animatedDecorations = new ArrayList<>();
     private final Map<String, Figure> guests = new HashMap<>();
     private final Map<String, Figure> npcs = new HashMap<>();
 
     private Image floor;
     private Pixmap floorKey;
+    private Pixmap decorationKey;
+    private Image bardNotes;
     private List<String> map = List.of();
     private InnApi.State state;
     private Figure guide;
@@ -77,6 +91,7 @@ final class NativeInnBoard extends Group {
         boardCamera = Camera.add(new Camera(x, y, viewportWidth, viewportHeight, 1));
         world.camera = boardCamera;
         add(world);
+        world.add(decorations);
         world.add(figures);
         world.add(speechBubbles);
         add(new ScrollArea(left, top, width, height) {
@@ -142,6 +157,7 @@ final class NativeInnBoard extends Group {
         }
         boolean npcsChanged = state == null || next == null || !next.npcs().equals(state.npcs());
         state = next;
+        decorations.visible = state != null;
         if (state == null) {
             if (floor != null) floor.visible = false;
             return;
@@ -152,12 +168,18 @@ final class NativeInnBoard extends Group {
         if (npcsChanged || npcs.size() != state.npcs().size()) {
             for (Figure npc : npcs.values()) removeFigure(npc);
             npcs.clear();
+            if (bardNotes != null) bardNotes.visible = false;
             for (InnApi.Npc npc : state.npcs()) {
                 InnMotion.Cell cell = new InnMotion.Cell(npc.x(), npc.y());
                 Figure figure = new Figure(new InnMotion(cell, npc.id().hashCode()), npc.name(),
                     false, false, npcColumn(npc.role()));
                 figures.add(figure);
                 npcs.put(npc.id(), figure);
+                if (bardNotes != null && "bard".equals(npc.role())) {
+                    bardNotes.x = npc.x() * TILE + 15;
+                    bardNotes.y = npc.y() * TILE - 9;
+                    bardNotes.visible = true;
+                }
             }
         }
         List<String> ids = state.people().stream().map(InnApi.Person::id).toList();
@@ -224,6 +246,8 @@ final class NativeInnBoard extends Group {
     public void update() {
         if (state != null) {
             long now = System.nanoTime();
+            long milliseconds = now / 1_000_000L;
+            for (AmbientSprite decoration : animatedDecorations) decoration.animate(milliseconds);
             for (Figure guest : guests.values()) guest.pose(guest.motion.pose(now));
             for (Figure npc : npcs.values()) npc.pose(npc.motion.pose(now));
             if (guide != null) guide.pose(guide.motion.pose(now));
@@ -239,6 +263,7 @@ final class NativeInnBoard extends Group {
         super.destroy();
         Camera.remove(boardCamera);
         if (floorKey != null) TextureCache.remove(floorKey);
+        if (decorationKey != null) TextureCache.remove(decorationKey);
     }
 
     private Figure addFigure(InnMotion.Cell cell, int phase, String name, boolean own, boolean companion) {
@@ -285,10 +310,94 @@ final class NativeInnBoard extends Group {
         applyZoom();
         floorKey = new Pixmap(mapWidth, mapHeight, Pixmap.Format.RGBA8888);
         for (int y = 0; y < rows.size(); y++) {
-            for (int x = 0; x < columns; x++) paintTile(floorKey, x, y, rows.get(y).charAt(x));
+            for (int x = 0; x < columns; x++) paintTerrain(floorKey, x, y, rows.get(y).charAt(x));
         }
+        if (tileAt(rows, 3, 3) == 'T' && tileAt(rows, 8, 5) == 'T') {
+            paintRug(floorKey, 3 * TILE - 2, 3 * TILE - 2, 6 * TILE + 4, 3 * TILE + 4);
+        }
+        if (tileAt(rows, 10, 9) == 'T' && tileAt(rows, 15, 11) == 'T') {
+            paintRug(floorKey, 10 * TILE - 2, 9 * TILE - 2, 7 * TILE + 4, 3 * TILE + 4);
+        }
+        if (tileAt(rows, 11, 15) == 'D' && tileAt(rows, 14, 15) == 'D') {
+            paintRug(floorKey, 11 * TILE, 13 * TILE + 2, 4 * TILE, 2 * TILE - 2);
+        }
+        for (int y = 0; y < rows.size(); y++) {
+            for (int x = 0; x < columns; x++) paintFurniture(floorKey, x, y, rows.get(y).charAt(x));
+        }
+        rebuildDecorations(rows);
         floor = new Image(floorKey);
         world.addToBack(floor);
+    }
+
+    private static char tileAt(List<String> rows, int x, int y) {
+        if (y >= rows.size() || x >= rows.get(y).length()) return '\0';
+        return rows.get(y).charAt(x);
+    }
+
+    private void rebuildDecorations(List<String> rows) {
+        for (AmbientSprite sprite : animatedDecorations) {
+            decorations.erase(sprite);
+            sprite.destroy();
+        }
+        animatedDecorations.clear();
+        if (decorationKey == null) decorationKey = makeDecorationAtlas();
+
+        if (tileAt(rows, 18, 0) == '#' && tileAt(rows, 20, 0) == '#' && tileAt(rows, 19, 1) == '.') {
+            int x = 18 * TILE + 3;
+            paintHearth(floorKey, x);
+            addDecoration(x + 9, 3, 0, HEARTH_WIDTH, HEARTH_HEIGHT, 135, 0);
+        }
+        for (int[] cell : CANDLES) {
+            int x = cell[0], y = cell[1];
+            if (tileAt(rows, x, y) == 'T') {
+                addDecoration(x * TILE + 9, y * TILE - 1, CANDLE_ROW, CANDLE_WIDTH, CANDLE_HEIGHT, 175, x * 67);
+            }
+        }
+        if (tileAt(rows, 16, 16) == '#' && tileAt(rows, 14, 15) == 'D') {
+            int x = 16 * TILE + 4, y = 16 * TILE + 2;
+            fill(floorKey, x + 2, y + 3, 5, 8, 0x33211b);
+            fill(floorKey, x + 4, y + 5, 1, 6, 0x875a3d);
+            addDecoration(x, y, CANDLE_ROW, CANDLE_WIDTH, CANDLE_HEIGHT, 175, 99);
+        }
+        for (int i = 0; i < PATRONS.length; i++) {
+            int x = PATRONS[i][0], y = PATRONS[i][1];
+            if (tileAt(rows, x, y) == 'T') {
+                addDecoration(x * TILE + 1, y * TILE + 2, PATRON_ROW, PATRON_WIDTH, PATRON_HEIGHT, 0, i);
+            }
+        }
+        bardNotes = addDecoration(0, 0, NOTE_ROW, NOTE_WIDTH, NOTE_HEIGHT, 370, 0);
+        bardNotes.visible = false;
+    }
+
+    private Image addDecoration(int x, int y, int row, int width, int height, int period, int phase) {
+        AmbientSprite sprite = new AmbientSprite(x, y, row, width, height, period, phase);
+        animatedDecorations.add(sprite);
+        decorations.add(sprite);
+        return sprite;
+    }
+
+    private final class AmbientSprite extends Image {
+        private final int row, width, height, period, phase;
+        private int lastFrame = -1;
+
+        AmbientSprite(int x, int y, int row, int width, int height, int period, int phase) {
+            super(NativeInnBoard.this.decorationKey);
+            this.x = x;
+            this.y = y;
+            this.row = row;
+            this.width = width;
+            this.height = height;
+            this.period = period;
+            this.phase = phase;
+            animate(0);
+        }
+
+        void animate(long milliseconds) {
+            int frame = period == 0 ? phase : Math.floorMod((milliseconds + phase) / period, 4);
+            if (frame == lastFrame) return;
+            frame(frame * width, row, width, height);
+            lastFrame = frame;
+        }
     }
 
     private void applyZoom() {
@@ -325,42 +434,138 @@ final class NativeInnBoard extends Group {
         };
     }
 
-    private static void paintTile(Pixmap map, int column, int row, char kind) {
+    private static void paintTerrain(Pixmap map, int column, int row, char kind) {
         int x = column * TILE;
         int y = row * TILE;
         if (kind == '#') {
-            fill(map, x, y, 16, 16, 0x35282a);
+            fill(map, x, y, 16, 16, 0x2d2221);
             for (int course = 0; course < 3; course++) {
                 int brickStart = course % 2 == 0 ? x : x - 4;
                 for (int brick = brickStart; brick < x + 16; brick += 8) {
                     int from = Math.max(brick + 1, x);
                     int to = Math.min(brick + 8, x + 16);
                     fill(map, from, y + 1 + course * 5, to - from, 4,
-                        (column + row + course) % 2 == 0 ? 0x675047 : 0x59433d);
-                    fill(map, from, y + 1 + course * 5, to - from, 1, 0x76594d);
+                        (column + row + course) % 2 == 0 ? 0x59473d : 0x4d3b33);
+                    fill(map, from, y + 1 + course * 5, to - from, 1, 0x6a5343);
                 }
             }
+            fill(map, x, y + 14, TILE, 1, 0x805c3f);
+            fill(map, x, y + 15, TILE, 1, 0x38271f);
             return;
         }
         fill(map, x, y, 16, 16, FLOOR[(column + row * 3) % FLOOR.length]);
         for (int plank = 0; plank < 4; plank++) {
             int seam = (3 + column * 7 + row * 5 + plank * 11) % 15;
-            fill(map, x, y + 4 * plank, 16, 1, 0x4d342a);
-            fill(map, x + seam, y + 4 * plank + 1, 1, 3, 0x5d4032);
+            fill(map, x, y + 4 * plank, 16, 1, 0x452f24);
+            fill(map, x + seam, y + 4 * plank + 1, 1, 3, 0x503526);
+            fill(map, x + (seam + 7) % 13, y + 4 * plank + 2, 3, 1, 0x75533b);
         }
+    }
+
+    private static void paintFurniture(Pixmap map, int column, int row, char kind) {
+        int x = column * TILE, y = row * TILE;
         if (kind == 'B' || kind == 'T') {
             int inset = kind == 'B' ? 0 : 1;
-            fill(map, x + inset, y + 5, 16 - inset * 2, 10, 0x40281f);
-            fill(map, x + inset, y + 3, 16 - inset * 2, 8, 0xae703d);
-            fill(map, x + inset, y + 3, 16 - inset * 2, 1, 0xde9d58);
-            fill(map, x + 6, y + 5, 3, 4, 0xe0a958);
-            fill(map, x + 9, y + 6, 2, 2, 0xad713b);
-            fill(map, x + 6, y + 5, 3, 1, 0xf6dfaa);
+            fill(map, x + inset, y + 5, 16 - inset * 2, 10, 0x37241e);
+            fill(map, x + inset, y + 3, 16 - inset * 2, 8, 0x97623a);
+            fill(map, x + inset, y + 3, 16 - inset * 2, 1, 0xc78d54);
+            fill(map, x + inset, y + 9, 16 - inset * 2, 2, 0x74462e);
+            if ((column + row) % 2 == 0) {
+                fill(map, x + 4, y + 6, 5, 3, 0xd7b98a);
+                fill(map, x + 5, y + 6, 3, 2, 0xa46a3d);
+            } else {
+                fill(map, x + 5, y + 5, 3, 4, 0xe0a958);
+                fill(map, x + 8, y + 6, 2, 2, 0xad713b);
+                fill(map, x + 5, y + 5, 3, 1, 0xf6dfaa);
+            }
         } else if (kind == 'D') {
             fill(map, x, y + 3, 16, 13, 0x7a3534);
             fill(map, x, y + 3, 16, 1, 0xd69850);
             fill(map, x, y + 14, 16, 1, 0xd69850);
         }
+    }
+
+    private static void paintRug(Pixmap map, int x, int y, int width, int height) {
+        fill(map, x, y, width, height, 0x482724);
+        fill(map, x + 1, y + 1, width - 2, height - 2, 0x9e6847);
+        fill(map, x + 2, y + 2, width - 4, height - 4, 0x542e2e);
+        fill(map, x + 4, y + 4, width - 8, height - 8, 0x703b37);
+        for (int i = 6; i < width - 5; i += 4) {
+            fill(map, x + i, y + 2, 2, 1, 0xc28d59);
+            fill(map, x + i, y + height - 3, 2, 1, 0xc28d59);
+        }
+        for (int j = 9; j < height - 5; j += 8) {
+            for (int i = 9; i < width - 5; i += 8) {
+                fill(map, x + i, y + j - 1, 1, 3, 0x864841);
+                fill(map, x + i - 1, y + j, 3, 1, 0x864841);
+            }
+        }
+    }
+
+    private static void paintHearth(Pixmap map, int x) {
+        fill(map, x, 1, 42, 15, 0x322826);
+        fill(map, x + 2, 2, 38, 12, 0x695750);
+        fill(map, x + 9, 5, 24, 9, 0x2b1a19);
+        fill(map, x + 11, 3, 20, 2, 0x2b1a19);
+        fill(map, x + 3, 3, 6, 3, 0x8d7561);
+        fill(map, x + 33, 3, 6, 3, 0x8d7561);
+        fill(map, x + 3, 8, 6, 2, 0x836b59);
+        fill(map, x + 33, 8, 6, 2, 0x836b59);
+        fill(map, x + 2, 0, 38, 2, 0x977c66);
+        fill(map, x + 1, 14, 40, 2, 0x806859);
+        fill(map, x + 5, 16, 32, 1, 0x825337);
+        fill(map, x + 12, 17, 18, 1, 0x754a32);
+    }
+
+    private static Pixmap makeDecorationAtlas() {
+        Pixmap atlas = new Pixmap(HEARTH_WIDTH * 4, PATRON_ROW + PATRON_HEIGHT, Pixmap.Format.RGBA8888);
+        int[] flameHeights = {5, 7, 6, 5};
+        for (int frame = 0; frame < 4; frame++) {
+            int x = frame * HEARTH_WIDTH;
+            fill(atlas, x + 3, 10, 18, 1, 0x8c3f26);
+            fill(atlas, x + 5, 9, 14, 1, 0x663927);
+            for (int flame = 0; flame < 3; flame++) {
+                int left = x + 5 + flame * 5;
+                int height = flameHeights[(frame + flame) % 4];
+                fill(atlas, left, 9 - height, 4, height, 0xbd4c2b);
+                fill(atlas, left + 1, 9 - height, 2, height, 0xe67c37);
+                fill(atlas, left + 1, 6, 2, 3, 0xffcc69);
+            }
+            fill(atlas, x + 8 + frame * 2, 3 - frame / 2, 1, 1, 0xffb35d);
+            fill(atlas, x + 17 - frame, 5 - frame, 1, 1, 0xe07536);
+
+            x = frame * CANDLE_WIDTH;
+            fill(atlas, x + 1, CANDLE_ROW + 7, 5, 2, 0x765038);
+            fill(atlas, x + 2, CANDLE_ROW + 4, 3, 4, 0xc9a977);
+            fill(atlas, x + 2, CANDLE_ROW + 4, 1, 3, 0xf7dda1);
+            fill(atlas, x + 3, CANDLE_ROW + 2 - frame % 2, 2, 2 + frame % 2, 0xee8f44);
+            fill(atlas, x + 3, CANDLE_ROW + 3, 1, 1, 0xffe292);
+
+            x = frame * NOTE_WIDTH;
+            int rise = frame * 2;
+            if (frame != 3) {
+                fill(atlas, x + 2, NOTE_ROW + 10 - rise, 3, 2, 0xe6b96d);
+                fill(atlas, x + 4, NOTE_ROW + 6 - rise, 1, 5, 0xe6b96d);
+                fill(atlas, x + 5, NOTE_ROW + 6 - rise, 2, 1, 0xe6b96d);
+            }
+            if (frame != 0) {
+                fill(atlas, x + 7, NOTE_ROW + 12 - rise, 3, 2, 0xa78663);
+                fill(atlas, x + 9, NOTE_ROW + 9 - rise, 1, 4, 0xa78663);
+            }
+        }
+        int[] coats = {0x456568, 0x705168, 0x586749, 0x7c543c};
+        for (int patron = 0; patron < coats.length; patron++) {
+            int x = patron * PATRON_WIDTH, y = PATRON_ROW;
+            fill(atlas, x + 1, y + 9, 12, 4, 0x39271f);
+            fill(atlas, x + 3, y + 5, 8, 6, coats[patron]);
+            fill(atlas, x + 4, y + 1, 6, 5, 0x352822);
+            fill(atlas, x + 5, y + 3, 4, 4, 0xc38e65);
+            fill(atlas, x + 7, y + 4, 1, 1, 0x483328);
+            fill(atlas, x + 2, y + 8, 10, 1, 0x6e4934);
+            fill(atlas, x + 10, y + 5, 3, 4, 0xcfa069);
+            fill(atlas, x + 10, y + 5, 3, 1, 0xf0d39b);
+        }
+        return atlas;
     }
 
     private static void fill(Pixmap map, int x, int y, int w, int h, int rgb) {

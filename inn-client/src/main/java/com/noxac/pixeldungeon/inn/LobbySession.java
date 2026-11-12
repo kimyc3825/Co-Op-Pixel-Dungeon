@@ -216,6 +216,16 @@ final class LobbySession implements AutoCloseable {
         });
     }
 
+    void prepare(Runnable finished) {
+        if (!submit(() -> {
+            try {
+                if (perform(() -> api.prepare(key))) poll();
+            } finally {
+                finished.run();
+            }
+        })) finished.run();
+    }
+
     void matchmaking(boolean queued) {
         submit(() -> {
             if (perform(() -> api.matchmaking(key, queued))) poll();
@@ -256,10 +266,15 @@ final class LobbySession implements AutoCloseable {
     }
 
     void enterDungeon() {
+        enterDungeon(true, null);
+    }
+
+    void enterDungeon(boolean rotateKey, InnApi.Preparation preparation) {
         submit(() -> {
+            boolean consumed = preparation == null || perform(() -> api.usePreparation(key, preparation.id()));
             suspended = true;
             leave();
-            key = newKey();
+            if (rotateKey || !consumed) key = newKey();
             publish();
         });
     }

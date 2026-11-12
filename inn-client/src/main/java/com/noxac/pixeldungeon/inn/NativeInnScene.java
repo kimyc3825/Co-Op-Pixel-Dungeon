@@ -336,17 +336,21 @@ public final class NativeInnScene extends PixelScene {
         boolean canQueue = current != null && current.match() == null;
         boolean canChoose = NativeClient.canChooseExpeditionTheme();
         boolean canEnter = NativeClient.canEnterSolo();
+        InnApi.Preparation preparation = current == null ? null : current.preparation();
+        String summary = "지역  " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme());
+        if (preparation != null) summary += "\n다음 원정 · " + preparation.description();
         modalOpen = true;
-        add(new WndOptions(Icons.STAIRS.get(), "원정", "지역  " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme()),
+        add(new WndOptions(Icons.STAIRS.get(), "원정", summary,
             current != null && current.queued() ? "동료 찾기 취소" : "동료 찾기 · 2인 원정",
             "1인 원정 · 원본 ATB", "길잡이 연습", "지역 변경", friendlyFireCaption(),
-            NativeClient.isTestMode() ? "여관 길잡이 숨기기" : "여관 길잡이 부르기", "원본 1인 저장") {
+            NativeClient.isTestMode() ? "여관 길잡이 숨기기" : "여관 길잡이 부르기", "원본 1인 저장", "원정 준비") {
             @Override
             protected boolean enabled(int index) {
                 return switch (index) {
                     case 0 -> canQueue;
                     case 1, 2, 6 -> canEnter;
                     case 3, 4 -> canChoose;
+                    case 7 -> canChoose && current != null && preparation == null;
                     default -> true;
                 };
             }
@@ -364,6 +368,7 @@ public final class NativeInnScene extends PixelScene {
                     }
                     case 5 -> toggleTestMode();
                     case 6 -> NativeClient.enterSolo();
+                    case 7 -> NativeClient.prepareExpedition();
                     default -> { }
                 }
             }

@@ -2,7 +2,9 @@
 package com.shatteredpixel.shatteredpixeldungeon;
 
 import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
+import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroClass;
+import com.shatteredpixel.shatteredpixeldungeon.items.food.Food;
 
 /** The inn profile for the current original-engine adventure. */
 public final class InnAdventure {
@@ -35,12 +37,31 @@ public final class InnAdventure {
     private static Profile profile;
     private static volatile boolean atb;
     private static volatile AtbRun activeAtbRun;
+    private static Preparation nextPreparation;
+
+    private static final class Preparation {
+        private final int hp;
+        private final int food;
+
+        private Preparation(int hp, int food) {
+            this.hp = Math.abs(hp) == 2 ? hp : 0;
+            this.food = Math.abs(food) == 1 ? food : 0;
+        }
+    }
 
     static final class AtbRun {
         private final int slot;
+        private Preparation preparation;
 
-        private AtbRun(int slot) {
+        private AtbRun(int slot, Preparation preparation) {
             this.slot = slot;
+            this.preparation = preparation;
+        }
+
+        private synchronized Preparation takePreparation() {
+            Preparation result = preparation;
+            preparation = null;
+            return result;
         }
     }
 
@@ -53,6 +74,11 @@ public final class InnAdventure {
 
     public static void configure(String name, String job, String hairColor, String outfitColor,
                                  String hairStyle, String accessory, boolean realTime) {
+        configure(name, job, hairColor, outfitColor, hairStyle, accessory, realTime, 0, 0);
+    }
+
+    public static void configure(String name, String job, String hairColor, String outfitColor,
+                                 String hairStyle, String accessory, boolean realTime, int hp, int food) {
         HeroClass selected = HeroClass.WARRIOR;
         for (HeroClass heroClass : HeroClass.values()) {
             if (heroClass.name().equalsIgnoreCase(job)) {
@@ -63,6 +89,7 @@ public final class InnAdventure {
         profile = new Profile(name, selected, hairColor, outfitColor, hairStyle, accessory);
         InnAtb.reset();
         activeAtbRun = null;
+        nextPreparation = realTime ? new Preparation(hp, food) : null;
         atb = realTime;
     }
 
@@ -79,8 +106,28 @@ public final class InnAdventure {
         int slot = GamesInProgress.firstSlot();
         if (!GamesInProgress.isAtbSlot(slot)) throw new IllegalStateException("ATB adventure is not active");
         Dungeon.deleteGame(slot, true);
-        activeAtbRun = new AtbRun(slot);
+        activeAtbRun = new AtbRun(slot, nextPreparation);
+        nextPreparation = null;
         return slot;
+    }
+
+    static void applyPreparation(Hero hero) {
+        AtbRun run = atbRunForSlot(GamesInProgress.curSlot);
+        if (run == null) return;
+        Preparation preparation = run.takePreparation();
+        if (preparation == null) return;
+
+        if (preparation.hp != 0) {
+            hero.HTBoost += preparation.hp;
+            hero.updateHT(true);
+        }
+        if (preparation.food > 0) {
+            Food ration = new Food();
+            if (!Challenges.isItemBlocked(ration)) ration.collect(hero.belongings.backpack);
+        } else if (preparation.food < 0) {
+            Food ration = hero.belongings.getItem(Food.class);
+            if (ration != null) ration.detach(hero.belongings.backpack);
+        }
     }
 
     static AtbRun atbRunForSlot(int slot) {
@@ -103,6 +150,7 @@ public final class InnAdventure {
 
     public static void clear() {
         activeAtbRun = null;
+        nextPreparation = null;
         atb = false;
         profile = null;
     }

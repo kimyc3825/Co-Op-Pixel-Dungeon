@@ -29,6 +29,17 @@ final class InnApi {
     record Npc(String id, String name, String role, int x, int y, String dialogue) {}
     record Event(long id, String playerId, String name, String kind, String text, long time) {}
     record Match(String id, String role, String partnerName) {}
+    record Preparation(String id, int hp, int food) {
+        static int health(Preparation value) { return value == null ? 0 : value.hp(); }
+        static int rations(Preparation value) { return value == null ? 0 : value.food(); }
+
+        String description() {
+            if (hp == 0 && food == 0) return "아무 일도 없었습니다.";
+            return "최대 체력 " + delta(hp) + " · 식량 " + delta(food);
+        }
+
+        private static String delta(int value) { return value > 0 ? "+" + value : "−" + -value; }
+    }
     record Action(String type, int dx, int dy, String target) {}
     record Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
                      int actionSeq, String lastAction, String targetId, long actionAt,
@@ -114,7 +125,8 @@ final class InnApi {
     record Signal(String type, String sdp) {}
     record LinkState(String id, String role, String selfId, String partnerId, String selfName,
                      String partnerName, boolean paired, boolean closed, Signal signal,
-                     String message, long messageSeq, Appearance selfAppearance, Appearance partnerAppearance) {
+                     String message, long messageSeq, Appearance selfAppearance, Appearance partnerAppearance,
+                     Preparation selfPreparation, Preparation partnerPreparation) {
         LinkState {
             if (selfAppearance != null) selfAppearance = AvatarProfile.normalize(selfAppearance);
             if (partnerAppearance != null) partnerAppearance = AvatarProfile.normalize(partnerAppearance);
@@ -122,14 +134,14 @@ final class InnApi {
     }
 
     record State(String selfId, List<Person> people, List<String> map, List<Event> events,
-                 long after, long now, boolean queued, Match match, List<Npc> npcs) {
+                 long after, long now, boolean queued, Match match, List<Npc> npcs, Preparation preparation) {
         State {
             if (npcs == null) npcs = List.of();
         }
 
         State(String selfId, List<Person> people, List<String> map, List<Event> events,
               long after, long now, boolean queued, Match match) {
-            this(selfId, people, map, events, after, now, queued, match, List.of());
+            this(selfId, people, map, events, after, now, queued, match, List.of(), null);
         }
         Person self() {
             return people.stream().filter(person -> person.id().equals(selfId)).findFirst().orElseThrow();
@@ -140,7 +152,7 @@ final class InnApi {
                 .map(person -> person.id().equals(selfId)
                     ? new Person(selfId, person.name(), x, y, person.queued(), person.appearance()) : person)
                 .toList();
-            return new State(selfId, updated, map, events, after, now, queued, match, npcs);
+            return new State(selfId, updated, map, events, after, now, queued, match, npcs, preparation);
         }
 
         boolean walkable(int x, int y) {
@@ -195,12 +207,12 @@ final class InnApi {
     }
 
     State enter(String name, String key, long after) throws IOException, InterruptedException {
-        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 7)));
+        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 8)));
     }
 
     State enter(String name, Appearance appearance, String key, long after) throws IOException, InterruptedException {
         return decode(send("PUT", API + "session", key,
-            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 7)));
+            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 8)));
     }
 
     State sync(String key, long after) throws IOException, InterruptedException {
@@ -221,6 +233,14 @@ final class InnApi {
 
     void drink(String key) throws IOException, InterruptedException {
         send("POST", API + "drink", key, null);
+    }
+
+    void prepare(String key) throws IOException, InterruptedException {
+        send("POST", API + "preparation", key, null);
+    }
+
+    void usePreparation(String key, String id) throws IOException, InterruptedException {
+        send("DELETE", API + "preparation", key, Map.of("id", id));
     }
 
     void matchmaking(String key, boolean queued) throws IOException, InterruptedException {

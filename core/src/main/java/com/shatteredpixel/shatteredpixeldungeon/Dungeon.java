@@ -285,6 +285,7 @@ public class Dungeon {
 		Badges.reset();
 		
 		GamesInProgress.selectedClass.initHero( hero );
+		InnAdventure.applyPreparation( hero );
 	}
 
 	public static boolean isChallenged( int mask ) {

@@ -225,6 +225,15 @@ export class PlaySession {
 
   chat(message) { return this.#innAction('chat', 'POST', { message }); }
   drink() { return this.#innAction('drink', 'POST'); }
+  prepare() { return this.#innAction('preparation', 'POST'); }
+  async usePreparation(id) {
+    try {
+      await request(INN + 'preparation', this.key, 'DELETE', { id });
+    } catch {
+      // Keep a failed consumption from carrying over into another expedition.
+      this.key = newKey();
+    }
+  }
   match(targetId) { return this.#innAction('match', 'PUT', targetId ? { queued: true, targetId } : { queued: true }); }
   cancelMatch() { return this.#innAction('match', 'PUT', { queued: false }); }
 
@@ -276,7 +285,6 @@ export class PlaySession {
     if (this.closed || !this.innSuspended) return false;
     this.innSuspended = false;
     if (!this.key) return true;
-    this.key = newKey();
     this.leftInn = false;
     this.ignoredMatch = null;
     this.retryAt = this.nextMoveAt = this.nextMoveSendAt = 0;
@@ -327,7 +335,7 @@ export class PlaySession {
     const appearance = this.appearance;
     const wasOnline = this.online;
     this.innSync = request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST',
-      enter ? { name, appearance, after: this.after, dungeonProtocol: 7 } : { after: this.after }).then(fresh => {
+      enter ? { name, appearance, after: this.after, dungeonProtocol: 8 } : { after: this.after }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
       if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;
       // The roster read can have started before movement reached the server.
@@ -601,9 +609,11 @@ class BattleSession {
       this.engine = new HostBattle(crypto.randomUUID(), this.localPlayer, null, now(), newSeed(), this.theme,
         practice && this.friendlyFire, practice);
     } else if (this.host && this.link?.paired) {
-      const { id, selfId, selfName, selfAppearance, partnerId, partnerName, partnerAppearance } = this.link;
-      this.engine = new HostBattle(id, { id: selfId, name: selfName, appearance: selfAppearance },
-        { id: partnerId, name: partnerName, appearance: partnerAppearance }, now(), newSeed(), this.theme, this.friendlyFire);
+      const { id, selfId, selfName, selfAppearance, selfPreparation,
+        partnerId, partnerName, partnerAppearance, partnerPreparation } = this.link;
+      this.engine = new HostBattle(id, { id: selfId, name: selfName, appearance: selfAppearance, preparation: selfPreparation },
+        { id: partnerId, name: partnerName, appearance: partnerAppearance, preparation: partnerPreparation },
+        now(), newSeed(), this.theme, this.friendlyFire);
     }
   }
 
