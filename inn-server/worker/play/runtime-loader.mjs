@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 const loadedEngines = new Map();
 const decodedArt = new Map();
-const ART = ['rat', 'items', 'tiles_sewers', 'tiles_prison'];
+const pendingEngines = new Map();
+const pendingArt = new Map();
+const ART = ['rat', 'items', 'tiles_sewers', 'tiles_prison', 'training'];
 
 export function runtimeImage(version, name) {
   return decodedArt.get(version)?.get(name) ?? null;
@@ -23,6 +25,13 @@ async function decodeArt(base, version) {
   decodedArt.set(version, new Map(images));
 }
 
+function loadOnce(pending, version, load) {
+  if (!pending.has(version)) {
+    pending.set(version, load().finally(() => pending.delete(version)));
+  }
+  return pending.get(version);
+}
+
 async function checkManifest(signal) {
   const timeout = AbortSignal.timeout(5000);
   const response = await fetch('/play/runtime-manifest.json', {
@@ -37,7 +46,7 @@ async function checkManifest(signal) {
   return manifest;
 }
 
-export async function loadBattleRuntime({ simulate, signal, onLoading }) {
+export async function loadBattleRuntime({ simulate, signal, onLoading = () => {} }) {
   onLoading({ phase: 'checking', version: null, cached: false });
   let failedVersion;
   for (let attempt = 0; ; attempt++) {
@@ -56,8 +65,8 @@ export async function loadBattleRuntime({ simulate, signal, onLoading }) {
           ? `/play/runtime/${version}/retry/${crypto.randomUUID().replaceAll('-', '')}/`
           : `/play/runtime/${version}/`;
         await Promise.all([
-          needEngine && importEngine(base + 'battle.mjs', version),
-          needArt && decodeArt(base, version),
+          needEngine && loadOnce(pendingEngines, version, () => importEngine(base + 'battle.mjs', version)),
+          needArt && loadOnce(pendingArt, version, () => decodeArt(base, version)),
         ]);
       }
       signal?.throwIfAborted();

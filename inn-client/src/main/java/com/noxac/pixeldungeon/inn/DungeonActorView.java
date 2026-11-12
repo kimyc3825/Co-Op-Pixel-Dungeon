@@ -21,6 +21,7 @@ final class DungeonActorView extends Group {
 
     private final MovieClip sprite;
     private final AvatarSprites outfit;
+    private final boolean dummy;
     private final MovieClip.Animation idle;
     private final MovieClip.Animation walk;
     private final MovieClip.Animation attack;
@@ -71,22 +72,29 @@ final class DungeonActorView extends Group {
         fromY = toY = shownY = actor.y();
 
         boolean enemy = "enemy".equals(actor.kind());
-        String baseSprite = enemy ? Assets.Sprites.RAT : host ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
+        dummy = "dummy".equals(actor.kind());
+        String baseSprite = dummy ? NativeDungeonScene.TRAINING_SPRITES
+            : enemy ? Assets.Sprites.RAT : host ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
         outfit = "player".equals(actor.kind()) ? AvatarSprites.acquire(actor.appearance(), baseSprite) : null;
         Object texture = outfit == null ? baseSprite : outfit.texture();
         sprite = new MovieClip(texture);
-        TextureFilm atlas = new TextureFilm(texture, enemy ? 16 : AvatarSprites.FRAME_WIDTH, AvatarSprites.FRAME_HEIGHT);
-        idle = enemy ? animation(2, true, atlas, 0, 0, 0, 1) : animation(1, true, atlas, 0, 0, 0, 1, 0, 0, 1, 1);
-        walk = enemy ? animation(10, true, atlas, 6, 7, 8, 9, 10) : animation(20, true, atlas, 2, 3, 4, 5, 6, 7);
-        attack = enemy ? animation(15, false, atlas, 2, 3, 4, 5, 0) : animation(15, false, atlas, 13, 14, 15, 0);
-        death = enemy ? animation(10, false, atlas, 11, 12, 13, 14) : animation(20, false, atlas, 8, 9, 10, 11, 12, 11);
+        if (dummy) {
+            TextureFilm atlas = new TextureFilm(texture, 16, 16);
+            idle = walk = attack = death = animation(1, true, atlas, 0);
+        } else {
+            TextureFilm atlas = new TextureFilm(texture, enemy ? 16 : AvatarSprites.FRAME_WIDTH, AvatarSprites.FRAME_HEIGHT);
+            idle = enemy ? animation(2, true, atlas, 0, 0, 0, 1) : animation(1, true, atlas, 0, 0, 0, 1, 0, 0, 1, 1);
+            walk = enemy ? animation(10, true, atlas, 6, 7, 8, 9, 10) : animation(20, true, atlas, 2, 3, 4, 5, 6, 7);
+            attack = enemy ? animation(15, false, atlas, 2, 3, 4, 5, 0) : animation(15, false, atlas, 13, 14, 15, 0);
+            death = enemy ? animation(10, false, atlas, 11, 12, 13, 14) : animation(20, false, atlas, 8, 9, 10, 11, 12, 11);
+        }
         shadow = new Image(Assets.Interfaces.SHADOW);
         shadow.alpha(0.62f);
         add(shadow);
         add(sprite);
         sprite.play(idle);
 
-        int color = enemy ? NativeDungeonScene.ENEMY : own ? NativeDungeonScene.SELF : NativeDungeonScene.ALLY;
+        int color = enemy ? NativeDungeonScene.ENEMY : own || dummy ? NativeDungeonScene.SELF : NativeDungeonScene.ALLY;
         healthBack = NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xE8131715);
         healthFill = NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xFF000000 | color);
         String nick = actor.name();
@@ -201,7 +209,8 @@ final class DungeonActorView extends Group {
         }
         if (next.hp() != actor.hp()) {
             int change = next.hp() - actor.hp();
-            hurt = change < 0;
+            // A dummy immediately resetting to full health is the result of a hit.
+            hurt = dummy || change < 0;
             if (!hurt) {
                 healthChange.text("+" + change);
                 healthChange.hardlight(NativeDungeonScene.ALLY);

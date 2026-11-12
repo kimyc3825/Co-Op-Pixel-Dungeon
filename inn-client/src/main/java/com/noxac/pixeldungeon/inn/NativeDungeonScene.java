@@ -45,6 +45,7 @@ public final class NativeDungeonScene extends PixelScene {
     static final int SELF = 0xD7BD78;
     static final int ALLY = 0x9FD1CA;
     static final int ENEMY = 0xEC9F8A;
+    static final String TRAINING_SPRITES = "inn/training.png";
 
     private static final int TILE = 16;
     private static final int WALL_LIP_HEIGHT = 4;
@@ -75,6 +76,7 @@ public final class NativeDungeonScene extends PixelScene {
 
     private final Map<String, DungeonActorView> actorViews = new HashMap<>();
     private final Map<String, Image> dropViews = new HashMap<>();
+    private final Map<String, Image> toolViews = new HashMap<>();
     private final Map<Long, ColorBlock> projectileViews = new HashMap<>();
     private final List<ImpactLabel> impactLabels = new ArrayList<>();
     private final List<WallLip> wallLips = new ArrayList<>();
@@ -98,6 +100,7 @@ public final class NativeDungeonScene extends PixelScene {
     private StyledButton chatSend;
     private TextInput chatEditor;
     private Tilemap tiles;
+    private TextureFilm trainingAtlas;
     private ColorBlock floorPanel;
     private ColorBlock selectedTile;
     private ColorBlock queuedTile;
@@ -269,7 +272,7 @@ public final class NativeDungeonScene extends PixelScene {
         panel(help, helpX, helpY, helpCardWidth, 1, 0xAF9DB4A6);
         label(help, "이동  WASD · 방향키", 7, TEXT, helpX + 5, helpY + 4, helpCardWidth - 10);
         label(help, "대각선  방향 조합 · 숫자패드", 7, TEXT, helpX + 5, helpY + 15, helpCardWidth - 10);
-        label(help, "평타  Space · 적 클릭", 7, TEXT, helpX + 5, helpY + 26, helpCardWidth - 10);
+        label(help, "평타  Space · 대상 클릭", 7, TEXT, helpX + 5, helpY + 26, helpCardWidth - 10);
         label(help, "인접 칸 클릭  한 칸 이동", 7, TEXT, helpX + 5, helpY + 37, helpCardWidth - 10);
         label(help, "식량 사용  E · 행동력 3", 7, TEXT, helpX + 5, helpY + 48, helpCardWidth - 10);
         label(help, "전술 정지 / 재개  P", 7, TEXT, helpX + 5, helpY + 59, helpCardWidth - 10);
@@ -356,11 +359,8 @@ public final class NativeDungeonScene extends PixelScene {
                 view.destroy();
             });
             actorViews.clear();
-            dropViews.values().forEach(image -> {
-                image.remove();
-                image.destroy();
-            });
-            dropViews.clear();
+            clearImages(dropViews);
+            clearImages(toolViews);
             selected = null;
             submitted = null;
             lastMove = null;
@@ -395,31 +395,36 @@ public final class NativeDungeonScene extends PixelScene {
             }
             submitted = null;
         }
+        showTrainingTools(next, priorSelf);
         showLoot(next, prior);
         for (InnApi.BattleEvent event : next.attackEvents()) {
             if (event.id() <= seenAttackEvent) continue;
             seenAttackEvent = event.id();
             showAttackResult(event, now);
         }
-        setText(fireLabel, next.friendlyFire() ? "아군 피해 켜짐" : "아군 피해 꺼짐");
-        fireLabel.hardlight(next.friendlyFire() ? ENEMY : MUTED);
+        boolean training = !next.trainingTools().isEmpty();
+        setText(fireLabel, training ? "도구 칸 밟기" : next.friendlyFire() ? "아군 피해 켜짐" : "아군 피해 꺼짐");
+        fireLabel.hardlight(training ? ALLY : next.friendlyFire() ? ENEMY : MUTED);
 
         int index = 0;
         if (self != null) party[index++].set(self, true);
         for (InnApi.Combatant actor : next.actors()) {
             if (index == party.length) break;
-            if (!"enemy".equals(actor.kind()) && !actor.id().equals(next.selfId())) {
+            if (!actor.id().equals(next.selfId()) && ("player".equals(actor.kind()) || "guide".equals(actor.kind()))) {
                 party[index++].set(actor, false);
             }
         }
         while (index < party.length) party[index++].set(null, false);
         long enemies = next.actors().stream().filter(actor -> enemy(actor) && actor.hp() > 0).count();
         boolean practice = next.actors().stream().anyMatch(actor -> "guide".equals(actor.kind()));
-        floorSummary = (practice ? "길잡이 훈련" : "2인 원정") + ("won".equals(next.status()) ? "   ·   소탕 완료" :
-            (next.inCombat() ? "   ·   교전" : "   ·   탐색") + "   ·   남은 적 " + enemies);
+        boolean solo = isSoloAtb();
+        floorSummary = (practice ? "길잡이 훈련" : solo ? "1인 ATB 원정" : "2인 원정") +
+            ("won".equals(next.status()) ? "   ·   소탕 완료" :
+            training && enemies == 0 ? "   ·   허수아비 훈련" :
+                (next.inCombat() ? "   ·   교전" : "   ·   탐색") + "   ·   남은 적 " + enemies);
         if (!"active".equals(next.status()) && !"won".equals(next.status())) {
             showWaiting(switch (next.status()) {
-                case "lost" -> "파티가 쓰러졌습니다";
+                case "lost" -> solo ? "쓰러졌습니다" : "파티가 쓰러졌습니다";
                 case "closed" -> "원정이 끝났습니다";
                 default -> "여관으로 돌아갈 수 있습니다";
             });
@@ -438,6 +443,39 @@ public final class NativeDungeonScene extends PixelScene {
             default -> "예약  평타";
         });
         updateMarkers();
+    }
+
+    private static void clearImages(Map<String, Image> images) {
+        for (Image image : images.values()) {
+            image.remove();
+            image.destroy();
+        }
+        images.clear();
+    }
+
+    private void showTrainingTools(InnApi.DungeonState next, InnApi.Combatant priorSelf) {
+        boolean moved = priorSelf != null && self != null && (priorSelf.x() != self.x() || priorSelf.y() != self.y());
+        for (InnApi.TrainingTool tool : next.trainingTools()) {
+            int frame = switch (tool.id()) {
+                case "ration-rack" -> 1;
+                case "recovery-kit" -> 2;
+                default -> -1;
+            };
+            if (frame < 0) continue;
+            Image sprite = toolViews.computeIfAbsent(tool.id(), id -> {
+                if (trainingAtlas == null) trainingAtlas = new TextureFilm(TRAINING_SPRITES, TILE, TILE);
+                Image image = new Image(TRAINING_SPRITES);
+                image.frame(trainingAtlas.get(frame));
+                loot.add(image);
+                return image;
+            });
+            sprite.scale.set(tile / TILE);
+            sprite.x = align(mapX + (tool.x() + 0.5f) * tile - sprite.width() / 2);
+            sprite.y = align(mapY + (tool.y() + 0.5f) * tile - sprite.height() / 2);
+            if (moved && tool.x() == self.x() && tool.y() == self.y()) {
+                tell(frame == 1 ? "식량 상자 · 식량 " + self.rations() + "개" : "회복 도구 · 체력과 행동력 회복");
+            }
+        }
     }
 
     private void showLoot(InnApi.DungeonState next, InnApi.DungeonState prior) {
@@ -545,6 +583,11 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private boolean activePlayer() { return self != null && self.hp() > 0 && battleOngoing(); }
+
+    private boolean isSoloAtb() {
+        return state != null && !state.waitingForPartner() && state.actors().stream()
+            .filter(actor -> "player".equals(actor.kind()) || "guide".equals(actor.kind())).count() == 1;
+    }
 
     private boolean battleOngoing() {
         return state != null && !state.waitingForPartner() && ("active".equals(state.status()) || "won".equals(state.status()));
@@ -669,7 +712,7 @@ public final class NativeDungeonScene extends PixelScene {
         if (!passable(x, y)) return;
         for (InnApi.Combatant actor : state.actors()) {
             if (canAttack() && actor.hp() > 0 && actor.x() == x && actor.y() == y &&
-                !self.id().equals(actor.id()) && (enemy(actor) || state.friendlyFire())) {
+                !self.id().equals(actor.id()) && (isCombatTarget(actor) || state.friendlyFire())) {
                 selected = actor.id();
                 attackTarget(actor);
                 updateMarkers();
@@ -695,7 +738,8 @@ public final class NativeDungeonScene extends PixelScene {
             attackTarget(target);
             updateMarkers();
         } else {
-            tell("가까운 적에게 평타를 쓸 수 있습니다.");
+            tell(state.trainingTools().isEmpty() ? "가까운 적에게 평타를 쓸 수 있습니다." :
+                "가까운 적이나 허수아비에게 평타를 쓸 수 있습니다.");
         }
     }
 
@@ -815,7 +859,7 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private boolean inReach(InnApi.Combatant actor) {
-        if (actor == null || !enemy(actor) || actor.hp() == 0) return false;
+        if (actor == null || !isCombatTarget(actor) || actor.hp() == 0) return false;
         int dx = actor.x() - self.x();
         int dy = actor.y() - self.y();
         if (Math.max(Math.abs(dx), Math.abs(dy)) != 1) return false;
@@ -968,6 +1012,10 @@ public final class NativeDungeonScene extends PixelScene {
         return "enemy".equals(actor.kind());
     }
 
+    private static boolean isCombatTarget(InnApi.Combatant actor) {
+        return enemy(actor) || "dummy".equals(actor.kind());
+    }
+
     private static String directionName(int dx, int dy) {
         String vertical = dy < 0 ? "위" : dy > 0 ? "아래" : "";
         String horizontal = dx < 0 ? "왼쪽" : dx > 0 ? "오른쪽" : "";
@@ -1081,7 +1129,7 @@ public final class NativeDungeonScene extends PixelScene {
         private final RenderedTextBlock[] cooldowns = new RenderedTextBlock[2];
 
         StatusWindow() {
-            super("파티 상태", 153, 100);
+            super(isSoloAtb() ? "캐릭터 상태" : "파티 상태", 153, 100);
             for (int index = 0; index < names.length; index++) {
                 int y = 23 + index * 35;
                 names[index] = label(this, " ", 8, index == 0 ? SELF : ALLY, 6, y, 141);
@@ -1134,7 +1182,7 @@ public final class NativeDungeonScene extends PixelScene {
         ColorBlock backdrop = panel(chatLog, x, y, width, historyHeight + 28, 0xDB202622);
         chatLog.add(new PointerArea(backdrop));
         panel(chatLog, x, y, width, 1, 0xC2667767);
-        label(chatLog, "파티 대화", 7, ALLY, x + 5, y + 3, width - 10);
+        label(chatLog, "대화 기록", 7, ALLY, x + 5, y + 3, width - 10);
         chatRows = new ChatRows(width - 8);
         chatScroll = new ScrollPane(chatRows);
         chatLog.add(chatScroll);

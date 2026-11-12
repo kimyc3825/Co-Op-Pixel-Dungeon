@@ -12,6 +12,9 @@ const AWARENESS = 4;
 const CHAT_HISTORY = 16;
 const ATTACK_HISTORY = 16;
 const ENERGY_CAP_UNITS = ENERGY_CAP * REGEN_POINT_MS;
+const DUMMY_ID = 'training-dummy';
+const DUMMY_COMBAT_RANGE = 2;
+const PRACTICE_RATIONS = 3;
 
 const DIRECTIONS = [
   [1, 0], [-1, 0], [0, 1], [0, -1],
@@ -120,6 +123,7 @@ function inReach(map, x, y, target) {
 }
 
 function opponents(a, b) {
+  if (a.kind === 'dummy' || b.kind === 'dummy') return a.kind === 'player' || b.kind === 'player';
   return (a.kind === 'enemy') !== (b.kind === 'enemy');
 }
 
@@ -144,6 +148,7 @@ export class HostBattle {
   #layout;
   #actors;
   #friendlyFire;
+  #trainingTools = [];
   #drops = [];
   #messages = [];
   #attackEvents = [];
@@ -162,7 +167,7 @@ export class HostBattle {
   #inCombat = false;
   #revision = 1;
 
-  constructor(id, host, guest, now, seed, theme = SEWERS, friendlyFire = false) {
+  constructor(id, host, guest, now, seed, theme = SEWERS, friendlyFire = false, practice = !guest) {
     this.#id = id;
     this.#seed = seed;
     this.#layout = dungeonLayout(theme, seed);
@@ -170,13 +175,21 @@ export class HostBattle {
     const { host: entrance, partner, enemy1, enemy2 } = this.#layout;
     const ratName = this.#layout.theme === PRISON ? '감옥 쥐' : '하수도 쥐';
     this.#battleAt = this.#gameObservedAt = this.#wallObservedAt = Math.trunc(now);
-    this.#actors = [
-      createActor(host.id, host.name, 'player', entrance, 24, this.#battleAt, host.appearance),
-      guest ? createActor(guest.id, guest.name, 'player', partner, 24, this.#battleAt, guest.appearance)
-        : createActor('guide', '길잡이', 'guide', partner, 24, this.#battleAt),
+    this.#actors = [createActor(host.id, host.name, 'player', entrance, 24, this.#battleAt, host.appearance)];
+    if (guest) this.#actors.push(createActor(guest.id, guest.name, 'player', partner, 24, this.#battleAt, guest.appearance));
+    else if (practice) this.#actors.push(createActor('guide', '길잡이', 'guide', partner, 24, this.#battleAt));
+    this.#actors.push(
       createActor('rat-1', ratName, 'enemy', enemy1, 12, this.#battleAt),
       createActor('rat-2', ratName, 'enemy', enemy2, 12, this.#battleAt),
-    ];
+    );
+    if (practice && !guest) {
+      this.#actors.push(createActor(DUMMY_ID, '연습용 허수아비', 'dummy', { x: partner.x + 1, y: partner.y - 1 }, 16, this.#battleAt));
+      this.#trainingTools = [
+        { id: 'ration-rack', x: partner.x - 1, y: partner.y + 1 },
+        { id: 'recovery-kit', x: partner.x + 1, y: partner.y + 1 },
+      ];
+      this.#inCombat = this.#engaged();
+    }
   }
 
   get revision() {
@@ -257,6 +270,7 @@ export class HostBattle {
       queued: self.queued ? { ...self.queued } : null, status: this.#status, waitingForPartner: false,
       revision: this.#revision, drops: this.#drops.map((drop) => ({ ...drop })),
       commandAck: self.commandAck, inCombat: this.#inCombat, theme: this.#layout.theme,
+      ...(this.#trainingTools.length > 0 && { trainingTools: this.#trainingTools.map((tool) => ({ ...tool })) }),
       wallNow, pausedUntil: this.#pausedUntil, pauseReadyAt: this.#pauseReadyAt,
       messages: this.#messages.map((message) => ({ ...message })),
       friendlyFire: this.#friendlyFire,
@@ -371,7 +385,10 @@ export class HostBattle {
       actor.y += action.dy;
       actor.targetId = null;
       actor.moveReadyAt = at + (actor.kind === 'enemy' ? RAT_MOVE_COOLDOWN_MS : MOVE_COOLDOWN_MS);
-      if (actor.kind === 'player') this.#pickUp(actor);
+      if (actor.kind === 'player') {
+        this.#pickUp(actor);
+        this.#useTrainingTool(actor, at);
+      }
     } else if (action.type === 'attack') {
       const target = this.#find(action.target);
       this.#hit(actor, 'attack', target, DAMAGE[actor.kind], at);
@@ -408,6 +425,7 @@ export class HostBattle {
     if (target.hp === 0) {
       target.queued = null;
       if (target.kind === 'enemy') this.#drop(target);
+      if (target.kind === 'dummy') target.hp = target.maxHp;
     }
     this.#recordAttack(actor, action, 'hit', at, target, target.id, amount);
   }
@@ -465,7 +483,21 @@ export class HostBattle {
     }
   }
 
+  #useTrainingTool(actor, at) {
+    const tool = this.#trainingTools.find(({ x, y }) => x === actor.x && y === actor.y);
+    if (tool?.id === 'ration-rack') {
+      actor.rations = Math.max(actor.rations, PRACTICE_RATIONS);
+    } else if (tool?.id === 'recovery-kit') {
+      actor.hp = actor.maxHp;
+      actor.energyUnits = ENERGY_CAP_UNITS;
+      actor.energyAt = at;
+    }
+  }
+
   #engaged() {
+    const dummy = this.#find(DUMMY_ID);
+    if (dummy && this.#actors.some((actor) => actor.kind === 'player' && actor.hp > 0 &&
+        distance(actor.x, actor.y, dummy) <= DUMMY_COMBAT_RANGE)) return true;
     return this.#actors.some((enemy) => enemy.kind === 'enemy' && enemy.hp > 0 &&
       this.#actors.some((partyMember) => awareOf(enemy, partyMember)));
   }
@@ -474,7 +506,7 @@ export class HostBattle {
     if (this.#status !== 'active') return;
     if (!this.#actors.some((actor) => actor.kind === 'player' && actor.hp > 0)) {
       this.#status = 'lost';
-    } else if (!this.#actors.some((actor) => actor.kind === 'enemy' && actor.hp > 0)) {
+    } else if (this.#trainingTools.length === 0 && !this.#actors.some((actor) => actor.kind === 'enemy' && actor.hp > 0)) {
       this.#status = 'won';
     }
     if (this.#status !== 'active') {
@@ -490,7 +522,7 @@ export class HostBattle {
   #nextTurn(now) {
     let next = null;
     for (const actor of this.#actors) {
-      if (actor.hp === 0 || (actor.kind !== 'player' && this.#status !== 'active')) continue;
+      if (actor.kind === 'dummy' || actor.hp === 0 || (actor.kind !== 'player' && this.#status !== 'active')) continue;
       const action = actor.kind === 'player' ? actor.queued : this.#botAction(actor);
       if (!action) continue;
       const at = Math.max(this.#battleAt, this.#readyAt(actor, action));

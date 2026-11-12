@@ -5,12 +5,13 @@ import { OriginalGame } from './original.mjs';
 import { PlaySession } from './session.mjs';
 import { AvatarCatalog, normalizeAppearance } from './avatar-catalog.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
+import { loadBattleRuntime } from './runtime-loader.mjs';
 
 const byId = (id) => document.getElementById(id);
 const board = new Board(byId('board'));
 const fields = Object.fromEntries([
   'scene-title', 'connection', 'board-title', 'board-status', 'help', 'help-toggle', 'pause', 'battle-overlay', 'notice',
-  'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'friendly-fire', 'match', 'guide', 'drink', 'seekers',
+  'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'friendly-fire', 'match', 'guide', 'solo', 'drink', 'seekers',
   'profile-preview', 'profile-summary', 'profile-name', 'profile-job-label', 'profile-change', 'profile-cancel', 'profile-notice',
   'profile-job', 'profile-hair-style', 'profile-hair-color', 'profile-hair-swatch', 'profile-outfit-color', 'profile-outfit-swatch', 'profile-accessory',
   'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
@@ -20,6 +21,12 @@ const fields = Object.fromEntries([
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
   'original-launch',
 ].map((id) => [id, byId(id)]));
+
+const trainingHint = document.createElement('p');
+trainingHint.className = 'party-rules';
+trainingHint.textContent = '허수아비로 평타와 사격을 연습하세요. 식량 상자는 식량을 3개까지 채우고, 회복 도구는 체력과 행동력을 회복합니다. 도구가 놓인 칸을 밟으면 작동합니다.';
+trainingHint.hidden = true;
+fields['party-rules'].after(trainingHint);
 
 const keys = new Map([
   ['KeyW', [0, -1]], ['ArrowUp', [0, -1]], ['Numpad8', [0, -1]],
@@ -44,6 +51,22 @@ const LOADING_TIPS = [
   '길잡이가 맥주를 한 잔 더 주문하는 중…',
   '하수도 쥐가 순찰 경로를 확인하는 중…',
   '등불에 기름을 채우는 중…',
+  '경비병이 여분의 열쇠를 세는 중…',
+  '빵을 나누려다 한 조각을 더 먹는 중…',
+  '하수도 쥐가 치즈를 임시 보관하는 중…',
+  '낡은 지도에 물에 젖은 계단을 표시하는 중…',
+  '음유시인이 아직 일어나지 않은 일을 노래하는 중…',
+  '허수아비가 자기 앞의 발자국을 세는 중…',
+  '여관주인이 원정 외상 장부를 덮는 중…',
+  '마법사가 두루마리의 앞뒤를 확인하는 중…',
+  '전사가 갑옷 속에서 양말을 찾는 중…',
+  '활시위를 조이고 첫 화살을 고르는 중…',
+  '감옥 쥐가 면회를 신청하는 중…',
+  '배낭에서 빈 물약병이 달그락거리는 중…',
+  '노점상이 지도에 난 구멍을 할인해 주는 중…',
+  '사냥꾼이 모자를 두고 온 걸 깨닫는 중…',
+  '도적이 문 손잡이에 귀를 대보는 중…',
+  '길잡이가 잠깐 쉰다는 말을 연습하는 중…',
 ];
 const held = new Map();
 const busy = new Set();
@@ -92,7 +115,7 @@ let selectedSlot = -1;
 let wheelTotal = 0;
 let lastWheelAt = 0;
 let loading = null;
-let loadingTipIndex = 0;
+let loadingTipIndex = Math.floor(Math.random() * LOADING_TIPS.length);
 let loadingTipTimer = null;
 
 const play = new PlaySession({
@@ -144,6 +167,7 @@ const play = new PlaySession({
       submitted = null;
     }
     showDrops(state, prior);
+    showTrainingUse(state, prior);
     lastBattle = state;
     updateScene();
   },
@@ -345,7 +369,7 @@ function updateLoading(state) {
     if (failed) {
       text(fields['loading-phase'], '던전을 불러오지 못했습니다');
       text(fields['loading-tip'], '');
-      text(fields['loading-retry'], state.practice ? '다시 시도' : '다시 매칭');
+      text(fields['loading-retry'], state.mode ? '다시 시도' : '다시 매칭');
     }
   }
   updateScene();
@@ -392,7 +416,8 @@ function updateInn() {
   fields.match.dataset.waiting = String(queued);
   fields.match.disabled = !ready || busy.has('match');
   fields.drink.disabled = !ready || busy.has('drink');
-  fields.guide.disabled = !ready;
+  fields.guide.disabled = !ready || rulesLocked || profileOpen;
+  if (fields.solo) fields.solo.disabled = fields.guide.disabled;
   fields['original-launch'].disabled = original.active || !canLaunchOriginal();
   fields['chat-message'].disabled = !ready;
   fields['chat-send'].disabled = !ready || busy.has('chat');
@@ -487,9 +512,13 @@ function updateBattle() {
   const { state, connection } = play.frame;
   const player = ownActor(state);
   const enemies = state.actors.filter((actor) => actor.kind === 'enemy' && actor.hp > 0).length;
-  status(({ direct: 'P2P 직접 연결', relay: '중계 연결', local: '길잡이 연습' })[connection], 'live');
-  text(fields['board-status'], state.status === 'won' ? '소탕 완료' : `${state.inCombat ? '교전' : '탐색'} · 남은 적 ${enemies}`);
-  const overlay = state.status === 'lost' ? '파티가 쓰러졌습니다' : state.status === 'closed' ? '원정이 끝났습니다' :
+  const practice = Boolean(state.trainingTools?.length);
+  const solo = connection === 'local' && !practice;
+  status(({ direct: 'P2P 직접 연결', relay: '중계 연결', local: practice ? '길잡이 연습' : '1인 원정' })[connection], 'live');
+  text(fields['board-status'], state.status === 'won' ? '소탕 완료' : practice && enemies === 0 ? '소탕 완료 · 표적 연습' :
+    `${state.inCombat ? '교전' : '탐색'} · 남은 적 ${enemies}`);
+  trainingHint.hidden = !practice;
+  const overlay = state.status === 'lost' ? (solo ? '쓰러졌습니다' : '파티가 쓰러졌습니다') : state.status === 'closed' ? '원정이 끝났습니다' :
     state.waitingForPartner ? '동료가 들어오는 중…' : player?.hp === 0 ? '쓰러졌습니다 · 동료의 전투를 지켜봅니다' : '';
   fields['touch-controls'].hidden = !canAct(state, player);
   fields['battle-overlay'].hidden = !overlay;
@@ -499,6 +528,7 @@ function updateBattle() {
   fields.queued.hidden = !queued;
   if (queued) text(fields.queued, `예약 · ${{ move: '이동', attack: '평타', shoot: '사격', eat: '식량' }[queued.type]}`);
   text(fields['party-rules'], state.friendlyFire ? '아군 공격 허용 · 동료를 클릭해 평타' : '아군 공격 차단');
+  fields['party-rules'].hidden = solo;
   fields['party-rules'].dataset.enabled = String(state.friendlyFire === true);
   fields.return.disabled = busy.has('return');
   fields['dungeon-chat-message'].disabled = fields['dungeon-chat-send'].disabled = !canChat(state);
@@ -509,7 +539,7 @@ function updateBattle() {
 }
 
 function updateParty(state) {
-  const actors = state.actors.filter((actor) => actor.kind !== 'enemy').sort((left, right) =>
+  const actors = state.actors.filter((actor) => actor.kind === 'player' || actor.kind === 'guide').sort((left, right) =>
     Number(right.id === state.selfId) - Number(left.id === state.selfId));
   const ids = new Set(actors.map((actor) => actor.id));
   for (const [id, slot] of party) {
@@ -779,6 +809,17 @@ function showDrops(state, prior) {
   }
 }
 
+function showTrainingUse(state, prior) {
+  if (!state.trainingTools?.length || prior?.id !== state.id) return;
+  const player = ownActor(state);
+  const previous = ownActor(prior);
+  if (!player || !previous || player.lastAction !== 'move' ||
+      (player.x === previous.x && player.y === previous.y)) return;
+  const tool = state.trainingTools.find(({ x, y }) => player.x === x && player.y === y);
+  if (tool?.id === 'ration-rack') flash(`식량 상자 · 식량 ${player.rations}개`);
+  if (tool?.id === 'recovery-kit') flash('회복 도구 · 체력과 행동력 회복');
+}
+
 function match(id) {
   return run('match', async () => {
     if (id) await play.match(id);
@@ -788,8 +829,12 @@ function match(id) {
   });
 }
 
+function isAttackTarget(actor) {
+  return actor?.kind === 'enemy' || actor?.kind === 'dummy';
+}
+
 function inReach(state, player, target) {
-  if (target?.kind !== 'enemy' || target.hp <= 0) return false;
+  if (!isAttackTarget(target) || target.hp <= 0) return false;
   const dx = target.x - player.x;
   const dy = target.y - player.y;
   return canStrike(state.map, player.x, player.y, dx, dy);
@@ -816,8 +861,8 @@ function attack(targetId) {
   const selectedTarget = state.actors.find((actor) => actor.id === (targetId ?? selected));
   const target = targetId ? selectedTarget : inReach(state, player, selectedTarget) ? selectedTarget :
     state.actors.find((actor) => inReach(state, player, actor));
-  if (!target || target.id === player.id || target.kind !== 'enemy' && !state.friendlyFire) {
-    flash('가까운 적에게 평타를 쓸 수 있습니다.');
+  if (!target || target.id === player.id || !isAttackTarget(target) && !state.friendlyFire) {
+    flash(state.trainingTools?.length ? '가까운 허수아비나 적에게 평타를 쓸 수 있습니다.' : '가까운 적에게 평타를 쓸 수 있습니다.');
     return;
   }
   selected = target.id;
@@ -842,7 +887,7 @@ function toggleAim() {
     return;
   }
   clearMovement();
-  const target = state.actors.find((actor) => actor.id === selected && actor.kind === 'enemy' && actor.hp > 0) ?? player;
+  const target = state.actors.find((actor) => actor.id === selected && isAttackTarget(actor) && actor.hp > 0) ?? player;
   setAim([target.x, target.y]);
 }
 
@@ -1022,6 +1067,7 @@ for (const input of chatInputs) {
 }
 fields.match.addEventListener('click', () => void match());
 fields.guide.addEventListener('click', () => { if (play.practice()) focusBoard(); });
+fields.solo?.addEventListener('click', () => { if (play.solo()) focusBoard(); });
 for (const [id, action, returnFocus] of [
   ['drink', () => void run('drink', () => play.drink()), true],
   ['attack', attack, true], ['shoot', toggleAim, true], ['eat', eat, true], ['pause', togglePause, true],
@@ -1039,9 +1085,10 @@ fields['help-toggle'].addEventListener('click', toggleHelp);
 fields['npc-close'].addEventListener('click', () => { showDialogue(); focusBoard(); });
 fields['loading-retry'].addEventListener('click', () => {
   if (loading?.phase !== 'failed' || fields['loading-retry'].disabled) return;
-  const practice = loading.practice;
+  const { mode } = loading;
   updateLoading({ phase: 'ready' });
-  if (practice) play.practice();
+  if (mode === 'practice') play.practice();
+  else if (mode === 'solo') play.solo();
   else void match();
   focusBoard();
 });
@@ -1068,7 +1115,7 @@ board.canvas.addEventListener('click', (event) => {
     return;
   }
   const target = state.actors.find((actor) => actor.id !== state.selfId && actor.hp > 0 &&
-    (actor.kind === 'enemy' || state.friendlyFire) && actor.x === x && actor.y === y);
+    (isAttackTarget(actor) || state.friendlyFire) && actor.x === x && actor.y === y);
   if (target) {
     selected = target.id;
     attack(target.id);
@@ -1204,3 +1251,13 @@ function render(now) {
 buildBackpack();
 updateScene();
 requestAnimationFrame(render);
+
+function warmExpeditionAssets() {
+  for (const { id: job } of AvatarCatalog.jobs) getAvatar({ job });
+  void loadBattleRuntime({ simulate: true }).catch(() => {
+    // Dungeon entry checks the current version again and handles an unavailable runtime.
+  });
+}
+
+if (typeof requestIdleCallback === 'function') requestIdleCallback(warmExpeditionAssets, { timeout: 1500 });
+else setTimeout(warmExpeditionAssets, 0);

@@ -54,6 +54,7 @@ public final class NativeInnScene extends PixelScene {
     private FlatButton profile;
     private FlatButton match;
     private FlatButton solo;
+    private FlatButton original;
     private FlatButton theme;
     private FlatButton friendlyFire;
     private FlatButton drink;
@@ -110,12 +111,14 @@ public final class NativeInnScene extends PixelScene {
         panel(sideX, top, sidebar, panelHeight);
         float panelX = sideX + 5;
         float panelWidth = sidebar - 10;
+        float half = panelWidth / 2 - 1;
+        float rightColumn = panelX + half + 2;
         match = button("동료 구함", panelX, top + 5, panelWidth, 14, true, this::match);
-        solo = button("1인 원정", panelX, top + 22, panelWidth / 2 - 1, 14, false, NativeClient::enterSolo);
-        button("길잡이 연습", panelX + panelWidth / 2 + 1, top + 22, panelWidth / 2 - 1, 14,
-            false, NativeClient::enterPractice);
+        solo = button("1인 원정", panelX, top + 22, half, 14, false, NativeClient::enterSoloAtb);
+        button("길잡이 연습", rightColumn, top + 22, half, 14, false, NativeClient::enterPractice);
         theme = button(themeCaption(), panelX, top + 39, panelWidth, 14, false, this::chooseTheme);
-        friendlyFire = button(friendlyFireCaption(), panelX, top + 55, panelWidth, 14, false, this::toggleFriendlyFire);
+        friendlyFire = button(friendlyFireCaption(), panelX, top + 55, half, 14, false, this::toggleFriendlyFire);
+        original = button("원본 1인", rightColumn, top + 55, half, 14, false, NativeClient::enterSolo);
         add(label("여관 대화", 7, GOLD, panelX, top + 73));
 
         float chatY = top + 83;
@@ -184,6 +187,7 @@ public final class NativeInnScene extends PixelScene {
         boolean profileConfirmed = NativeClient.profileConfirmed();
         profile.enabled(!profileConfirmed || NativeClient.canChooseExpeditionTheme());
         solo.enabled(NativeClient.canEnterSolo());
+        original.enabled(NativeClient.canEnterSolo());
         theme.enabled(NativeClient.canChooseExpeditionTheme());
         friendlyFire.enabled(NativeClient.canChooseExpeditionTheme());
         if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode) {
@@ -313,7 +317,7 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private static String friendlyFireCaption() {
-        return NativeClient.friendlyFire() ? "ATB 아군 피해 · 켜짐" : "ATB 아군 피해 · 꺼짐";
+        return NativeClient.friendlyFire() ? "아군 피해 켬" : "아군 피해 끔";
     }
 
     private void toggleFriendlyFire() {
@@ -342,7 +346,7 @@ public final class NativeInnScene extends PixelScene {
         destination = null;
         keyboard.reset();
         modalOpen = true;
-        add(new WndOptions("ATB 원정 지역", "파티 원정은 파티장의 선택을 따릅니다. 길잡이 훈련에도 적용됩니다.",
+        add(new WndOptions("ATB 원정 지역", "1인 원정과 길잡이 연습에 적용됩니다. 2인 원정은 파티장의 선택을 따릅니다.",
                 NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS),
                 NativeClient.expeditionThemeTitle(DungeonLayout.PRISON)) {
             @Override

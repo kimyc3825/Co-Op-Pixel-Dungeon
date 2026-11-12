@@ -20,7 +20,7 @@ export class OriginalGame {
     this.tip = document.getElementById('original-tip');
     this.retry = document.getElementById('original-retry');
     this.back = document.getElementById('original-return');
-    this.tipIndex = 0;
+    this.tipIndex = Math.floor(Math.random() * tips.length);
     this.tipTimer = null;
     this.frame = this.attempt = this.suspending = this.phase = this.launchProfile = null;
     this.deadline = null;

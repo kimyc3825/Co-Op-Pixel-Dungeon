@@ -52,6 +52,7 @@ final class InnApi {
         }
     }
     record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
+    record TrainingTool(String id, int x, int y) {}
     record PartyChat(long id, String actorId, String name, String text, long time) {}
     record BattleEvent(long id, String action, String result, String actorId, String targetId,
                        int x, int y, int amount, long at) {}
@@ -60,13 +61,25 @@ final class InnApi {
                         Action queued, String status, boolean waitingForPartner, int revision,
                         List<Drop> drops, long commandAck, boolean inCombat, String theme,
                         long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
-                        boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles) {
+                        boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles,
+                        List<TrainingTool> trainingTools) {
         DungeonState {
             theme = DungeonLayout.themeOrDefault(theme);
             if (wallNow == 0) wallNow = now;
             if (messages == null) messages = List.of();
             if (attackEvents == null) attackEvents = List.of();
             if (projectiles == null) projectiles = List.of();
+            if (trainingTools == null) trainingTools = List.of();
+        }
+
+        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
+                     Action queued, String status, boolean waitingForPartner, int revision,
+                     List<Drop> drops, long commandAck, boolean inCombat, String theme,
+                     long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
+                     boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles) {
+            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
+                drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt, messages,
+                friendlyFire, attackEvents, projectiles, List.of());
         }
 
         DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
@@ -95,7 +108,7 @@ final class InnApi {
         DungeonState withActors(List<Combatant> updated) {
             return actors.equals(updated) ? this : new DungeonState(id, selfId, now, map, updated, queued, status,
                 waitingForPartner, revision, drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt,
-                messages, friendlyFire, attackEvents, projectiles);
+                messages, friendlyFire, attackEvents, projectiles, trainingTools);
         }
     }
     record Signal(String type, String sdp) {}

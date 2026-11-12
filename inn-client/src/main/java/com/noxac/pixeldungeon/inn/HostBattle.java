@@ -11,6 +11,11 @@ import java.util.regex.Pattern;
 final class HostBattle {
     private static final int RAT_MOVE_COOLDOWN_MS = 380;
     private static final int AWARENESS = 4;
+    private static final int TRAINING_RANGE = 2;
+    private static final int TRAINING_DUMMY_HP = 16;
+    private static final int TRAINING_RATIONS = 3;
+    private static final String RATION_RACK = "ration-rack";
+    private static final String RECOVERY_KIT = "recovery-kit";
     private static final long PAUSE_LIMIT_MS = 60_000;
     private static final long PAUSE_COOLDOWN_MS = 60_000;
     private static final int CHAT_LIMIT = 160;
@@ -25,7 +30,7 @@ final class HostBattle {
     };
 
     private enum Kind {
-        PLAYER("player", 4), GUIDE("guide", 3), ENEMY("enemy", 2);
+        PLAYER("player", 4), GUIDE("guide", 3), ENEMY("enemy", 2), DUMMY("dummy", 0);
 
         final String wireName;
         final int damage;
@@ -115,6 +120,8 @@ final class HostBattle {
     private final String id;
     private final DungeonLayout layout;
     private final List<Actor> actors;
+    private final Actor trainingDummy;
+    private final List<InnApi.TrainingTool> trainingTools;
     private final List<InnApi.Drop> drops = new ArrayList<>(2);
     private final ArrayDeque<InnApi.PartyChat> messages = new ArrayDeque<>(CHAT_HISTORY);
     private final ArrayDeque<InnApi.BattleEvent> attackEvents = new ArrayDeque<>(ATTACK_HISTORY);
@@ -145,6 +152,11 @@ final class HostBattle {
 
     HostBattle(String id, InnApi.Person host, InnApi.Person guestOrNull, long now, long seed, String theme,
                boolean friendlyFire) {
+        this(id, host, guestOrNull, now, seed, theme, friendlyFire, false);
+    }
+
+    HostBattle(String id, InnApi.Person host, InnApi.Person guestOrNull, long now, long seed, String theme,
+               boolean friendlyFire, boolean solo) {
         this.id = id;
         this.seed = seed;
         this.friendlyFire = friendlyFire;
@@ -153,14 +165,31 @@ final class HostBattle {
         this.gameObservedAt = now;
         this.wallObservedAt = now;
         String ratName = DungeonLayout.PRISON.equals(layout.theme()) ? "감옥 쥐" : "하수도 쥐";
-        actors = List.of(
-            new Actor(host.id(), host.name(), Kind.PLAYER, layout.host(), 24, now, host.appearance()),
-            guestOrNull == null ? new Actor("guide", "길잡이", Kind.GUIDE, layout.partner(), 24, now, null)
-                : new Actor(guestOrNull.id(), guestOrNull.name(), Kind.PLAYER, layout.partner(), 24, now,
-                    guestOrNull.appearance()),
-            new Actor("rat-1", ratName, Kind.ENEMY, layout.enemy1(), 12, now, null),
-            new Actor("rat-2", ratName, Kind.ENEMY, layout.enemy2(), 12, now, null)
-        );
+        boolean practice = guestOrNull == null && !solo;
+        List<Actor> participants = new ArrayList<>(5);
+        participants.add(new Actor(host.id(), host.name(), Kind.PLAYER, layout.host(), 24, now, host.appearance()));
+        if (guestOrNull != null) {
+            participants.add(new Actor(guestOrNull.id(), guestOrNull.name(), Kind.PLAYER, layout.partner(), 24, now,
+                guestOrNull.appearance()));
+        } else if (practice) {
+            participants.add(new Actor("guide", "길잡이", Kind.GUIDE, layout.partner(), 24, now, null));
+        }
+        participants.add(new Actor("rat-1", ratName, Kind.ENEMY, layout.enemy1(), 12, now, null));
+        participants.add(new Actor("rat-2", ratName, Kind.ENEMY, layout.enemy2(), 12, now, null));
+        if (practice) {
+            DungeonLayout.Cell center = layout.partner();
+            trainingDummy = new Actor("training-dummy", "연습용 허수아비", Kind.DUMMY,
+                new DungeonLayout.Cell(center.x() + 1, center.y() - 1), TRAINING_DUMMY_HP, now, null);
+            participants.add(trainingDummy);
+            trainingTools = List.of(
+                new InnApi.TrainingTool(RATION_RACK, center.x() - 1, center.y() + 1),
+                new InnApi.TrainingTool(RECOVERY_KIT, center.x() + 1, center.y() + 1));
+        } else {
+            trainingDummy = null;
+            trainingTools = List.of();
+        }
+        actors = List.copyOf(participants);
+        if (trainingDummy != null) inCombat = engaged();
     }
 
     int revision() {
@@ -242,7 +271,7 @@ final class HostBattle {
             actors.stream().map(actor -> actor.snapshot(snapshotTime)).toList(), self.queued, status, false, revision,
             List.copyOf(drops), self.commandAck, inCombat, layout.theme(), wallNow, pausedUntil, pauseReadyAt,
             List.copyOf(messages), friendlyFire, List.copyOf(attackEvents),
-            projectiles.stream().map(Shot::snapshot).toList());
+            projectiles.stream().map(Shot::snapshot).toList(), trainingTools);
     }
 
     void close(long now) {
@@ -336,6 +365,8 @@ final class HostBattle {
     }
 
     private static boolean opponents(Actor a, Actor b) {
+        if (b.kind == Kind.DUMMY) return a.kind == Kind.PLAYER;
+        if (a.kind == Kind.DUMMY) return false;
         return (a.kind == Kind.ENEMY) != (b.kind == Kind.ENEMY);
     }
 
@@ -423,7 +454,10 @@ final class HostBattle {
                 actor.targetId = null;
                 int cooldown = actor.kind == Kind.ENEMY ? RAT_MOVE_COOLDOWN_MS : BattleRules.MOVE_COOLDOWN_MS;
                 actor.moveReadyAt = at + cooldown;
-                if (actor.kind == Kind.PLAYER) pickUp(actor);
+                if (actor.kind == Kind.PLAYER) {
+                    pickUp(actor);
+                    useTrainingTool(actor, at);
+                }
             }
             case "attack" -> {
                 Actor target = find(action.target());
@@ -461,8 +495,12 @@ final class HostBattle {
         int amount = Math.min(target.hp, strength);
         target.hp -= amount;
         if (target.hp == 0) {
-            target.queued = null;
-            if (target.kind == Kind.ENEMY) drop(target);
+            if (target.kind == Kind.DUMMY) {
+                target.hp = target.maxHp;
+            } else {
+                target.queued = null;
+                if (target.kind == Kind.ENEMY) drop(target);
+            }
         }
         return amount;
     }
@@ -547,7 +585,26 @@ final class HostBattle {
         }
     }
 
+    private void useTrainingTool(Actor player, long at) {
+        for (InnApi.TrainingTool tool : trainingTools) {
+            if (tool.x() != player.x || tool.y() != player.y) continue;
+            switch (tool.id()) {
+                case RATION_RACK -> player.rations = Math.max(player.rations, TRAINING_RATIONS);
+                case RECOVERY_KIT -> {
+                    player.hp = player.maxHp;
+                    player.energyUnits = ENERGY_CAP_UNITS;
+                    player.energyAt = at;
+                }
+            }
+            return;
+        }
+    }
+
     private boolean engaged() {
+        if (trainingDummy != null) {
+            Actor player = actors.getFirst();
+            if (player.hp > 0 && distance(player.x, player.y, trainingDummy) <= TRAINING_RANGE) return true;
+        }
         for (Actor enemy : actors) {
             if (enemy.kind != Kind.ENEMY || enemy.hp == 0) continue;
             for (Actor partyMember : actors) {
@@ -565,7 +622,7 @@ final class HostBattle {
         if (!"active".equals(status)) return;
         if (actors.stream().noneMatch(actor -> actor.kind == Kind.PLAYER && actor.hp > 0)) {
             status = "lost";
-        } else if (actors.stream().noneMatch(actor -> actor.kind == Kind.ENEMY && actor.hp > 0)) {
+        } else if (trainingDummy == null && actors.stream().noneMatch(actor -> actor.kind == Kind.ENEMY && actor.hp > 0)) {
             status = "won";
         }
         if (!"active".equals(status)) {
@@ -582,7 +639,7 @@ final class HostBattle {
         Turn next = null;
         // Stable actor order resolves simultaneous deadlines consistently.
         for (Actor actor : actors) {
-            if (actor.hp == 0) continue;
+            if (actor.hp == 0 || actor.kind == Kind.DUMMY) continue;
             if (actor.kind != Kind.PLAYER && !"active".equals(status)) continue;
             InnApi.Action action = actor.kind == Kind.PLAYER ? actor.queued : botAction(actor);
             if (action == null) continue;

@@ -105,7 +105,7 @@ export class PlaySession {
     this.status = '';
     this.visibilityChanged = () => {
       if (document.hidden) {
-        if (this.battle?.host && !this.battle.practicePlayer && active(this.frame?.state?.status)) {
+        if (this.battle?.host && !this.battle.localPlayer && active(this.frame?.state?.status)) {
           this.#status('파티장 탭을 열어 두어야 원정 연결을 유지할 수 있습니다.');
         }
       } else if (this.battle) {
@@ -181,9 +181,17 @@ export class PlaySession {
   cancelMatch() { return this.#innAction('match', 'PUT', { queued: false }); }
 
   practice() {
-    if (this.closed || this.battle || this.innSuspended || !this.name) return false;
+    return this.#startLocalBattle('practice');
+  }
+
+  solo() {
+    return this.#startLocalBattle('solo');
+  }
+
+  #startLocalBattle(localMode) {
+    if (this.closed || this.battle || this.innSuspended || !this.name || this.inn?.queued || this.inn?.match) return false;
     const player = { id: this.inn?.selfId ?? crypto.randomUUID(), name: this.name, appearance: this.appearance };
-    this.#beginBattle(null, player);
+    this.#beginBattle({ localPlayer: player, localMode });
     return true;
   }
 
@@ -281,7 +289,7 @@ export class PlaySession {
       this.online = true;
       if (enter || !wasOnline) this.#status('');
       this.onInn(this.inn);
-      if (fresh.match && fresh.match.id !== this.ignoredMatch) this.#beginBattle(fresh.match.id, null, fresh.match.role);
+      if (fresh.match && fresh.match.id !== this.ignoredMatch) this.#beginBattle({ matchId: fresh.match.id, matchRole: fresh.match.role });
       return true;
     }, error => {
       if (!this.closed && !this.battle && generation === this.generation) this.#innSyncError(error);
@@ -333,15 +341,16 @@ export class PlaySession {
     else if (error.code !== 'move_rejected') this.#status('여관 요청을 처리하지 못했습니다.');
   }
 
-  #beginBattle(matchId, practicePlayer, matchRole = null) {
+  #beginBattle({ matchId = null, matchRole = null, localPlayer = null, localMode = null }) {
     this.ignoredMatch = matchId;
     this.leftInn = false;
     this.generation++;
-    const battle = new BattleSession({ key: this.key, matchId, matchRole, practicePlayer,
+    const battle = new BattleSession({ key: this.key, matchId, matchRole, localPlayer, localMode,
       theme: this.theme, friendlyFire: this.friendlyFire, relayOnly: this.relayOnly, iceServers: this.iceServers,
       runtimeLoader: this.runtimeLoader, onLoading: this.onLoading, listener: frame => this.#battleFrame(battle, frame) });
     this.battle = battle;
-    this.#status(matchId ? '파티 던전에 들어가는 중…' : '길잡이와 던전에 들어가는 중…');
+    this.#status(matchId ? '파티 던전에 들어가는 중…' :
+      localMode === 'practice' ? '길잡이와 던전에 들어가는 중…' : '혼자 던전에 들어가는 중…');
     battle.start();
   }
 
@@ -372,11 +381,12 @@ export class PlaySession {
 }
 
 class BattleSession {
-  constructor({ key, matchId, matchRole, practicePlayer, theme, friendlyFire, relayOnly, iceServers, runtimeLoader, onLoading, listener }) {
+  constructor({ key, matchId, matchRole, localPlayer, localMode, theme, friendlyFire, relayOnly, iceServers, runtimeLoader, onLoading, listener }) {
     this.key = key;
     this.matchId = matchId;
     this.matchRole = matchRole;
-    this.practicePlayer = practicePlayer;
+    this.localPlayer = localPlayer;
+    this.localMode = localMode;
     this.theme = theme;
     this.friendlyFire = friendlyFire;
     this.relayOnly = relayOnly;
@@ -390,7 +400,7 @@ class BattleSession {
     this.loadingVersion = null;
     this.loadingFinished = false;
     this.localSignal = this.relayPending = null;
-    this.host = Boolean(practicePlayer) || matchRole === 'host';
+    this.host = Boolean(localPlayer) || matchRole === 'host';
     this.closed = this.terminal = this.wasDirect = this.remoteApplied = false;
     this.syncInFlight = this.signalInFlight = this.relayInFlight = false;
     this.nextLinkSyncAt = this.nextSignalAt = this.nextRelayAt = this.nextHeartbeatAt = 0;
@@ -406,7 +416,7 @@ class BattleSession {
     void this.runtimeLoader({ simulate: this.host, signal: this.loadAbort.signal, onLoading: update => {
       if (this.loadingFinished) return;
       this.loadingVersion = update.version ?? this.loadingVersion;
-      this.onLoading({ ...update, practice: Boolean(this.practicePlayer), cancelled: false });
+      this.onLoading({ ...update, mode: this.localMode, practice: this.localMode === 'practice', cancelled: false });
     } }).then(runtime => {
       if (this.closed || this.terminal) return;
       this.runtime = runtime;
@@ -415,7 +425,7 @@ class BattleSession {
       if (this.frame) this.#publish(this.frame.state, this.frame.wallTime(), this.frame.notice);
       this.#tick();
     }).catch(() => this.#finish('던전 데이터를 불러오지 못했습니다. 다시 시도해 주세요.'));
-    if (this.practicePlayer) return;
+    if (this.localPlayer) return;
     void this.#linkRequest('enter', { matchId: this.matchId }).then(link => {
       if (this.closed || this.terminal) {
         this.#leaveLink();
@@ -451,10 +461,11 @@ class BattleSession {
     if (this.closed || this.terminal) return;
     const time = now();
     if ((!this.runtime || !this.frame) && time - this.startedAt >= ENTRY_TIMEOUT_MS) {
-      this.#finish('동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.');
+      this.#finish(this.localPlayer ? '던전 데이터를 불러오지 못했습니다. 다시 시도해 주세요.' :
+        '동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.');
       return;
     }
-    if (this.practicePlayer) {
+    if (this.localPlayer) {
       if (this.engine) this.#advanceHost(time, false);
       return;
     }
@@ -531,8 +542,10 @@ class BattleSession {
   #createEngine() {
     if (this.engine || !this.runtime?.HostBattle) return;
     const { HostBattle } = this.runtime;
-    if (this.practicePlayer) {
-      this.engine = new HostBattle(crypto.randomUUID(), this.practicePlayer, null, now(), newSeed(), this.theme, this.friendlyFire);
+    if (this.localPlayer) {
+      const practice = this.localMode === 'practice';
+      this.engine = new HostBattle(crypto.randomUUID(), this.localPlayer, null, now(), newSeed(), this.theme,
+        practice && this.friendlyFire, practice);
     } else if (this.host && this.link?.paired) {
       const { id, selfId, selfName, selfAppearance, partnerId, partnerName, partnerAppearance } = this.link;
       this.engine = new HostBattle(id, { id: selfId, name: selfName, appearance: selfAppearance },
@@ -545,11 +558,11 @@ class BattleSession {
     this.loadingFinished = true;
     if (phase === 'failed') this.loadAbort.abort();
     this.onLoading({ phase, version: this.runtime?.version ?? this.loadingVersion, cached: this.runtime?.cached ?? false,
-      practice: Boolean(this.practicePlayer), cancelled });
+      mode: this.localMode, practice: this.localMode === 'practice', cancelled });
   }
 
   #advanceHost(time, heartbeat) {
-    const selfId = this.practicePlayer?.id ?? this.link.selfId;
+    const selfId = this.localPlayer?.id ?? this.link.selfId;
     this.engine.advance(time);
     for (const action of this.pending.splice(0)) this.engine.input(selfId, ++this.commandSequence, action, time);
     const changed = this.frame?.state.revision !== this.engine.revision;
@@ -621,9 +634,10 @@ class BattleSession {
       Array.isArray(state.map) && state.map.length > 0 && typeof state.map[0] === 'string' && state.map[0].length > 0 &&
       state.map.every(row => typeof row === 'string' && row.length === state.map[0].length) &&
       Array.isArray(state.actors) && state.actors.some(actor => actor?.id === state.selfId) && state.actors.every(actor =>
-        typeof actor?.id === 'string' && typeof actor.name === 'string' && typeof actor.kind === 'string' &&
+        typeof actor?.id === 'string' && typeof actor.name === 'string' && typeof actor.kind === 'string' && actor.kind !== 'dummy' &&
         Number.isFinite(actor.energy) && Number.isSafeInteger(actor.rations) && actor.rations >= 0) &&
       Array.isArray(state.drops) && state.drops.every(drop => typeof drop?.id === 'string' && typeof drop.item === 'string') &&
+      (state.trainingTools == null || (Array.isArray(state.trainingTools) && state.trainingTools.length === 0)) &&
       Array.isArray(state.messages) && state.messages.length <= 16 && state.messages.every(message =>
         Number.isSafeInteger(message?.id) && message.id > 0 && typeof message.actorId === 'string' &&
         typeof message.name === 'string' && typeof message.text === 'string' &&
@@ -755,7 +769,7 @@ class BattleSession {
     this.frame = {
       state, notice,
       assetVersion: this.runtime?.version ?? null,
-      connection: this.practicePlayer ? 'local' : this.#direct() ? 'direct' : 'relay',
+      connection: this.localPlayer ? 'local' : this.#direct() ? 'direct' : 'relay',
       wallTime,
       serverTime: () => state ? state.now + (state.pausedUntil > 0 ? 0 : Math.max(0, wallTime() - state.wallNow)) : 0,
     };

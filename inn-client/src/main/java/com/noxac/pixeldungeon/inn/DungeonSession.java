@@ -53,9 +53,10 @@ final class DungeonSession implements AutoCloseable {
     private final InnApi api;
     private final String key;
     private final String matchId;
-    private final InnApi.Person practicePlayer;
+    private final InnApi.Person localPlayer;
     private final String theme;
     private final boolean friendlyFire;
+    private final boolean solo;
     private final BiConsumer<DungeonSession, Frame> listener;
     private final ScheduledThreadPoolExecutor network = new ScheduledThreadPoolExecutor(1,
         task -> new Thread(task, "dungeon-link"));
@@ -104,12 +105,18 @@ final class DungeonSession implements AutoCloseable {
 
     DungeonSession(InnApi api, String key, String matchId, InnApi.Person practicePlayer, String theme,
                    boolean friendlyFire, BiConsumer<DungeonSession, Frame> listener) {
+        this(api, key, matchId, practicePlayer, theme, friendlyFire, false, listener);
+    }
+
+    DungeonSession(InnApi api, String key, String matchId, InnApi.Person localPlayer, String theme,
+                   boolean friendlyFire, boolean solo, BiConsumer<DungeonSession, Frame> listener) {
         this.api = api;
         this.key = key;
         this.matchId = matchId;
-        this.practicePlayer = practicePlayer;
+        this.localPlayer = localPlayer;
         this.theme = DungeonLayout.themeOrDefault(theme);
         this.friendlyFire = friendlyFire;
+        this.solo = solo;
         this.listener = listener;
         network.execute(this::enter);
         network.scheduleAtFixedRate(this::tick, 0, 25, TimeUnit.MILLISECONDS);
@@ -117,9 +124,10 @@ final class DungeonSession implements AutoCloseable {
 
     private void enter() {
         if (closed) return;
-        if (practicePlayer != null) {
+        if (localPlayer != null) {
             host = true;
-            battle = new HostBattle(UUID.randomUUID().toString(), practicePlayer, null, now(), seed(), theme, friendlyFire);
+            battle = new HostBattle(UUID.randomUUID().toString(), localPlayer, null, now(), seed(), theme,
+                friendlyFire, solo);
             tick();
             return;
         }
@@ -147,7 +155,7 @@ final class DungeonSession implements AutoCloseable {
             finish("동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.");
             return;
         }
-        if (practicePlayer != null) {
+        if (localPlayer != null) {
             if (battle != null) advanceHost(now, false);
             return;
         }
@@ -366,8 +374,9 @@ final class DungeonSession implements AutoCloseable {
             state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
             state.actors() != null && state.actors().stream().allMatch(actor ->
                 actor != null && actor.id() != null && actor.name() != null && actor.kind() != null &&
-                    Double.isFinite(actor.energy()) && actor.rations() >= 0) &&
+                    !"dummy".equals(actor.kind()) && Double.isFinite(actor.energy()) && actor.rations() >= 0) &&
             state.actors().stream().anyMatch(actor -> state.selfId().equals(actor.id())) &&
+            state.trainingTools().isEmpty() &&
             state.drops() != null && state.drops().stream().allMatch(drop ->
                 drop != null && drop.id() != null && drop.item() != null) &&
             state.messages().size() <= 16 && state.messages().stream().allMatch(message ->
@@ -427,7 +436,8 @@ final class DungeonSession implements AutoCloseable {
                 long time = frame.serverTime();
                 state = new InnApi.DungeonState(state.id(), state.selfId(), time, state.map(), state.actors(),
                     null, "closed", false, state.revision(), state.drops(), state.commandAck(), false, state.theme(),
-                    frame.wallTime(), 0, state.pauseReadyAt(), state.messages(), state.friendlyFire(), state.attackEvents(), List.of());
+                    frame.wallTime(), 0, state.pauseReadyAt(), state.messages(), state.friendlyFire(), state.attackEvents(),
+                    List.of(), state.trainingTools());
             }
             publish(state, frame.hostAtReceipt(), frame.receivedAt(), notice);
         }
@@ -436,7 +446,7 @@ final class DungeonSession implements AutoCloseable {
 
     private void publish(InnApi.DungeonState state, long hostTime, long receipt, String notice) {
         if (closed) return;
-        Connection connection = practicePlayer != null ? Connection.LOCAL :
+        Connection connection = localPlayer != null ? Connection.LOCAL :
             direct() ? Connection.DIRECT : Connection.RELAY;
         frame = new Frame(state, hostTime, receipt, notice, connection);
         listener.accept(this, frame);
@@ -447,7 +457,7 @@ final class DungeonSession implements AutoCloseable {
     }
 
     private String selfId() {
-        return practicePlayer == null ? link.selfId() : practicePlayer.id();
+        return localPlayer == null ? link.selfId() : localPlayer.id();
     }
 
     private static long seed() {

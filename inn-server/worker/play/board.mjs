@@ -16,7 +16,8 @@ const INN_VIEW_HEIGHT = 10 * TILE;
 const INN_ZOOM = [.55, .75, 1, 1.25, 1.5, 2];
 const DEFAULT_ZOOM = INN_ZOOM.indexOf(1);
 const INN_ASSETS = ['warrior', 'rogue', 'looking-sign', 'inn-npcs'];
-const DUNGEON_ASSETS = ['rat', 'items', 'tiles_sewers', 'tiles_prison'];
+const DUNGEON_ASSETS = ['rat', 'items', 'tiles_sewers', 'tiles_prison', 'training'];
+const TRAINING_PROPS = new Map([['ration-rack', [1, '식량']], ['recovery-kit', [2, '회복']]]);
 const NPC_ROLES = ['guard', 'innkeeper', 'vendor', 'bard', 'adventurer'];
 const NPC_COLORS = ['#9a8a73', '#ba8452', '#74997a', '#a982a3', '#b9986e'];
 const INN = ['############', '#BBBBBBBB..#', '#..........#', '#..TT..TT..#', '#..........#',
@@ -210,7 +211,7 @@ class Figure {
     if (!attackFeedback && actor.actionSeq !== this.actor.actionSeq && actor.lastAction === 'attack') {
       this.attack(target?.x ?? actor.x, target?.y ?? actor.y, now);
     }
-    if (actor.hp !== this.actor.hp && (!attackFeedback || actor.hp > this.actor.hp) &&
+    if (actor.kind !== 'dummy' && actor.hp !== this.actor.hp && (!attackFeedback || actor.hp > this.actor.hp) &&
         Number.isFinite(actor.hp) && Number.isFinite(this.actor.hp)) {
       this.hurtUntil = now + 590;
       this.hpChange = actor.hp - this.actor.hp;
@@ -268,6 +269,7 @@ export class Board {
       for (const name of ['rat', 'items', textureName]) {
         this.images[name] ??= runtimeImage(version, name) ?? this.loadImage(name, version);
       }
+      if (snapshot?.trainingTools?.length) this.images.training ??= runtimeImage(version, 'training') ?? this.loadImage('training', version);
     }
     this.dungeon = dungeon;
     this.snapshot = snapshot;
@@ -371,6 +373,8 @@ export class Board {
     for (const event of events) {
       const hit = event.result === 'hit';
       if (hit && event.action === 'attack') this.figures.get(event.actorId)?.attack(event.x, event.y, now);
+      const target = this.figures.get(event.targetId);
+      if (hit && target?.actor.kind === 'dummy') target.rattleAt = now;
       if (hit || event.action === 'shoot' && ['blocked', 'ally_blocked'].includes(event.result)) {
         this.impacts.push({ x: event.x, y: event.y, amount: hit ? event.amount : 0, since: now });
       }
@@ -461,6 +465,9 @@ export class Board {
     for (const drop of snapshot?.drops ?? []) {
       if (drop.pickedBy == null) objects.push({ depth: (drop.y + .84) * TILE, drop });
     }
+    for (const tool of snapshot?.trainingTools ?? []) {
+      objects.push({ depth: (tool.y + .8) * TILE, tool });
+    }
     for (const projectile of snapshot?.projectiles ?? []) {
       const fraction = Math.min(1, Math.max(0, 1 - (projectile.stepAt - gameNow) / BattleRules.PROJECTILE_STEP_MS));
       const dx = projectile.nextX - projectile.x;
@@ -476,13 +483,18 @@ export class Board {
       while (rowIndex < rows.length && rows[rowIndex] * TILE <= object.depth) this.drawWallRow(rows[rowIndex++]);
       if (object.figure) this.drawFigure(object.figure, now);
       else if (object.drop) this.drawDrop(object.drop);
-      else if (object.npc) this.drawNpc(object.npc, now);
+      else if (object.tool) {
+        const prop = TRAINING_PROPS.get(object.tool.id);
+        if (prop) this.drawTraining(prop[0], (object.tool.x + .5) * TILE, (object.tool.y + .8) * TILE);
+      } else if (object.npc) this.drawNpc(object.npc, now);
       else this.drawProjectile(object.flight);
     }
     while (rowIndex < rows.length) this.drawWallRow(rows[rowIndex++]);
-    for (const { figure, npc } of objects) {
+    for (const { figure, npc, tool } of objects) {
       if (figure) this.drawFigureLabels(figure, now);
       if (npc) this.caption(npc.name, (npc.x + .5) * TILE, Math.max(9, npc.y * TILE - 5), '#f5d9a9');
+      const prop = tool && TRAINING_PROPS.get(tool.id);
+      if (prop) this.caption(prop[1], (tool.x + .5) * TILE, (tool.y + .97) * TILE, '#d4e7c5');
     }
     this.impacts = this.impacts.filter((impact) => now - impact.since < IMPACT_MS);
     for (const impact of this.impacts) this.drawImpact(impact, now);
@@ -631,6 +643,14 @@ export class Board {
     }
   }
 
+  drawTraining(frame, x, y) {
+    const { context } = this;
+    const image = this.images.training;
+    if (image?.naturalWidth) {
+      context.drawImage(image, frame * ATLAS_TILE, 0, ATLAS_TILE, ATLAS_TILE, Math.round(x) - 16, Math.round(y) - 32, 32, 32);
+    }
+  }
+
   marker(x, y, color) {
     const context = this.context;
     context.save();
@@ -653,14 +673,20 @@ export class Board {
 
   drawFigure(figure, now) {
     const { actor } = figure;
+    const x = Math.round((figure.x + .5) * TILE);
+    const y = Math.round((figure.y + .87) * TILE);
+    if (actor.kind === 'dummy') {
+      const elapsed = now - (figure.rattleAt ?? -Infinity);
+      const rattle = elapsed < 160 ? Math.sin(elapsed / 160 * 2 * Math.PI) * 3 : 0;
+      this.drawTraining(0, x + rattle, y);
+      return;
+    }
     const own = actor.id === this.snapshot?.selfId;
     const enemy = actor.kind === 'enemy';
     const first = actor.id === this.snapshot?.actors?.[0]?.id;
     const image = this.images[enemy ? 'rat' : own && !this.dungeon || first ? 'warrior' : 'rogue'];
     const context = this.context;
     const size = enemy ? 16 : 12;
-    const x = Math.round((figure.x + .5) * TILE);
-    const y = Math.round((figure.y + .87) * TILE);
     const attackTime = Math.max(0, figure.attackUntil - now);
     const dead = actor.hp === 0;
     let frame = Math.floor(now / 620) % 4 === 3 ? 1 : 0;
@@ -686,17 +712,18 @@ export class Board {
     if (actor.hp === 0) return;
     const own = actor.id === this.snapshot?.selfId;
     const enemy = actor.kind === 'enemy';
+    const dummy = actor.kind === 'dummy';
     const context = this.context;
     const x = Math.round((figure.x + .5) * TILE);
     const y = Math.round((figure.y + .87) * TILE);
     if (this.dungeon) {
       paint(context, '#222620', x - 11, y + 1, 22, 3);
-      paint(context, enemy ? '#dd957b' : own ? '#dfb96c' : '#9bd2c0', x - 11, y + 1, 22 * actor.hp / actor.maxHp, 3);
+      paint(context, enemy || dummy ? '#dd957b' : own ? '#dfb96c' : '#9bd2c0', x - 11, y + 1, 22 * actor.hp / actor.maxHp, 3);
     }
     if (!enemy && !actor.queued) {
       if (figure.captionName !== actor.name) {
         figure.captionName = actor.name;
-        figure.shortName = this.fitName(actor.name);
+        figure.shortName = this.fitName(dummy ? '허수아비' : actor.name);
       }
       this.caption(figure.shortName, x, Math.max(9, y - 32), own ? '#ffe1a3' : '#d8e4cf');
     }
