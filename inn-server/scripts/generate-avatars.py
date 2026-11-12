@@ -48,6 +48,7 @@ SOURCE_HAIR = {
 }
 SOURCE_CLOTH = "7e7e7e a3a3a3 b3b3b3 cccccc ffffff"
 DUELIST_CLOTH = "000000 121212 191919 262626 3d3d3d"
+CLOTH_ARMOR = "6b635b 9e9286 a59f98 c9c1b9 fbf2e7"
 
 # Hand-drawn pixels anchored four columns left and four rows above the first eye.
 # Digits are shadow through highlight; a dot leaves the pixel transparent.
@@ -152,11 +153,15 @@ def place_shape(image, eye, shape, palette):
                 image.putpixel((x, y), palette[int(pixel)])
 
 
-def extract_layers(frame, job, eye, recolor_clothes=True):
+def extract_layers(frame, job, eye, tier):
     hair_palette, accents = SOURCE_HAIR[job]
     hair_tones = {color: i for i, color in enumerate(colors(hair_palette))}
     hair_tones.update((rgba(color), tone) for color, tone in accents.items())
-    cloth_tones = {color: i for i, color in enumerate(colors(DUELIST_CLOTH if job == "duelist" else SOURCE_CLOTH))}
+    if tier == 0:
+        cloth_palette = DUELIST_CLOTH if job == "duelist" else SOURCE_CLOTH
+    else:
+        cloth_palette = CLOTH_ARMOR if tier == 1 else ""
+    cloth_tones = {color: i for i, color in enumerate(colors(cloth_palette))}
     base = frame.copy()
     hair, cloth = {}, {}
     for y in range(FRAME_HEIGHT):
@@ -165,7 +170,7 @@ def extract_layers(frame, job, eye, recolor_clothes=True):
             pixel = frame.getpixel(point)
             if y <= eye[1] + 3 and pixel in hair_tones:
                 hair[point] = (pixel, hair_tones[pixel])
-            elif recolor_clothes and y >= 8 and pixel in cloth_tones:
+            elif y >= 8 and pixel in cloth_tones:
                 cloth[point] = (pixel, cloth_tones[pixel])
             else:
                 continue
@@ -213,7 +218,7 @@ def frame_layers(source, job, frame_index, tier=0):
     if mirrored:
         frame = ImageOps.mirror(frame)
     eye = eyes(frame)
-    base, hair, cloth = extract_layers(frame, job, eye, recolor_clothes=tier == 0)
+    base, hair, cloth = extract_layers(frame, job, eye, tier)
     layers = [base]
     layers.extend(fabric_layer(cloth, entry["id"]) for entry in CATALOG["outfitColors"])
     layers.extend(hairstyle_layer(job, eye, hair, style, entry["id"])
