@@ -18,6 +18,7 @@
       </div>
       <div class="top-actions">
         <span class="status" id="connection" data-tone="idle">입장 대기</span>
+        <button type="button" id="pause" hidden>일시정지 <kbd>P</kbd></button>
         <button type="button" id="help-toggle" aria-controls="help" aria-expanded="false">조작법 <kbd>F1</kbd></button>
       </div>
     </header>
@@ -33,6 +34,7 @@
               <div><dt>대각선</dt><dd>방향 조합 · 숫자패드</dd></div>
               <div><dt>평타</dt><dd>Space · 적 클릭</dd></div>
               <div><dt>식량</dt><dd>E · 행동력 3</dd></div>
+              <div><dt>일시정지</dt><dd>P · 파티 공유</dd></div>
             </dl>
           </aside>
           <p id="battle-overlay" class="battle-overlay" hidden></p>
@@ -68,6 +70,7 @@
               <input id="player-name" name="name" maxlength="40" placeholder="닉네임" autocomplete="nickname" required>
               <button class="primary" id="name-button" type="submit">입장</button>
             </form>
+            <button id="drink" type="button" disabled>술 한 잔</button>
           </section>
 
           <section class="card" aria-labelledby="expedition-heading">
@@ -78,14 +81,16 @@
                 <option value="sewers">하수도</option>
                 <option value="prison">버려진 감옥</option>
               </select>
-              <p id="theme-hint">파티장이 고른 테마로 함께 입장합니다.</p>
+              <p id="theme-hint">파티 원정은 파티장이 고른 테마로 진행합니다.</p>
             </div>
             <button class="primary wide" id="match" type="button" disabled>동료 찾기</button>
-            <div class="button-row">
-              <button id="guide" type="button" disabled>길잡이와 입장</button>
-              <button id="drink" type="button" disabled>술 한 잔</button>
-            </div>
             <ul id="seekers" class="seekers" aria-label="동료를 찾는 모험가" hidden></ul>
+            <button id="guide" class="wide" type="button" disabled>연습 모드 · 길잡이</button>
+            <div class="original-entry">
+              <h3>원본 녹픽던</h3>
+              <p>Windows EXE를 열고 여관에서 <strong>원본 녹픽던</strong>을 선택하세요.</p>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/latest" target="_blank" rel="noopener">Windows 배포판 보기</a>
+            </div>
           </section>
 
           <section class="card chat-card" aria-labelledby="chat-heading">
@@ -110,6 +115,20 @@
             <button class="primary wide" id="attack" type="button">평타 <kbd>Space</kbd></button>
             <button class="wide" id="eat" type="button">식량 <kbd>E</kbd></button>
             <button class="wide return" id="return" type="button">여관으로</button>
+          </section>
+          <section class="card" aria-labelledby="backpack-heading">
+            <h2 id="backpack-heading">배낭</h2>
+            <div id="backpack" class="backpack" role="group" aria-label="배낭 칸"></div>
+            <p id="backpack-hint" class="backpack-hint">아이템 칸을 누른 뒤 옮길 칸을 선택하세요.</p>
+          </section>
+          <section class="card chat-card dungeon-chat" aria-labelledby="dungeon-chat-heading">
+            <h2 id="dungeon-chat-heading">파티 대화</h2>
+            <ol id="dungeon-chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></ol>
+            <form id="dungeon-chat-form" class="inline-form">
+              <label class="sr-only" for="dungeon-chat-message">파티 메시지</label>
+              <input id="dungeon-chat-message" name="message" maxlength="320" placeholder="메시지" autocomplete="off" required>
+              <button id="dungeon-chat-send" type="submit">보내기</button>
+            </form>
           </section>
         </div>
       </aside>

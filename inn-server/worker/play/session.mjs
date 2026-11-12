@@ -60,7 +60,20 @@ function normalizeAction(type, dx, dy, target) {
     return { type, dx: 0, dy: 0, target };
   }
   if (type === 'eat') return { type, dx: 0, dy: 0, target: null };
+  if (type === 'pause' && (target === 'begin' || target === 'resume')) return { type, dx: 0, dy: 0, target };
+  if (type === 'chat' && typeof target === 'string') {
+    const message = target.trim();
+    if (message && [...message].length <= 160) return { type, dx: 0, dy: 0, target: message };
+  }
   return null;
+}
+
+function maySend(action, state) {
+  if (!state || state.status === 'closed') return false;
+  if (action.type === 'chat') return true;
+  if (!active(state.status)) return false;
+  if (action.type === 'pause') return true;
+  return !(state.pausedUntil > 0) && (state.status !== 'won' || action.type !== 'attack');
 }
 
 export class PlaySession {
@@ -157,6 +170,7 @@ export class PlaySession {
   }
 
   action(type, dx = 0, dy = 0, target = null) {
+    if (type === 'pause' && target === null) target = this.frame?.state?.pausedUntil > 0 ? 'resume' : 'begin';
     const action = normalizeAction(type, dx, dy, target);
     return !!action && !!this.battle?.action(action);
   }
@@ -203,7 +217,7 @@ export class PlaySession {
     const name = this.name;
     const wasOnline = this.online;
     this.innSync = request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST',
-      enter ? { name, after: this.after, dungeonProtocol: 5 } : { after: this.after }).then(fresh => {
+      enter ? { name, after: this.after, dungeonProtocol: 6 } : { after: this.after }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
       if (enter && name === this.name) this.renamePending = false;
       if (positionRevision !== this.positionRevision && fresh.selfId === this.inn?.selfId) {
@@ -345,8 +359,7 @@ class BattleSession {
   }
 
   action(action) {
-    if (this.closed || this.terminal || !active(this.frame?.state?.status) ||
-        (this.frame.state.status === 'won' && action.type === 'attack') || this.pending.length >= MAX_COMMANDS) return false;
+    if (this.closed || this.terminal || !maySend(action, this.frame?.state) || this.pending.length >= MAX_COMMANDS) return false;
     this.pending.push(action);
     return true;
   }
@@ -390,7 +403,7 @@ class BattleSession {
       this.wasDirect = direct;
       this.nextLinkSyncAt = this.nextCommandAt = this.nextPingAt = 0;
       this.relayPending = null;
-      if (this.frame) this.#publish(this.frame.state, this.frame.serverTime());
+      if (this.frame) this.#publish(this.frame.state, this.frame.wallTime());
     }
     if (!this.syncInFlight && time >= this.nextLinkSyncAt) this.#sync(time, direct);
     if (!this.link.paired) return;
@@ -464,6 +477,7 @@ class BattleSession {
   #sendGuestCommands(time) {
     while (this.pending.length && this.unacked.length < MAX_COMMANDS) {
       const action = this.pending.shift();
+      if (!maySend(action, this.frame?.state)) continue;
       this.unacked.push({ sequence: ++this.commandSequence, action });
       this.nextCommandAt = 0;
     }
@@ -495,7 +509,7 @@ class BattleSession {
       this.lastSnapshotAt = now();
       this.unacked = this.unacked.filter(command => command.sequence > wire.state.commandAck);
       if (this.relayPending?.seq <= wire.state.commandAck) this.relayPending = null;
-      const hostTime = Math.max(wire.state.now, this.frame?.serverTime() ?? 0);
+      const hostTime = Math.max(wire.state.wallNow, this.frame?.wallTime() ?? 0);
       this.#publish(wire.state.revision === this.frame?.state.revision ? this.frame.state : wire.state, hostTime);
     }
   }
@@ -503,14 +517,19 @@ class BattleSession {
   #validSnapshot(state) {
     return state && state.id === this.matchId && state.selfId === this.link.selfId &&
       Number.isSafeInteger(state.revision) && state.revision >= (this.frame?.state.revision ?? 0) &&
-      Number.isSafeInteger(state.commandAck) && Number.isFinite(state.now) &&
+      Number.isSafeInteger(state.commandAck) && Number.isSafeInteger(state.now) &&
+      Number.isSafeInteger(state.wallNow) && Number.isSafeInteger(state.pausedUntil) &&
+      Number.isSafeInteger(state.pauseReadyAt) &&
       ['active', 'won', 'lost'].includes(state.status) &&
       Array.isArray(state.map) && state.map.length > 0 && typeof state.map[0] === 'string' && state.map[0].length > 0 &&
       state.map.every(row => typeof row === 'string' && row.length === state.map[0].length) &&
       Array.isArray(state.actors) && state.actors.some(actor => actor?.id === state.selfId) && state.actors.every(actor =>
         typeof actor?.id === 'string' && typeof actor.name === 'string' && typeof actor.kind === 'string' &&
         Number.isFinite(actor.energy) && Number.isSafeInteger(actor.rations) && actor.rations >= 0) &&
-      Array.isArray(state.drops) && state.drops.every(drop => typeof drop?.id === 'string' && typeof drop.item === 'string');
+      Array.isArray(state.drops) && state.drops.every(drop => typeof drop?.id === 'string' && typeof drop.item === 'string') &&
+      Array.isArray(state.messages) && state.messages.length <= 16 && state.messages.every(message =>
+        Number.isSafeInteger(message?.id) && typeof message.actorId === 'string' &&
+        typeof message.name === 'string' && typeof message.text === 'string');
   }
 
   #openPeer() {
@@ -623,10 +642,12 @@ class BattleSession {
   #publish(state, hostTime, notice = '') {
     if (this.closed) return;
     const receivedAt = now();
+    const wallTime = () => state ? hostTime + (now() - receivedAt) : 0;
     this.frame = {
       state, notice,
       connection: this.practicePlayer ? 'local' : this.#direct() ? 'direct' : 'relay',
-      serverTime: () => state ? hostTime + (now() - receivedAt) : 0,
+      wallTime,
+      serverTime: () => state ? state.now + (state.pausedUntil > 0 ? 0 : Math.max(0, wallTime() - state.wallNow)) : 0,
     };
     this.listener(this.frame);
   }
@@ -637,7 +658,10 @@ class BattleSession {
     clearInterval(this.timer);
     const state = this.frame?.state;
     const time = this.frame?.serverTime() ?? 0;
-    this.#publish(active(state?.status) ? { ...state, now: time, status: 'closed', queued: null, inCombat: false } : state, time, notice);
+    const wallTime = this.frame?.wallTime() ?? 0;
+    this.#publish(active(state?.status)
+      ? { ...state, now: time, wallNow: wallTime, status: 'closed', queued: null, inCombat: false, pausedUntil: 0 }
+      : state, wallTime, notice);
     this.#closePeer();
   }
 }

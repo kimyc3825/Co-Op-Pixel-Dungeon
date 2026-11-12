@@ -50,6 +50,9 @@ public class WndGame extends Window {
 		
 		super();
 
+		String exitLabel = Game.instance instanceof ShatteredPixelDungeon
+				? ((ShatteredPixelDungeon) Game.instance).runExitLabel() : null;
+
 		//settings
 		RedButton curBtn;
 		addButton( curBtn = new RedButton( Messages.get(this, "settings") ) {
@@ -74,7 +77,7 @@ public class WndGame extends Window {
 		}
 
 		// Restart
-		if (Dungeon.hero == null || !Dungeon.hero.isAlive()) {
+		if (exitLabel == null && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
 
 			addButton( curBtn = new RedButton( Messages.get(this, "start") ) {
 				@Override
@@ -97,8 +100,7 @@ public class WndGame extends Window {
 			curBtn.icon(Icons.get(Icons.RANKINGS));
 		}
 
-		// Main menu
-		addButton(curBtn = new RedButton(Messages.get(this, "menu")) {
+		addButton(curBtn = new RedButton(exitLabel != null ? exitLabel : Messages.get(this, "menu")) {
 			@Override
 			protected void onClick() {
 				try {
@@ -110,7 +112,7 @@ public class WndGame extends Window {
 			}
 		});
 		curBtn.icon(Icons.get(Icons.DISPLAY));
-		if (SPDSettings.intro()) curBtn.enable(false);
+		if (exitLabel == null && SPDSettings.intro()) curBtn.enable(false);
 
 		resize( WIDTH, pos );
 	}

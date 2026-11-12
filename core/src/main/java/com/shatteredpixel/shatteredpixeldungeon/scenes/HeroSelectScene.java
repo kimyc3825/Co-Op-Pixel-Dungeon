@@ -359,7 +359,7 @@ public class HeroSelectScene extends PixelScene {
 		int ofs = PixelScene.landscape() ? 0 : 4;
 		btnExit.setPos( Camera.main.width - btnExit.width() - ofs, ofs );
 		add( btnExit );
-		btnExit.visible = btnExit.active = !SPDSettings.intro();
+		btnExit.visible = btnExit.active = canExit();
 
 		PointerArea fadeResetter = new PointerArea(0, 0, Camera.main.width, Camera.main.height){
 			@Override
@@ -487,7 +487,7 @@ public class HeroSelectScene extends PixelScene {
 		if (SPDSettings.intro() && Rankings.INSTANCE.totalNumber > 0){
 			SPDSettings.intro(false);
 		}
-		btnExit.visible = btnExit.active = !SPDSettings.intro();
+		btnExit.visible = btnExit.active = canExit();
 		//do not fade when a window is open
 		for (Object v : members){
 			if (v instanceof Window) resetFade();
@@ -551,6 +551,11 @@ public class HeroSelectScene extends PixelScene {
 		//starts fading after 4 seconds, fades over 4 seconds.
 		uiAlpha = 2f;
 		updateFade();
+	}
+
+	private boolean canExit() {
+		return !SPDSettings.intro() || (Game.instance instanceof ShatteredPixelDungeon
+				&& ((ShatteredPixelDungeon) Game.instance).runExitLabel() != null);
 	}
 
 	@Override

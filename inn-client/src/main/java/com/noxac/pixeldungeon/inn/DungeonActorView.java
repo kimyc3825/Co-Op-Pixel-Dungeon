@@ -18,6 +18,7 @@ final class DungeonActorView extends Group {
     private static final float ATTACK_DURATION = 0.28f;
     private static final float WINDUP_DURATION = 0.13f;
     private static final float DAMAGE_DURATION = 0.62f;
+    private static final float FOOT_OFFSET = 0.89f;
 
     private final MovieClip sprite;
     private final MovieClip.Animation idle;
@@ -25,6 +26,7 @@ final class DungeonActorView extends Group {
     private final MovieClip.Animation attack;
     private final MovieClip.Animation death;
     private final Image shadow;
+    private final Group overlay = new Group();
     private final RenderedTextBlock name;
     private final RenderedTextBlock healthChange;
     private final ColorBlock healthBack;
@@ -77,12 +79,12 @@ final class DungeonActorView extends Group {
         sprite.play(idle);
 
         int color = enemy ? NativeDungeonScene.ENEMY : own ? NativeDungeonScene.SELF : NativeDungeonScene.ALLY;
-        healthBack = NativeDungeonScene.panel(this, 0, 0, 1, 1, 0xE8131715);
-        healthFill = NativeDungeonScene.panel(this, 0, 0, 1, 1, 0xFF000000 | color);
+        healthBack = NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xE8131715);
+        healthFill = NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xFF000000 | color);
         String nick = actor.name();
         if (nick.codePointCount(0, nick.length()) > 9) nick = nick.substring(0, nick.offsetByCodePoints(0, 8)) + "…";
-        name = NativeDungeonScene.label(this, enemy ? "" : nick, 6, color, 0, 0, 65);
-        healthChange = NativeDungeonScene.label(this, "", 8, NativeDungeonScene.ENEMY, 0, 0, 38);
+        name = NativeDungeonScene.label(overlay, enemy ? "" : nick, 6, color, 0, 0, 65);
+        healthChange = NativeDungeonScene.label(overlay, "", 8, NativeDungeonScene.ENEMY, 0, 0, 38);
         if (actor.hp() <= 0) {
             deadTime = 1;
             sprite.frame(death.frames[death.frames.length - 1]);
@@ -101,8 +103,15 @@ final class DungeonActorView extends Group {
         layout();
     }
 
-    float depth() {
-        return shownY;
+    float depth() { return shownY + FOOT_OFFSET; }
+
+    Group overlay() { return overlay; }
+
+    @Override
+    public void destroy() {
+        overlay.remove();
+        overlay.destroy();
+        super.destroy();
     }
 
     void previewMove(int dx, int dy, boolean newInput) {
@@ -212,7 +221,7 @@ final class DungeonActorView extends Group {
         shownX = fromX + (toX - fromX) * progress;
         shownY = fromY + (toY - fromY) * progress;
         float center = mapX + (shownX + 0.5f) * tile;
-        float base = mapY + (shownY + 0.89f) * tile;
+        float base = mapY + depth() * tile;
         float scale = tile / 16;
         float lunge = (float) Math.sin(Math.PI * attackTime / ATTACK_DURATION) * tile * 0.24f;
         float windup = (float) Math.sin(Math.PI * windupTime / WINDUP_DURATION) * tile * 0.10f;

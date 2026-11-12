@@ -24,11 +24,22 @@ final class InnApi {
                      int actionSeq, String lastAction, String targetId, long actionAt,
                      double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations) {}
     record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
+    record PartyChat(long id, String actorId, String name, String text) {}
     record DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
                         Action queued, String status, boolean waitingForPartner, int revision,
-                        List<Drop> drops, long commandAck, boolean inCombat, String theme) {
+                        List<Drop> drops, long commandAck, boolean inCombat, String theme,
+                        long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages) {
         DungeonState {
             theme = DungeonLayout.themeOrDefault(theme);
+            if (wallNow == 0) wallNow = now;
+            if (messages == null) messages = List.of();
+        }
+
+        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
+                     Action queued, String status, boolean waitingForPartner, int revision,
+                     List<Drop> drops, long commandAck, boolean inCombat, String theme) {
+            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
+                drops, commandAck, inCombat, theme, now, 0, 0, List.of());
         }
 
         DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
@@ -108,7 +119,7 @@ final class InnApi {
     }
 
     State enter(String name, String key, long after) throws IOException, InterruptedException {
-        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 5)));
+        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 6)));
     }
 
     State sync(String key, long after) throws IOException, InterruptedException {

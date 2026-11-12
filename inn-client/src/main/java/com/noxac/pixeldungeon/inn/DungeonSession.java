@@ -26,6 +26,12 @@ final class DungeonSession implements AutoCloseable {
     record Frame(InnApi.DungeonState state, long hostAtReceipt, long receivedAt,
                  String notice, Connection connection) {
         long serverTime() {
+            if (state == null) return 0;
+            return state.pausedUntil() > 0 ? state.now()
+                : state.now() + Math.max(0, wallTime() - state.wallNow());
+        }
+
+        long wallTime() {
             return state == null ? 0 : hostAtReceipt + elapsedSince(receivedAt);
         }
     }
@@ -186,7 +192,7 @@ final class DungeonSession implements AutoCloseable {
 
     private void sendGuestCommands(long now) {
         for (InnApi.Action action; (action = pending.poll()) != null; ) {
-            if (frame == null || !maySend(action, frame.state().status())) continue;
+            if (frame == null || !maySend(action, frame.state())) continue;
             if (unackedCommands.size() == MAX_COMMANDS) unackedCommands.removeFirst();
             unackedCommands.addLast(new Command(++commandSequence, action));
             nextCommandAt = 0;
@@ -198,7 +204,11 @@ final class DungeonSession implements AutoCloseable {
         }
     }
 
-    private static boolean maySend(InnApi.Action action, String status) {
+    private static boolean maySend(InnApi.Action action, InnApi.DungeonState state) {
+        String status = state.status();
+        if ("chat".equals(action.type())) return !"closed".equals(status);
+        if ("pause".equals(action.type())) return "active".equals(status) || "won".equals(status);
+        if (state.pausedUntil() > 0) return false;
         return "active".equals(status) ||
             "won".equals(status) && ("move".equals(action.type()) || "eat".equals(action.type()));
     }
@@ -350,6 +360,8 @@ final class DungeonSession implements AutoCloseable {
             state.actors().stream().anyMatch(actor -> state.selfId().equals(actor.id())) &&
             state.drops() != null && state.drops().stream().allMatch(drop ->
                 drop != null && drop.id() != null && drop.item() != null) &&
+            state.messages().size() <= 16 && state.messages().stream().allMatch(message ->
+                message != null && message.actorId() != null && message.name() != null && message.text() != null) &&
             ("active".equals(state.status()) || "won".equals(state.status()) || "lost".equals(state.status()));
     }
 
@@ -358,8 +370,8 @@ final class DungeonSession implements AutoCloseable {
         unackedCommands.removeIf(command -> command.sequence() <= next.commandAck());
         if (relayPending != null && relayPending.sequence() <= next.commandAck()) relayPending = null;
         long receipt = System.nanoTime();
-        long hostTime = next.now();
-        if (frame != null) hostTime = Math.max(hostTime, frame.serverTime());
+        long hostTime = next.wallNow();
+        if (frame != null) hostTime = Math.max(hostTime, frame.wallTime());
         InnApi.DungeonState changed = frame != null && next.revision() == frame.state().revision() ? frame.state() : next;
         publish(changed, hostTime, receipt, "");
     }
@@ -373,7 +385,8 @@ final class DungeonSession implements AutoCloseable {
             if ("active".equals(state.status()) || "won".equals(state.status())) {
                 long time = frame.serverTime();
                 state = new InnApi.DungeonState(state.id(), state.selfId(), time, state.map(), state.actors(),
-                    null, "closed", false, state.revision(), state.drops(), state.commandAck(), false, state.theme());
+                    null, "closed", false, state.revision(), state.drops(), state.commandAck(), false, state.theme(),
+                    frame.wallTime(), 0, state.pauseReadyAt(), state.messages());
             }
             publish(state, frame.hostAtReceipt(), frame.receivedAt(), notice);
         }

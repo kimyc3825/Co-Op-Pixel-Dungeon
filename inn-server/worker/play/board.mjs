@@ -2,6 +2,10 @@
 import { PRISON } from './layout.mjs';
 
 const TILE = 32;
+const ATLAS_TILE = 16;
+const WALL_SOURCE_Y = 12 * ATLAS_TILE + 8;
+const WALL_SOURCE_HEIGHT = 4;
+const WALL_HEIGHT = TILE * WALL_SOURCE_HEIGHT / ATLAS_TILE;
 const ASSETS = ['warrior', 'rogue', 'rat', 'looking-sign', 'items', 'tiles_sewers'];
 const INN = ['############', '#BBBBBBBB..#', '#..........#', '#..TT..TT..#', '#..........#',
   '#..TT..TT..#', '#..........#', '#....DD....#', '############'];
@@ -103,7 +107,7 @@ function innTile(context, map, x, y) {
 }
 
 function tileArt(context, image, column, row, x, y, size) {
-  context.drawImage(image, column * 16, row * 16, 16, 16, x, y, size, size);
+  context.drawImage(image, column * ATLAS_TILE, row * ATLAS_TILE, ATLAS_TILE, ATLAS_TILE, x, y, size, size);
 }
 
 class Figure {
@@ -254,6 +258,15 @@ export class Board {
     const tiles = this.images[this.textureName];
     const prison = this.textureName === 'tiles_prison';
     const palette = prison ? ['#5b4f55', '#40373d', '#362e33'] : ['#4e5144', '#333b31', '#2e352d'];
+    const wallRows = [];
+    const foreground = this.dungeon ? document.createElement('canvas') : null;
+    let foregroundContext;
+    if (foreground) {
+      foreground.width = this.canvas.width;
+      foreground.height = this.map.length * WALL_HEIGHT;
+      foregroundContext = foreground.getContext('2d');
+      foregroundContext.imageSmoothingEnabled = false;
+    }
     this.map.forEach((row, y) => {
       [...row].forEach((cell, x) => {
         if (!this.dungeon) return innTile(context, this.map, x, y);
@@ -265,8 +278,19 @@ export class Board {
         } else {
           paint(context, palette[wall ? 0 : variation ? 1 : 2], x * TILE, y * TILE, TILE, TILE);
         }
+        if (!wall || this.map[y - 1]?.[x] !== '.') return;
+        // Upstream's stitched wall overhang uses columns 0–3. Keep just its top four masonry pixels.
+        const variant = Number(row[x + 1] === '.') + 2 * Number(row[x - 1] === '.');
+        if (tiles.naturalWidth) {
+          foregroundContext.drawImage(tiles, variant * ATLAS_TILE, WALL_SOURCE_Y, ATLAS_TILE, WALL_SOURCE_HEIGHT,
+            x * TILE, y * WALL_HEIGHT, TILE, WALL_HEIGHT);
+        } else {
+          paint(foregroundContext, palette[0], x * TILE, y * WALL_HEIGHT, TILE, WALL_HEIGHT);
+        }
+        if (wallRows.at(-1) !== y) wallRows.push(y);
       });
     });
+    this.wallEdges = { image: foreground, rows: wallRows };
     this.terrain = image;
     return image;
   }
@@ -282,21 +306,43 @@ export class Board {
     const queued = snapshot?.queued;
     if (this.dungeon && self && queued?.type === 'move') this.marker(self.x + queued.dx, self.y + queued.dy, '#89d1b2');
     if (!this.dungeon && destination) this.marker(destination[0], destination[1], '#edb776');
-    for (const drop of snapshot?.drops ?? []) {
-      const image = this.images.items;
-      if (drop.pickedBy != null) continue;
-      if (image.naturalWidth) {
-        const gold = drop.item === 'gold';
-        tileArt(context, image, gold ? 2 : 5, gold ? 1 : 27, drop.x * TILE + 7, drop.y * TILE + 12, 19);
-      } else {
-        paint(context, '#ddad5c', drop.x * TILE + 12, drop.y * TILE + 18, 8, 6);
-      }
+    const objects = [];
+    for (const figure of this.figures.values()) {
+      figure.advance(now);
+      objects.push({ depth: (figure.y + .87) * TILE, figure });
     }
-    const figures = [...this.figures.values()];
-    for (const figure of figures) figure.advance(now);
-    figures.sort((left, right) => left.y - right.y);
-    for (const figure of figures) this.drawFigure(figure, now);
-    for (const figure of figures) if (!this.dungeon && figure.actor.queued) this.drawSign(figure);
+    for (const drop of snapshot?.drops ?? []) {
+      if (drop.pickedBy == null) objects.push({ depth: (drop.y + .84) * TILE, drop });
+    }
+    objects.sort((left, right) => left.depth - right.depth);
+    const rows = this.wallEdges.rows;
+    let rowIndex = 0;
+    for (const object of objects) {
+      while (rowIndex < rows.length && rows[rowIndex] * TILE <= object.depth) this.drawWallRow(rows[rowIndex++]);
+      if (object.figure) this.drawFigure(object.figure, now);
+      else this.drawDrop(object.drop);
+    }
+    while (rowIndex < rows.length) this.drawWallRow(rows[rowIndex++]);
+    for (const { figure } of objects) if (figure) this.drawFigureLabels(figure, now);
+    if (!this.dungeon) {
+      for (const { figure } of objects) if (figure?.actor.queued) this.drawSign(figure);
+    }
+  }
+
+  drawWallRow(row) {
+    const width = this.canvas.width;
+    this.context.drawImage(this.wallEdges.image, 0, row * WALL_HEIGHT, width, WALL_HEIGHT,
+      0, row * TILE - WALL_HEIGHT, width, WALL_HEIGHT);
+  }
+
+  drawDrop(drop) {
+    const image = this.images.items;
+    if (image.naturalWidth) {
+      const gold = drop.item === 'gold';
+      tileArt(this.context, image, gold ? 2 : 5, gold ? 1 : 27, drop.x * TILE + 7, drop.y * TILE + 12, 19);
+    } else {
+      paint(this.context, '#ddad5c', drop.x * TILE + 12, drop.y * TILE + 18, 8, 6);
+    }
   }
 
   marker(x, y, color) {
@@ -305,7 +351,8 @@ export class Board {
     context.globalAlpha = .72;
     context.strokeStyle = color;
     context.lineWidth = 2;
-    context.strokeRect(x * TILE + 3, y * TILE + 3, TILE - 6, TILE - 6);
+    const bottom = this.dungeon && this.map[y]?.[x] === '.' && this.map[y + 1]?.[x] === '#' ? WALL_HEIGHT + 1 : 3;
+    context.strokeRect(x * TILE + 3, y * TILE + 3, TILE - 6, TILE - 3 - bottom);
     context.restore();
   }
 
@@ -347,7 +394,16 @@ export class Board {
       paint(context, own ? '#d8ad65' : '#95bfb4', -6, -20, 12, 20);
     }
     context.restore();
-    if (dead) return;
+  }
+
+  drawFigureLabels(figure, now) {
+    const { actor } = figure;
+    if (actor.hp === 0) return;
+    const own = actor.id === this.snapshot?.selfId;
+    const enemy = actor.kind === 'enemy';
+    const context = this.context;
+    const x = Math.round((figure.x + .5) * TILE);
+    const y = Math.round((figure.y + .87) * TILE);
     if (this.dungeon) {
       paint(context, '#222620', x - 11, y + 1, 22, 3);
       paint(context, enemy ? '#dd957b' : own ? '#dfb96c' : '#9bd2c0', x - 11, y + 1, 22 * actor.hp / actor.maxHp, 3);

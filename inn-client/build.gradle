@@ -5,7 +5,7 @@ plugins {
 apply from: '../gradle/game-platform.gradle'
 
 group = 'com.noxac.pixeldungeon'
-version = '0.7.0'
+version = '0.8.0'
 
 java {
     toolchain {
@@ -40,7 +40,7 @@ tasks.named('jar') {
     manifest.attributes('Main-Class': application.mainClass.get())
 }
 
-def packagedInput = layout.buildDirectory.dir('jpackage-input')
+def packagedInput = layout.buildDirectory.dir("jpackage-input/${version}")
 def packagedOutput = layout.buildDirectory.dir("jpackage/${version}")
 def appImage = packagedOutput.map { it.dir('NoxacPixelDungeon') }
 

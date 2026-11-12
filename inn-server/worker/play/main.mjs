@@ -7,10 +7,11 @@ import { PlaySession } from './session.mjs';
 const byId = (id) => document.getElementById(id);
 const board = new Board(byId('board'));
 const fields = Object.fromEntries([
-  'scene-title', 'connection', 'board-title', 'board-status', 'help', 'help-toggle', 'battle-overlay', 'notice',
+  'scene-title', 'connection', 'board-title', 'board-status', 'help', 'help-toggle', 'pause', 'battle-overlay', 'notice',
   'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'match', 'guide', 'drink', 'seekers',
   'chat-form', 'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'queued', 'attack', 'eat', 'return',
-  'touch-controls', 'touch-battle', 'touch-attack', 'touch-eat',
+  'touch-controls', 'touch-battle', 'touch-attack', 'touch-eat', 'backpack', 'backpack-hint',
+  'dungeon-chat-log', 'dungeon-chat-form', 'dungeon-chat-message', 'dungeon-chat-send',
 ].map((id) => [id, byId(id)]));
 
 const keys = new Map([
@@ -26,6 +27,9 @@ const MOVE_RETRY = 60;
 const held = new Map();
 const busy = new Set();
 const party = new Map();
+const itemNames = { ration: '식량', gold: '금화' };
+const backpack = ['ration', 'gold', null, null, null, null];
+const slotViews = [];
 let direction;
 let tap;
 let destination;
@@ -37,8 +41,11 @@ let noticeUntil = 0;
 let localNotice = '';
 let connectionNotice = '';
 let lastBattle;
-let chatKey = '';
 let seekersKey = '';
+let frozenAt = null;
+let frozenDuration = 0;
+let pauseRequest = null;
+let selectedSlot = -1;
 
 const play = new PlaySession({
   onInn(state) {
@@ -50,6 +57,7 @@ const play = new PlaySession({
     if (!frame) {
       clearMovement();
       lastBattle = selected = submitted = queuedPreview = null;
+      resetVisualClock();
       board.set(play.inn, false);
       updateScene();
       return;
@@ -58,16 +66,23 @@ const play = new PlaySession({
     const prior = lastBattle;
     if (prior?.id !== state.id) {
       clearMovement();
+      resetVisualClock();
       selected = submitted = queuedPreview = null;
+      selectedSlot = -1;
       party.clear();
       fields.party.replaceChildren();
+      fields['dungeon-chat-message'].value = '';
+      fields['dungeon-chat-log'].replaceChildren();
+      delete fields['dungeon-chat-log'].dataset.events;
     }
-    board.set(state, true);
+    const now = performance.now();
+    syncVisualClock(isPaused(state), now);
+    board.set(state, true, visualTime(now));
     if (submitted && state.commandAck > submitted.ack) {
       const actor = ownActor(state);
       const old = ownActor(prior);
       if (submitted.type === 'move' && actor && old && actor.x === old.x && actor.y === old.y &&
-          !sameAction(state.queued, submitted)) board.cancel(performance.now());
+          !sameAction(state.queued, submitted)) board.cancel(visualTime(now));
       submitted = null;
     }
     showDrops(state, prior);
@@ -100,6 +115,27 @@ function updateNotice(now) {
   text(fields.notice, connectionNotice || play.frame?.notice || (now < noticeUntil ? localNotice : ''));
 }
 
+const isPaused = (state) => state?.pausedUntil > 0;
+const visualTime = (now) => (frozenAt ?? now) - frozenDuration;
+
+function resetVisualClock() {
+  frozenAt = null;
+  frozenDuration = 0;
+  pauseRequest = null;
+}
+
+function syncVisualClock(paused, now) {
+  if (paused && frozenAt === null) {
+    frozenAt = now;
+    clearMovement();
+    selectedSlot = -1;
+  } else if (!paused && frozenAt !== null) {
+    frozenDuration += now - frozenAt;
+    frozenAt = null;
+  }
+  if (pauseRequest && pauseRequest.paused !== paused) pauseRequest = null;
+}
+
 async function run(name, task) {
   if (busy.has(name)) return;
   busy.add(name);
@@ -129,6 +165,8 @@ function updateScene() {
   fields['inn-panel'].hidden = dungeon;
   fields['dungeon-panel'].hidden = !dungeon;
   fields['touch-battle'].hidden = !dungeon;
+  fields.pause.hidden = !dungeon;
+  board.canvas.dataset.paused = String(isPaused(play.frame?.state));
   text(fields['scene-title'], title);
   text(fields['board-title'], dungeon ? `${title} 던전` : '여관 홀');
   const tabTitle = `${title} · Noxac Pixel Dungeon`;
@@ -168,7 +206,7 @@ function updateInn() {
   fields['battle-overlay'].hidden = !entering && !returning;
   if (entering || returning) text(fields['battle-overlay'], returning ? '여관으로 돌아가는 중…' : '던전에 들어가는 중…');
   updateSeekers(state, ready);
-  updateChat(state?.events ?? []);
+  updateChat(fields['chat-log'], state?.events ?? []);
 }
 
 function updateSeekers(state, ready) {
@@ -195,12 +233,11 @@ function updateSeekers(state, ready) {
   }));
 }
 
-function updateChat(events) {
+function updateChat(log, events) {
   const recent = events.slice(-24);
-  const log = fields['chat-log'];
   const key = recent.map((event) => event.id).join(',');
-  if (key === chatKey) return;
-  chatKey = key;
+  if (key === log.dataset.events) return;
+  log.dataset.events = key;
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
   log.replaceChildren(...recent.map((event) => {
     const row = document.createElement('li');
@@ -218,15 +255,23 @@ function ownActor(state = play.frame?.state) {
 }
 
 function canAct(state, actor) {
-  return !busy.has('return') && actor?.hp > 0 && !state.waitingForPartner &&
+  return !busy.has('return') && actor?.hp > 0 && !state.waitingForPartner && !isPaused(state) &&
     (state.status === 'active' || state.status === 'won');
+}
+
+function canTogglePause(state) {
+  return !busy.has('return') && !state?.waitingForPartner && ['active', 'won'].includes(state?.status);
+}
+
+function canChat(state) {
+  return !busy.has('return') && ['active', 'won', 'lost'].includes(state?.status);
 }
 
 function updateBattle() {
   const { state, connection } = play.frame;
   const player = ownActor(state);
   const enemies = state.actors.filter((actor) => actor.kind === 'enemy' && actor.hp > 0).length;
-  status(({ direct: 'P2P 직접 연결', relay: '중계 연결', local: '길잡이 훈련' })[connection], 'live');
+  status(({ direct: 'P2P 직접 연결', relay: '중계 연결', local: '길잡이 연습' })[connection], 'live');
   text(fields['board-status'], state.status === 'won' ? '소탕 완료' : `${state.inCombat ? '교전' : '탐색'} · 남은 적 ${enemies}`);
   const overlay = state.status === 'lost' ? '파티가 쓰러졌습니다' : state.status === 'closed' ? '원정이 끝났습니다' :
     state.waitingForPartner ? '동료가 들어오는 중…' : player?.hp === 0 ? '쓰러졌습니다 · 동료의 전투를 지켜봅니다' : '';
@@ -237,7 +282,10 @@ function updateBattle() {
   fields.queued.hidden = !queued;
   if (queued) text(fields.queued, `예약 · ${{ move: '이동', attack: '평타', eat: '식량' }[queued.type]}`);
   fields.return.disabled = busy.has('return');
+  fields['dungeon-chat-message'].disabled = fields['dungeon-chat-send'].disabled = !canChat(state);
+  updateChat(fields['dungeon-chat-log'], state.messages ?? []);
   updateParty(state);
+  updateBackpack();
   updateCombatUi();
 }
 
@@ -256,23 +304,47 @@ function updateParty(state) {
     if (!slot) {
       const root = document.createElement('div');
       const name = document.createElement('strong');
+      const inspect = document.createElement('button');
+      const inspectLabel = document.createElement('span');
       const stats = document.createElement('div');
       const health = document.createElement('span');
       const energy = document.createElement('span');
       const hpMeter = document.createElement('progress');
       const energyMeter = document.createElement('progress');
+      const details = document.createElement('dl');
+      const detailValues = {};
       root.className = 'party-slot';
+      inspect.type = 'button';
+      inspect.className = 'party-inspect';
+      inspect.setAttribute('aria-expanded', 'false');
+      inspectLabel.textContent = '상태';
       stats.className = 'stats';
       energy.className = 'energy-text';
       energyMeter.className = 'energy';
+      details.className = 'party-details';
+      details.hidden = true;
       hpMeter.setAttribute('aria-label', '체력');
       energyMeter.setAttribute('aria-label', '행동력');
       energyMeter.max = BattleRules.ENERGY_CAP;
       if (own) name.className = 'own';
+      for (const [key, title] of [['move', '이동'], ['attack', '평타'], ['rations', '식량']]) {
+        const label = document.createElement('dt');
+        const value = document.createElement('dd');
+        label.textContent = title;
+        detailValues[key] = value;
+        details.append(label, value);
+      }
+      inspect.addEventListener('click', () => {
+        details.hidden = !details.hidden;
+        inspect.setAttribute('aria-expanded', String(!details.hidden));
+        text(inspectLabel, details.hidden ? '상태' : '닫기');
+        updateCombatUi();
+      });
+      inspect.append(name, inspectLabel);
       stats.append(health, energy);
-      root.append(name, stats, hpMeter, energyMeter);
+      root.append(inspect, stats, hpMeter, energyMeter, details);
       fields.party.append(root);
-      slot = { root, name, health, energy, hpMeter, energyMeter };
+      slot = { root, name, health, energy, hpMeter, energyMeter, details, detailValues };
       party.set(actor.id, slot);
     }
     text(slot.name, `${actor.name}${own ? ' (나)' : ''}`);
@@ -287,6 +359,125 @@ function buttonLabel(button, label) {
   if (button.firstChild.nodeValue !== label + ' ') button.firstChild.nodeValue = label + ' ';
 }
 
+function backpackCounts() {
+  const state = play.frame?.state;
+  const actor = ownActor(state);
+  const gold = (state?.drops ?? []).reduce((total, drop) =>
+    actor && drop.item === 'gold' && drop.pickedBy === actor.id ? total + drop.amount : total, 0);
+  return { ration: actor?.rations ?? 0, gold };
+}
+
+function updateBackpack() {
+  const paused = isPaused(play.frame?.state);
+  const counts = backpackCounts();
+  if (paused || selectedSlot !== -1 && !counts[backpack[selectedSlot]]) selectedSlot = -1;
+  for (let index = 0; index < slotViews.length; index++) {
+    const { button, icon, label, count } = slotViews[index];
+    const item = backpack[index];
+    const amount = counts[item] ?? 0;
+    icon.hidden = label.hidden = count.hidden = amount === 0;
+    icon.dataset.item = item ?? '';
+    button.dataset.empty = String(amount === 0);
+    button.disabled = paused;
+    button.draggable = !paused && amount > 0;
+    button.setAttribute('aria-pressed', String(selectedSlot === index));
+    button.setAttribute('aria-label', amount > 0 ? `${index + 1}번 칸 · ${itemNames[item]} ${amount}` : `${index + 1}번 빈 칸`);
+    if (amount > 0) {
+      text(label, itemNames[item]);
+      text(count, String(amount));
+    }
+  }
+  const hint = paused ? '일시정지 중 · 배낭 보기' : selectedSlot === -1 ? '아이템 칸을 누른 뒤 옮길 칸을 선택하세요.' :
+    `${itemNames[backpack[selectedSlot]]}을 옮길 칸을 선택하세요.`;
+  text(fields['backpack-hint'], hint);
+}
+
+function swapSlots(from, to) {
+  if (isPaused(play.frame?.state)) return;
+  [backpack[from], backpack[to]] = [backpack[to], backpack[from]];
+  selectedSlot = -1;
+  updateBackpack();
+}
+
+function buildBackpack() {
+  for (let index = 0; index < backpack.length; index++) {
+    const button = document.createElement('button');
+    const icon = document.createElement('span');
+    const label = document.createElement('span');
+    const count = document.createElement('span');
+    button.type = 'button';
+    button.className = 'bag-slot';
+    icon.className = 'bag-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    label.className = 'bag-name';
+    count.className = 'bag-count';
+    button.append(icon, label, count);
+    button.addEventListener('click', () => {
+      if (isPaused(play.frame?.state)) return;
+      if (selectedSlot !== -1) {
+        swapSlots(selectedSlot, index);
+      } else if (backpackCounts()[backpack[index]] > 0) {
+        selectedSlot = index;
+        updateBackpack();
+      }
+    });
+    button.addEventListener('dragstart', (event) => {
+      if (isPaused(play.frame?.state) || !(backpackCounts()[backpack[index]] > 0)) {
+        event.preventDefault();
+        return;
+      }
+      selectedSlot = index;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', `noxac-bag:${index}`);
+      updateBackpack();
+    });
+    button.addEventListener('dragend', () => {
+      selectedSlot = -1;
+      updateBackpack();
+    });
+    button.addEventListener('dragover', (event) => { if (selectedSlot !== -1) event.preventDefault(); });
+    button.addEventListener('drop', (event) => {
+      if (selectedSlot === -1 || event.dataTransfer.getData('text/plain') !== `noxac-bag:${selectedSlot}`) return;
+      event.preventDefault();
+      swapSlots(selectedSlot, index);
+    });
+    fields.backpack.append(button);
+    slotViews.push({ button, icon, label, count });
+  }
+}
+
+function pauseStatus(frame, now = performance.now()) {
+  const paused = isPaused(frame.state);
+  const wallTime = frame.wallTime();
+  const cooldown = Math.max(0, (frame.state.pauseReadyAt ?? 0) - wallTime);
+  const waiting = pauseRequest?.paused === paused && now < pauseRequest.until;
+  return { paused, cooldown, remaining: Math.max(0, (frame.state.pausedUntil ?? 0) - wallTime),
+    canToggle: canTogglePause(frame.state) && (paused || cooldown === 0) && !waiting };
+}
+
+function updatePauseUi(frame) {
+  const { paused, cooldown, remaining, canToggle } = pauseStatus(frame);
+  const label = paused ? '계속하기' : cooldown > 0 ? `일시정지 · ${Math.ceil(cooldown / 1000)}초` : '일시정지';
+  buttonLabel(fields.pause, label);
+  fields.pause.dataset.paused = String(paused);
+  fields.pause.disabled = !canToggle;
+  if (paused) {
+    fields['battle-overlay'].hidden = false;
+    text(fields['battle-overlay'], remaining > 0 ? `전술 일시정지 · ${Math.ceil(remaining / 1000)}초` : '재개하는 중…');
+  }
+}
+
+function togglePause() {
+  const frame = play.frame;
+  if (!frame) return;
+  const now = performance.now();
+  const { paused, canToggle } = pauseStatus(frame, now);
+  if (canToggle && play.action('pause')) {
+    pauseRequest = { paused, until: now + 1500 };
+    updatePauseUi(frame);
+  }
+}
+
 function updateCombatUi() {
   const frame = play.frame;
   if (!frame) return;
@@ -297,6 +488,13 @@ function updateCombatUi() {
     const energy = actor.hp > 0 ? BattleRules.energyAt(actor, state.now, now) : 0;
     if (slot.energyMeter.value !== energy) slot.energyMeter.value = energy;
     text(slot.energy, actor.hp > 0 ? `행동력 ${Math.floor(energy + 1e-8)}/${BattleRules.ENERGY_CAP}` : '쓰러짐');
+    if (!slot.details.hidden) {
+      for (const type of ['move', 'attack']) {
+        const wait = Math.max(0, BattleRules.readyAt(actor, type, state.now, state.inCombat) - now);
+        text(slot.detailValues[type], actor.hp === 0 ? '—' : wait > 0 ? `${(Math.ceil(wait / 100) / 10).toFixed(1)}초` : '준비');
+      }
+      text(slot.detailValues.rations, `${actor.rations ?? 0}개`);
+    }
   }
   const player = ownActor(state);
   const active = canAct(state, player);
@@ -310,6 +508,7 @@ function updateCombatUi() {
   fields.attack.disabled = fields['touch-attack'].disabled = !attacking;
   buttonLabel(fields.eat, `식량 ${player?.rations ?? 0}`);
   fields.eat.disabled = fields['touch-eat'].disabled = !active || !player.rations || player.hp >= player.maxHp;
+  updatePauseUi(frame);
 }
 
 function showDrops(state, prior) {
@@ -389,7 +588,7 @@ function moveDungeon(dx, dy, fresh, now) {
   if (ready && state.actors.some((actor) => actor.hp > 0 && actor.x === player.x + dx && actor.y === player.y + dy)) return;
   if (!requestAction('move', dx, dy, null, now)) return;
   lastMoveAt = now;
-  if (ready && state.queued?.type !== 'move') board.predict(dx, dy, now);
+  if (ready && state.queued?.type !== 'move') board.predict(dx, dy, visualTime(now));
 }
 
 function moveInn(dx, dy, now) {
@@ -419,6 +618,7 @@ function changeDirection(now, releasing = false) {
 }
 
 function movement(now) {
+  if (isPaused(play.frame?.state)) return;
   const command = tap ?? (direction?.at <= now ? direction : null);
   if (command) {
     if (play.frame) moveDungeon(command.dx, command.dy, command.fresh, now);
@@ -445,7 +645,7 @@ function movement(now) {
     if (key !== queuedPreview && canStep(state.map, player.x, player.y, queued.dx, queued.dy, true) &&
         !state.actors.some((actor) => actor.hp > 0 && actor.x === player.x + queued.dx && actor.y === player.y + queued.dy)) {
       queuedPreview = key;
-      board.predict(queued.dx, queued.dy, now);
+      board.predict(queued.dx, queued.dy, visualTime(now));
     }
   }
 }
@@ -478,6 +678,16 @@ fields['chat-form'].addEventListener('submit', (event) => {
     if (await play.chat(message) && input.value.trim() === message) input.value = '';
   });
 });
+fields['dungeon-chat-form'].addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!canChat(play.frame?.state)) return;
+  const input = fields['dungeon-chat-message'];
+  const message = input.value.trim();
+  if (!message) return;
+  if ([...message].length > BattleRules.CHAT_LIMIT || /[\p{C}\p{Zl}\p{Zp}]/u.test(message)) {
+    flash(`파티 대화는 한 줄, ${BattleRules.CHAT_LIMIT}자까지 보낼 수 있습니다.`);
+  } else if (play.action('chat', 0, 0, message)) input.value = '';
+});
 fields.match.addEventListener('click', () => void match());
 fields.drink.addEventListener('click', () => void run('drink', async () => { await play.drink(); focusBoard(); }));
 fields.guide.addEventListener('click', () => { if (play.practice()) focusBoard(); });
@@ -487,6 +697,7 @@ fields['touch-attack'].addEventListener('click', () => attack());
 fields['touch-eat'].addEventListener('click', eat);
 fields.return.addEventListener('click', () => void run('return', async () => { await play.returnToInn(); focusBoard(); }));
 fields['help-toggle'].addEventListener('click', toggleHelp);
+fields.pause.addEventListener('click', () => { togglePause(); focusBoard(); });
 board.canvas.addEventListener('click', (event) => {
   const [px, py] = board.point(event);
   const [x, y] = board.cellAt(px, py);
@@ -517,10 +728,14 @@ window.addEventListener('keydown', (event) => {
   const step = keys.get(event.code);
   if (step) {
     event.preventDefault();
-    if (!held.has(event.code)) { held.set(event.code, step); changeDirection(performance.now()); }
+    if (!isPaused(play.frame?.state) && !event.repeat && !held.has(event.code)) {
+      held.set(event.code, step);
+      changeDirection(performance.now());
+    }
   } else if (play.frame && !event.repeat) {
     if (event.code === 'Space' && !event.target?.closest?.('button')) { event.preventDefault(); attack(); }
     if (event.code === 'KeyE') { event.preventDefault(); eat(); }
+    if (event.code === 'KeyP') { event.preventDefault(); togglePause(); }
   }
 });
 window.addEventListener('keyup', (event) => {
@@ -532,7 +747,7 @@ document.addEventListener('focusin', (event) => { if (typing(event.target)) clea
 for (const button of document.querySelectorAll('[data-direction]')) {
   const step = button.dataset.direction.split(',').map(Number);
   button.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || isPaused(play.frame?.state)) return;
     event.preventDefault();
     button.setPointerCapture(event.pointerId);
     held.set(event.pointerId, step);
@@ -552,11 +767,12 @@ for (const button of document.querySelectorAll('[data-direction]')) {
 
 function render(now) {
   movement(now);
-  board.draw(now, selected, destination);
+  board.draw(visualTime(now), selected, destination);
   updateCombatUi();
   updateNotice(now);
   requestAnimationFrame(render);
 }
 
+buildBackpack();
 updateScene();
 requestAnimationFrame(render);

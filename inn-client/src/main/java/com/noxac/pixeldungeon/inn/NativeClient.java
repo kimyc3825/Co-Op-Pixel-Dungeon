@@ -125,6 +125,7 @@ final class NativeClient {
 
     static InnApi.DungeonState dungeonState() { return dungeonFrame == null ? null : dungeonFrame.state(); }
     static long dungeonNow() { return dungeonFrame == null ? 0 : dungeonFrame.serverTime(); }
+    static long dungeonWallNow() { return dungeonFrame == null ? 0 : dungeonFrame.wallTime(); }
     static String dungeonNotice() { return dungeonFrame == null ? "" : dungeonFrame.notice(); }
     static String dungeonConnection() { return dungeonFrame == null ? "" : dungeonFrame.connection().label; }
 
@@ -140,6 +141,19 @@ final class NativeClient {
         if (view == View.DUNGEON) dungeon.action(new InnApi.Action("eat", 0, 0, null));
     }
 
+    static void toggleDungeonPause() {
+        InnApi.DungeonState state = dungeonState();
+        if (view == View.DUNGEON && state != null) {
+            dungeon.action(new InnApi.Action("pause", 0, 0, state.pausedUntil() > 0 ? "resume" : "begin"));
+        }
+    }
+
+    static void dungeonChat(String message) {
+        if (view == View.DUNGEON && message != null && !message.isBlank()) {
+            dungeon.action(new InnApi.Action("chat", 0, 0, message));
+        }
+    }
+
     static void enterSolo() {
         if (view != View.INN) return;
         view = View.SOLO;
@@ -151,6 +165,10 @@ final class NativeClient {
     static boolean inSolo() { return view == View.SOLO; }
 
     static void returnToInn() {
+        returnToInn(null);
+    }
+
+    static void returnToInn(String message) {
         if (view == View.INN) return;
         if (dungeon != null) dungeon.close();
         dungeon = null;
@@ -161,6 +179,7 @@ final class NativeClient {
             inn.returnFromDungeon(true);
         }
         leftInn = false;
+        if (message != null) notice(message);
         ShatteredPixelDungeon.switchNoFade(NativeInnScene.class);
     }
 

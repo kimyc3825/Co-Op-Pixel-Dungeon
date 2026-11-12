@@ -52,8 +52,6 @@ public final class NativeInnScene extends PixelScene {
     private FlatButton mode;
     private FlatButton nick;
     private FlatButton match;
-    private FlatButton solo;
-    private FlatButton guide;
     private FlatButton theme;
     private FlatButton drink;
     private FlatButton compose;
@@ -85,7 +83,7 @@ public final class NativeInnScene extends PixelScene {
         add(presence);
         FlatButton keys = button("F1 도움말", w - 44, 10, 36, 14, false, this::toggleHelp);
         nick = button("닉네임", w - 112, 10, 64, 14, false, this::rename);
-        mode = button("테스트 모드", w - 165, 10, 49, 14, false, this::toggleTestMode);
+        mode = button("여관 길잡이", w - 165, 10, 49, 14, false, this::toggleTestMode);
         keys.enabled(true);
 
         float top = 34;
@@ -108,8 +106,8 @@ public final class NativeInnScene extends PixelScene {
         float panelX = sideX + 5;
         float panelWidth = sidebar - 10;
         match = button("동료 구함", panelX, top + 5, panelWidth, 14, true, this::match);
-        solo = button("혼자 던전 입장", panelX, top + 22, panelWidth, 14, false, NativeClient::enterSolo);
-        guide = button("길잡이와 입장", panelX + panelWidth / 2 + 1, top + 22, panelWidth / 2 - 1, 14,
+        button("원본 녹픽던", panelX, top + 22, panelWidth / 2 - 1, 14, false, NativeClient::enterSolo);
+        button("길잡이 연습", panelX + panelWidth / 2 + 1, top + 22, panelWidth / 2 - 1, 14,
             false, NativeClient::enterPractice);
         theme = button(themeCaption(), panelX, top + 39, panelWidth, 14, false, this::chooseTheme);
         add(label("여관 대화", 7, GOLD, panelX, top + 57));
@@ -196,10 +194,7 @@ public final class NativeInnScene extends PixelScene {
             replace(presence, online ? "접속 " + state.people().size() + "명" : "서버 연결 중");
             presence.hardlight(online ? GREEN : MUTED);
             nick.caption(shortName(NativeClient.nickname()));
-            mode.caption(testMode ? "테스트 모드 켜짐" : "테스트 모드");
-            solo.setSize(testMode ? match.width() / 2 - 1 : match.width(), solo.height());
-            guide.visible = testMode;
-            guide.enabled(testMode);
+            mode.caption(testMode ? "길잡이 켜짐" : "여관 길잡이");
             match.enabled(online);
             match.caption(state != null && state.match() != null ? "던전 연결 중" :
                 state != null && state.queued() ? "구함 취소" : "동료 구함");

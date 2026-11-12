@@ -86,6 +86,14 @@ public class ShatteredPixelDungeon extends Game {
 		
 	}
 
+	public boolean handleRunDeath() {
+		return false;
+	}
+
+	public String runExitLabel() {
+		return null;
+	}
+
 	@Override
 	public void finish() {
 		if (!DeviceCompat.isiOS()) {

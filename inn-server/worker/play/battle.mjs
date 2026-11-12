@@ -12,6 +12,10 @@ const REGEN_POINT_MS = 800;
 const RATION_HEAL = 6;
 const RAT_MOVE_COOLDOWN_MS = 380;
 const AWARENESS = 4;
+const PAUSE_LIMIT_MS = 60_000;
+const PAUSE_COOLDOWN_MS = 60_000;
+const CHAT_LIMIT = 160;
+const CHAT_HISTORY = 16;
 const ENERGY_CAP_UNITS = ENERGY_CAP * REGEN_POINT_MS;
 
 const DIRECTIONS = [
@@ -51,7 +55,7 @@ function readyAt(actor, type, snapshotNow, inCombat) {
 
 export const BattleRules = Object.freeze({
   ENERGY_CAP, MOVE_COST, ATTACK_COST, EAT_COST, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS,
-  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, cost, energyAt, readyAt,
+  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS, CHAT_LIMIT, cost, energyAt, readyAt,
 });
 
 function move(dx, dy) {
@@ -72,6 +76,12 @@ function normalize(action) {
     return attack(action.target);
   } else if (action?.type === 'eat') {
     return { type: 'eat', dx: 0, dy: 0, target: null };
+  } else if (action?.type === 'pause' && (action.target === 'begin' || action.target === 'resume')) {
+    return { type: 'pause', dx: 0, dy: 0, target: action.target };
+  } else if (action?.type === 'chat' && typeof action.target === 'string') {
+    const text = action.target.replace(/[\p{C}\p{Z}]+/gu, ' ').trim();
+    if (!text) return null;
+    return { type: 'chat', dx: 0, dy: 0, target: [...text].slice(0, CHAT_LIMIT).join('').trimEnd() };
   }
   return null;
 }
@@ -135,15 +145,22 @@ function lootRoll(seed, enemyId) {
   return (hash ^ (hash >>> 13)) >>> 0;
 }
 
-/** Browser host simulation for protocol 5, kept in step with the Windows HostBattle. */
+/** Browser host simulation kept in step with the Windows HostBattle. */
 export class HostBattle {
   #id;
   #seed;
   #layout;
   #actors;
   #drops = [];
+  #messages = [];
   #battleAt;
-  #observedAt;
+  #gameObservedAt;
+  #wallObservedAt;
+  #pausedMillis = 0;
+  #pauseStartedAt = 0;
+  #pausedUntil = 0;
+  #pauseReadyAt = 0;
+  #nextMessageId = 0;
   #status = 'active';
   #inCombat = false;
   #revision = 1;
@@ -154,7 +171,7 @@ export class HostBattle {
     this.#layout = dungeonLayout(theme, seed);
     const { host: entrance, partner, enemy1, enemy2 } = this.#layout;
     const ratName = this.#layout.theme === PRISON ? '감옥 쥐' : '하수도 쥐';
-    this.#battleAt = this.#observedAt = Math.trunc(now);
+    this.#battleAt = this.#gameObservedAt = this.#wallObservedAt = Math.trunc(now);
     this.#actors = [
       createActor(host.id, host.name, 'player', entrance, 24, this.#battleAt),
       guest ? createActor(guest.id, guest.name, 'player', partner, 24, this.#battleAt)
@@ -169,9 +186,23 @@ export class HostBattle {
   }
 
   advance(now) {
-    this.#observedAt = Math.max(this.#observedAt, Math.trunc(now));
+    if (this.#status === 'closed') return;
+    this.#wallObservedAt = Math.max(this.#wallObservedAt, Math.trunc(now));
+    if (this.#pausedUntil > 0) {
+      if (this.#wallObservedAt < this.#pausedUntil) return;
+      this.#resume(this.#pausedUntil);
+    }
+    this.#advanceGame(this.#gameTime(this.#wallObservedAt));
+  }
+
+  #gameTime(wallNow) {
+    return (this.#pausedUntil > 0 ? this.#pauseStartedAt : wallNow) - this.#pausedMillis;
+  }
+
+  #advanceGame(now) {
+    this.#gameObservedAt = now;
     while (this.#status === 'active' || this.#status === 'won') {
-      const turn = this.#nextTurn(this.#observedAt);
+      const turn = this.#nextTurn(this.#gameObservedAt);
       if (!turn) break;
       turn.actor.queued = null;
       this.#battleAt = turn.at;
@@ -189,39 +220,76 @@ export class HostBattle {
 
     // A rejected action still acknowledges the command to end retransmissions.
     const normalized = normalize(action);
-    if (!normalized || actor.hp === 0 || !this.#accepts(normalized)) return;
-    const queued = this.#readyAt(actor, normalized) > this.#observedAt;
+    if (!normalized || this.#status === 'closed') return;
+    if (normalized.type === 'chat') {
+      this.#chat(actor, normalized.target);
+      return;
+    }
+    if (normalized.type === 'pause') {
+      this.#pause(normalized.target);
+      return;
+    }
+    if (this.#pausedUntil > 0 || actor.hp === 0 || !this.#accepts(normalized)) return;
+    const queued = this.#readyAt(actor, normalized) > this.#gameObservedAt;
     if (!this.#actionAllowed(actor, normalized, queued)) return;
     if (queued) {
       if (normalized.type === 'move' && actor.queued?.type === 'attack') return;
       actor.queued = normalized;
-      this.#battleAt = this.#observedAt;
+      this.#battleAt = this.#gameObservedAt;
       return;
     }
-    this.#resolve(actor, normalized, this.#observedAt);
-    this.advance(this.#observedAt);
+    this.#resolve(actor, normalized, this.#gameObservedAt);
+    this.#advanceGame(this.#gameObservedAt);
   }
 
   snapshot(selfId, now) {
     const self = this.#find(selfId);
     if (self?.kind !== 'player') throw new TypeError('Unknown player');
-    const snapshotTime = Math.max(this.#observedAt, Math.trunc(now));
+    const wallNow = Math.max(this.#wallObservedAt, Math.trunc(now));
+    const snapshotTime = this.#status === 'closed' ? this.#gameObservedAt : this.#gameTime(wallNow);
     return {
       id: this.#id, selfId, now: snapshotTime, map: this.#layout.map,
       actors: this.#actors.map((actor) => actorSnapshot(actor, snapshotTime)),
       queued: self.queued ? { ...self.queued } : null, status: this.#status, waitingForPartner: false,
       revision: this.#revision, drops: this.#drops.map((drop) => ({ ...drop })),
       commandAck: self.commandAck, inCombat: this.#inCombat, theme: this.#layout.theme,
+      wallNow, pausedUntil: this.#pausedUntil, pauseReadyAt: this.#pauseReadyAt,
+      messages: this.#messages.map((message) => ({ ...message })),
     };
   }
 
   close(now) {
     if (this.#status === 'closed') return;
-    this.#observedAt = Math.max(this.#observedAt, Math.trunc(now));
+    this.#wallObservedAt = Math.max(this.#wallObservedAt, Math.trunc(now));
+    this.#gameObservedAt = this.#gameTime(this.#wallObservedAt);
+    this.#pausedUntil = 0;
     this.#status = 'closed';
     this.#inCombat = false;
     this.#clearQueue();
     this.#revision++;
+  }
+
+  #pause(intent) {
+    if (intent === 'resume' && this.#pausedUntil > 0) {
+      this.#resume(this.#wallObservedAt);
+    } else if (intent === 'begin' && this.#pausedUntil === 0 && this.#wallObservedAt >= this.#pauseReadyAt &&
+        (this.#status === 'active' || this.#status === 'won')) {
+      this.#pauseStartedAt = this.#wallObservedAt;
+      this.#pausedUntil = this.#wallObservedAt + PAUSE_LIMIT_MS;
+    }
+  }
+
+  #resume(wallAt) {
+    // With a late tick, only the portion after the exact deadline advances the simulation.
+    this.#pausedMillis += wallAt - this.#pauseStartedAt;
+    this.#pausedUntil = 0;
+    this.#pauseReadyAt = wallAt + PAUSE_COOLDOWN_MS;
+    this.#revision++;
+  }
+
+  #chat(actor, text) {
+    if (this.#messages.length === CHAT_HISTORY) this.#messages.shift();
+    this.#messages.push({ id: ++this.#nextMessageId, actorId: actor.id, name: actor.name, text });
   }
 
   #find(actorId) {

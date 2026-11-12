@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.noxac.pixeldungeon.inn;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.SplittableRandom;
+import java.util.regex.Pattern;
 
 /** The match's only simulation, run on the host session's executor. */
 final class HostBattle {
     private static final int RAT_MOVE_COOLDOWN_MS = 380;
     private static final int AWARENESS = 4;
+    private static final long PAUSE_LIMIT_MS = 60_000;
+    private static final long PAUSE_COOLDOWN_MS = 60_000;
+    private static final int CHAT_LIMIT = 160;
+    private static final int CHAT_HISTORY = 16;
+    private static final Pattern CHAT_SEPARATORS = Pattern.compile("[\\p{C}\\p{Z}]+");
     // One unit restores each ms after the inactivity delay, with no fractional time rounding.
     private static final int ENERGY_CAP_UNITS = BattleRules.ENERGY_CAP * BattleRules.REGEN_POINT_MS;
     private static final int[][] DIRECTIONS = {
@@ -79,9 +86,16 @@ final class HostBattle {
     private final DungeonLayout layout;
     private final List<Actor> actors;
     private final List<InnApi.Drop> drops = new ArrayList<>(2);
+    private final ArrayDeque<InnApi.PartyChat> messages = new ArrayDeque<>(CHAT_HISTORY);
     private final long seed;
     private long battleAt;
-    private long observedAt;
+    private long gameObservedAt;
+    private long wallObservedAt;
+    private long pausedMillis;
+    private long pauseStartedAt;
+    private long pausedUntil;
+    private long pauseReadyAt;
+    private long nextMessageId;
     private String status = "active";
     private boolean inCombat;
     private int revision = 1;
@@ -95,7 +109,8 @@ final class HostBattle {
         this.seed = seed;
         layout = DungeonLayout.create(theme, seed);
         this.battleAt = now;
-        this.observedAt = now;
+        this.gameObservedAt = now;
+        this.wallObservedAt = now;
         String ratName = DungeonLayout.PRISON.equals(layout.theme()) ? "감옥 쥐" : "하수도 쥐";
         actors = List.of(
             new Actor(host.id(), host.name(), Kind.PLAYER, layout.host(), 24, now),
@@ -111,9 +126,23 @@ final class HostBattle {
     }
 
     void advance(long now) {
-        observedAt = Math.max(observedAt, now);
+        if ("closed".equals(status)) return;
+        wallObservedAt = Math.max(wallObservedAt, now);
+        if (pausedUntil > 0) {
+            if (wallObservedAt < pausedUntil) return;
+            resume(pausedUntil);
+        }
+        advanceGame(gameTime(wallObservedAt));
+    }
+
+    private long gameTime(long wallNow) {
+        return (pausedUntil > 0 ? pauseStartedAt : wallNow) - pausedMillis;
+    }
+
+    private void advanceGame(long now) {
+        gameObservedAt = now;
         while ("active".equals(status) || "won".equals(status)) {
-            Turn turn = nextTurn(observedAt);
+            Turn turn = nextTurn(gameObservedAt);
             if (turn == null) break;
             turn.actor.queued = null;
             battleAt = turn.at;
@@ -131,37 +160,73 @@ final class HostBattle {
 
         // Even a rejected command is acknowledged so the sender can retire its retry.
         InnApi.Action normalized = normalize(action);
-        if (actor.hp == 0 || normalized == null || !accepts(normalized)) return;
-        boolean queued = readyAt(actor, normalized) > observedAt;
+        if (normalized == null || "closed".equals(status)) return;
+        if ("chat".equals(normalized.type())) {
+            chat(actor, normalized.target());
+            return;
+        }
+        if ("pause".equals(normalized.type())) {
+            pause(normalized.target());
+            return;
+        }
+        if (pausedUntil > 0 || actor.hp == 0 || !accepts(normalized)) return;
+        boolean queued = readyAt(actor, normalized) > gameObservedAt;
         if (!actionAllowed(actor, normalized, queued)) return;
         if (queued) {
             if ("move".equals(normalized.type()) && actor.queued != null && "attack".equals(actor.queued.type())) {
                 return;
             }
             actor.queued = normalized;
-            battleAt = observedAt;
+            battleAt = gameObservedAt;
             return;
         }
-        resolve(actor, normalized, observedAt);
-        advance(observedAt);
+        resolve(actor, normalized, gameObservedAt);
+        advanceGame(gameObservedAt);
     }
 
     InnApi.DungeonState snapshot(String selfId, long now) {
         Actor self = find(selfId);
         if (self == null || self.kind != Kind.PLAYER) throw new IllegalArgumentException("Unknown player");
-        long snapshotTime = Math.max(observedAt, now);
+        long wallNow = Math.max(wallObservedAt, now);
+        long snapshotTime = "closed".equals(status) ? gameObservedAt : gameTime(wallNow);
         return new InnApi.DungeonState(id, selfId, snapshotTime, layout.map(),
             actors.stream().map(actor -> actor.snapshot(snapshotTime)).toList(), self.queued, status, false, revision,
-            List.copyOf(drops), self.commandAck, inCombat, layout.theme());
+            List.copyOf(drops), self.commandAck, inCombat, layout.theme(), wallNow, pausedUntil, pauseReadyAt,
+            List.copyOf(messages));
     }
 
     void close(long now) {
         if ("closed".equals(status)) return;
-        observedAt = Math.max(observedAt, now);
+        wallObservedAt = Math.max(wallObservedAt, now);
+        gameObservedAt = gameTime(wallObservedAt);
+        pausedUntil = 0;
         status = "closed";
         inCombat = false;
         clearQueue();
         revision++;
+    }
+
+    private void pause(String intent) {
+        if ("resume".equals(intent) && pausedUntil > 0) {
+            resume(wallObservedAt);
+        } else if ("begin".equals(intent) && pausedUntil == 0 && wallObservedAt >= pauseReadyAt &&
+            ("active".equals(status) || "won".equals(status))) {
+            pauseStartedAt = wallObservedAt;
+            pausedUntil = wallObservedAt + PAUSE_LIMIT_MS;
+        }
+    }
+
+    private void resume(long wallAt) {
+        // With a late tick, only the portion after the exact deadline advances the simulation.
+        pausedMillis += wallAt - pauseStartedAt;
+        pausedUntil = 0;
+        pauseReadyAt = wallAt + PAUSE_COOLDOWN_MS;
+        revision++;
+    }
+
+    private void chat(Actor actor, String text) {
+        if (messages.size() == CHAT_HISTORY) messages.removeFirst();
+        messages.addLast(new InnApi.PartyChat(++nextMessageId, actor.id, actor.name, text));
     }
 
     private static InnApi.Action normalize(InnApi.Action action) {
@@ -176,6 +241,13 @@ final class HostBattle {
             return new InnApi.Action("attack", 0, 0, action.target());
         } else if ("eat".equals(action.type())) {
             return new InnApi.Action("eat", 0, 0, null);
+        } else if ("pause".equals(action.type()) && ("begin".equals(action.target()) || "resume".equals(action.target()))) {
+            return new InnApi.Action("pause", 0, 0, action.target());
+        } else if ("chat".equals(action.type()) && action.target() != null) {
+            String text = CHAT_SEPARATORS.matcher(action.target()).replaceAll(" ").strip();
+            if (text.isEmpty()) return null;
+            int end = text.offsetByCodePoints(0, Math.min(CHAT_LIMIT, text.codePointCount(0, text.length())));
+            return new InnApi.Action("chat", 0, 0, text.substring(0, end).stripTrailing());
         }
         return null;
     }

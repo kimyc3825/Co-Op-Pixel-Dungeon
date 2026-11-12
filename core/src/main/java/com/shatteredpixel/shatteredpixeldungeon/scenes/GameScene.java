@@ -1575,6 +1575,9 @@ public class GameScene extends PixelScene {
 		gameOver.show( 0x000000, 2f );
 		scene.showBanner( gameOver );
 
+		if (Game.instance instanceof ShatteredPixelDungeon
+				&& ((ShatteredPixelDungeon) Game.instance).handleRunDeath()) return;
+
 		StyledButton restart = new StyledButton(Chrome.Type.GREY_BUTTON_TR, Messages.get(StartScene.class, "new"), 9){
 			@Override
 			protected void onClick() {
