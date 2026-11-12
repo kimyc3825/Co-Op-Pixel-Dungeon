@@ -52,7 +52,7 @@ public class HeroSprite extends CharSprite {
 	public HeroSprite() {
 		super();
 		
-		texture( Dungeon.hero.heroClass.spritesheet() );
+		texture( InnHeroAppearance.texture(Dungeon.hero.heroClass) );
 		updateArmor();
 		
 		link( Dungeon.hero );
@@ -64,7 +64,7 @@ public class HeroSprite extends CharSprite {
 	}
 
 	public void disguise(HeroClass cls){
-		texture( cls.spritesheet() );
+		texture( cls == Dungeon.hero.heroClass ? InnHeroAppearance.texture(cls) : cls.spritesheet() );
 		updateArmor();
 	}
 	
@@ -176,14 +176,18 @@ public class HeroSprite extends CharSprite {
 		if (hero.buff(HeroDisguise.class) != null){
 			return avatar(hero.buff(HeroDisguise.class).getDisguise(), hero.tier());
 		} else {
-			return avatar(hero.heroClass, hero.tier());
+			Object texture = hero == Dungeon.hero ? InnHeroAppearance.texture(hero.heroClass) : hero.heroClass.spritesheet();
+			return avatar(texture, hero.tier());
 		}
 	}
 	
 	public static Image avatar( HeroClass cl, int armorTier ) {
-		
+		return avatar(cl.spritesheet(), armorTier);
+	}
+
+	private static Image avatar( Object texture, int armorTier ) {
 		RectF patch = tiers().get( armorTier );
-		Image avatar = new Image( cl.spritesheet() );
+		Image avatar = new Image( texture );
 		RectF frame = avatar.texture.uvRect( 1, 0, FRAME_WIDTH, FRAME_HEIGHT );
 		frame.shift( patch.left, patch.top );
 		avatar.frame( frame );

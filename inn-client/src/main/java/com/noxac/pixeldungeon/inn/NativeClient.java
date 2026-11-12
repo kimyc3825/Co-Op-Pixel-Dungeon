@@ -2,8 +2,9 @@
 package com.noxac.pixeldungeon.inn;
 
 import com.badlogic.gdx.Gdx;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
-import com.shatteredpixel.shatteredpixeldungeon.scenes.StartScene;
+import com.shatteredpixel.shatteredpixeldungeon.scenes.InnAdventureScene;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -185,12 +186,18 @@ final class NativeClient {
         }
     }
 
+    static boolean canEnterSolo() {
+        return inn != null && profileConfirmed && canChooseExpeditionTheme();
+    }
+
     static void enterSolo() {
-        if (view != View.INN || !profileConfirmed) return;
+        if (!canEnterSolo()) return;
+        InnAdventure.configure(nickname, appearance.job(), appearance.hairColor(), appearance.outfitColor(),
+            appearance.hairStyle(), appearance.accessory());
         view = View.SOLO;
         leftInn = true;
         inn.enterDungeon();
-        ShatteredPixelDungeon.switchNoFade(StartScene.class);
+        ShatteredPixelDungeon.switchNoFade(InnAdventureScene.class);
     }
 
     static boolean inSolo() { return view == View.SOLO; }
@@ -201,6 +208,7 @@ final class NativeClient {
 
     static void returnToInn(String message) {
         if (view == View.INN) return;
+        if (inSolo()) InnAdventure.clear();
         if (dungeon != null) dungeon.close();
         dungeon = null;
         dungeonFrame = null;
@@ -221,6 +229,7 @@ final class NativeClient {
 
     static void shutdown() {
         shuttingDown = true;
+        if (inSolo()) InnAdventure.clear();
         if (dungeon != null) dungeon.close();
         if (inn != null) inn.close();
     }

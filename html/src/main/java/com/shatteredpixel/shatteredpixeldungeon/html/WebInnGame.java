@@ -4,6 +4,7 @@ package com.shatteredpixel.shatteredpixeldungeon.html;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.AmuletScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
+import com.shatteredpixel.shatteredpixeldungeon.scenes.InnAdventureScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.RankingsScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.StartScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.SurfaceScene;
@@ -13,8 +14,8 @@ import com.watabou.noosa.tweeners.Delayer;
 final class WebInnGame extends ShatteredPixelDungeon {
     private boolean returning;
 
-    WebInnGame() {
-        super(new WebPlatformSupport(), StartScene.class);
+    WebInnGame(boolean fromInn) {
+        super(new WebPlatformSupport(), fromInn ? InnAdventureScene.class : StartScene.class);
     }
 
     @Override

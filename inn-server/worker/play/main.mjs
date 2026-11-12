@@ -159,6 +159,7 @@ const original = new OriginalGame({
   suspend: () => play.suspendInn(),
   resume: () => play.resumeInn(),
   canLaunch: canLaunchOriginal,
+  getProfile: ownProfile,
   onChange(active) {
     clearMovement();
     showDialogue();
@@ -316,7 +317,7 @@ function isRuntimeLoading() {
 }
 
 function canLaunchOriginal() {
-  return !play.frame && !play.battle && !play.inn?.match && !play.inn?.queued && !isRuntimeLoading() &&
+  return play.online && !profileOpen && !play.frame && !play.battle && !play.inn?.match && !play.inn?.queued && !isRuntimeLoading() &&
     !busy.has('match') && !busy.has('name') && !busy.has('return');
 }
 

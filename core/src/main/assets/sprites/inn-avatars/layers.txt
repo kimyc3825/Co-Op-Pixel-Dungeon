@@ -1,0 +1,5 @@
+8
+natural,slate,forest,wine,ocean
+original,swept,crop,tie
+natural,chestnut,black,silver,auburn
+none,round-glasses,headband,cap

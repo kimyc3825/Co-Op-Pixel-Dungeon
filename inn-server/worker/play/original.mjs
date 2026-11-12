@@ -4,10 +4,11 @@ const BOOT_TIMEOUT = 120_000;
 const SAVE_TIMEOUT = 8_000;
 
 export class OriginalGame {
-  constructor({ suspend, resume, canLaunch, onChange, tips }) {
+  constructor({ suspend, resume, canLaunch, getProfile, onChange, tips }) {
     this.suspend = suspend;
     this.resume = resume;
     this.canLaunch = canLaunch;
+    this.getProfile = getProfile;
     this.onChange = onChange;
     this.tips = tips;
     this.shell = document.getElementById('play-shell');
@@ -21,7 +22,7 @@ export class OriginalGame {
     this.back = document.getElementById('original-return');
     this.tipIndex = 0;
     this.tipTimer = null;
-    this.frame = this.attempt = this.suspending = this.phase = null;
+    this.frame = this.attempt = this.suspending = this.phase = this.launchProfile = null;
     this.deadline = null;
     this.progress = -1;
     document.getElementById('original-launch').addEventListener('click', () => this.start());
@@ -40,6 +41,8 @@ export class OriginalGame {
 
   start() {
     if (this.active || !this.canLaunch()) return;
+    const { name, appearance: { job, hairColor, outfitColor, hairStyle, accessory } } = this.getProfile();
+    this.launchProfile = new URLSearchParams({ name, job, hairColor, outfitColor, hairStyle, accessory });
     this.shell.hidden = true;
     this.screen.hidden = false;
     this.onChange(true);
@@ -76,7 +79,8 @@ export class OriginalGame {
       frame.allow = 'fullscreen; autoplay';
       frame.referrerPolicy = 'no-referrer';
       frame.tabIndex = -1;
-      frame.src = entry;
+      // Keep the profile out of asset requests and their cache keys.
+      frame.src = `${entry}#${this.launchProfile}`;
       this.frame = frame;
       this.progress = -1;
       this.body.prepend(frame);
@@ -163,7 +167,7 @@ export class OriginalGame {
     this.clearFrame();
     this.setPhase('returning', '여관으로 돌아가는 중');
     if (await this.suspending) await this.resume();
-    this.suspending = this.attempt = this.phase = null;
+    this.suspending = this.attempt = this.phase = this.launchProfile = null;
     this.screen.hidden = true;
     this.shell.hidden = false;
     this.onChange(false);

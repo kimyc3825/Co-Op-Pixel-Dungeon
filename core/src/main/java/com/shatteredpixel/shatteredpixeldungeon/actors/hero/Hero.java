@@ -25,6 +25,7 @@ import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Bones;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
@@ -424,6 +425,8 @@ public class Hero extends Char {
 		if (buff(HeroDisguise.class) != null) {
 			return buff(HeroDisguise.class).getDisguise().title();
 		} else {
+			InnAdventure.Profile profile = InnAdventure.profile();
+			if (this == Dungeon.hero && profile != null) return profile.name();
 			return className();
 		}
 	}

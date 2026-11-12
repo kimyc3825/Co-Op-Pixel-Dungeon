@@ -1,4 +1,4 @@
-# Noxac Pixel Dungeon 여관 0.11.0
+# Noxac Pixel Dungeon 여관 0.12.0
 
 This prototype includes the single-player game and artwork from [Shattered Pixel Dungeon v4.0.2](https://github.com/00-Evan/shattered-pixel-dungeon/tree/v4.0.2). Pixel Dungeon is copyright © 2012–2015 Oleg Dolya. Shattered Pixel Dungeon is copyright © 2014–2026 Evan Debenham. The license is included as LICENSE.txt. See the accompanying source archive for the code, artwork, and build scripts.
 

@@ -53,6 +53,7 @@ public final class NativeInnScene extends PixelScene {
     private FlatButton mode;
     private FlatButton profile;
     private FlatButton match;
+    private FlatButton solo;
     private FlatButton theme;
     private FlatButton friendlyFire;
     private FlatButton drink;
@@ -110,7 +111,7 @@ public final class NativeInnScene extends PixelScene {
         float panelX = sideX + 5;
         float panelWidth = sidebar - 10;
         match = button("동료 구함", panelX, top + 5, panelWidth, 14, true, this::match);
-        button("원본 녹픽던", panelX, top + 22, panelWidth / 2 - 1, 14, false, NativeClient::enterSolo);
+        solo = button("1인 원정", panelX, top + 22, panelWidth / 2 - 1, 14, false, NativeClient::enterSolo);
         button("길잡이 연습", panelX + panelWidth / 2 + 1, top + 22, panelWidth / 2 - 1, 14,
             false, NativeClient::enterPractice);
         theme = button(themeCaption(), panelX, top + 39, panelWidth, 14, false, this::chooseTheme);
@@ -182,6 +183,7 @@ public final class NativeInnScene extends PixelScene {
         boolean testMode = NativeClient.isTestMode();
         boolean profileConfirmed = NativeClient.profileConfirmed();
         profile.enabled(!profileConfirmed || NativeClient.canChooseExpeditionTheme());
+        solo.enabled(NativeClient.canEnterSolo());
         theme.enabled(NativeClient.canChooseExpeditionTheme());
         friendlyFire.enabled(NativeClient.canChooseExpeditionTheme());
         if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode) {
@@ -307,11 +309,11 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private static String themeCaption() {
-        return "원정 지역 · " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme());
+        return "ATB 지역 · " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme());
     }
 
     private static String friendlyFireCaption() {
-        return NativeClient.friendlyFire() ? "아군 피해 · 켜짐" : "아군 피해 · 꺼짐";
+        return NativeClient.friendlyFire() ? "ATB 아군 피해 · 켜짐" : "ATB 아군 피해 · 꺼짐";
     }
 
     private void toggleFriendlyFire() {
@@ -340,7 +342,7 @@ public final class NativeInnScene extends PixelScene {
         destination = null;
         keyboard.reset();
         modalOpen = true;
-        add(new WndOptions("원정 지역", "파티 원정은 파티장의 선택을 따릅니다. 길잡이 훈련에도 적용됩니다.",
+        add(new WndOptions("ATB 원정 지역", "파티 원정은 파티장의 선택을 따릅니다. 길잡이 훈련에도 적용됩니다.",
                 NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS),
                 NativeClient.expeditionThemeTitle(DungeonLayout.PRISON)) {
             @Override

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Build layered inn portraits from Shattered Pixel Dungeon's tier-zero hero sprites.
+"""Build layered inn and original-game portraits from the upstream hero sprites.
 
 Run from any directory with Python 3 and Pillow installed.
 Upstream hero art © Oleg Dolya and Evan Debenham, GPL-3.0-or-later.
@@ -14,6 +14,8 @@ from PIL import Image, ImageOps
 FRAME_WIDTH = 12
 FRAME_HEIGHT = 15
 FRAME_COUNT = 18
+ADVENTURE_FRAME_COUNT = 21
+LAYER_COLUMNS = 8
 DEATH_FRAMES = range(8, 13)
 JOBS = {
     "warrior": "전사", "mage": "마법사", "rogue": "도적", "huntress": "사냥꾼",
@@ -150,7 +152,7 @@ def place_shape(image, eye, shape, palette):
                 image.putpixel((x, y), palette[int(pixel)])
 
 
-def extract_layers(frame, job, eye):
+def extract_layers(frame, job, eye, recolor_clothes=True):
     hair_palette, accents = SOURCE_HAIR[job]
     hair_tones = {color: i for i, color in enumerate(colors(hair_palette))}
     hair_tones.update((rgba(color), tone) for color, tone in accents.items())
@@ -163,7 +165,7 @@ def extract_layers(frame, job, eye):
             pixel = frame.getpixel(point)
             if y <= eye[1] + 3 and pixel in hair_tones:
                 hair[point] = (pixel, hair_tones[pixel])
-            elif y >= 8 and pixel in cloth_tones:
+            elif recolor_clothes and y >= 8 and pixel in cloth_tones:
                 cloth[point] = (pixel, cloth_tones[pixel])
             else:
                 continue
@@ -200,9 +202,10 @@ def hairstyle_layer(job, eye, hair, style, color):
     return image
 
 
-def frame_layers(source, job, frame_index):
+def frame_layers(source, job, frame_index, tier=0):
     left = frame_index * FRAME_WIDTH
-    frame = source.crop((left, 0, left + FRAME_WIDTH, FRAME_HEIGHT))
+    top = tier * FRAME_HEIGHT
+    frame = source.crop((left, top, left + FRAME_WIDTH, top + FRAME_HEIGHT))
     if frame_index in DEATH_FRAMES:
         return [frame]
     # The second idle cell is drawn facing left by upstream.
@@ -210,7 +213,7 @@ def frame_layers(source, job, frame_index):
     if mirrored:
         frame = ImageOps.mirror(frame)
     eye = eyes(frame)
-    base, hair, cloth = extract_layers(frame, job, eye)
+    base, hair, cloth = extract_layers(frame, job, eye, recolor_clothes=tier == 0)
     layers = [base]
     layers.extend(fabric_layer(cloth, entry["id"]) for entry in CATALOG["outfitColors"])
     layers.extend(hairstyle_layer(job, eye, hair, style, entry["id"])
@@ -234,14 +237,36 @@ def build_atlas(source_path, output_path, job):
     atlas.save(output_path, optimize=True)
 
 
+def build_adventure_atlas(source_path, output_path, job):
+    with Image.open(source_path) as png:
+        source = png.convert("RGBA")
+    layers = 1 + len(CATALOG["outfitColors"]) + len(HAIR_STYLES) * len(CATALOG["hairColors"]) + len(ACCESSORIES)
+    width, height = source.size
+    atlas = Image.new("RGBA", (LAYER_COLUMNS * width, ((layers + LAYER_COLUMNS - 1) // LAYER_COLUMNS) * height))
+    for tier in range(7):
+        for frame in range(ADVENTURE_FRAME_COUNT):
+            for row, layer in enumerate(frame_layers(source, job, frame, tier)):
+                x = row % LAYER_COLUMNS * width + frame * FRAME_WIDTH
+                y = row // LAYER_COLUMNS * height + tier * FRAME_HEIGHT
+                atlas.paste(layer, (x, y))
+    atlas.save(output_path, optimize=True)
+
+
 def main():
     repo = Path(__file__).resolve().parents[2]
     upstream = repo / "core/src/main/assets/sprites"
     play = repo / "inn-server/worker/play"
     avatars = play / "assets/avatars"
     avatars.mkdir(parents=True, exist_ok=True)
+    adventure_avatars = upstream / "inn-avatars"
+    adventure_avatars.mkdir(exist_ok=True)
+    layout = [str(LAYER_COLUMNS)]
+    for option in ("outfitColors", "hairStyles", "hairColors", "accessories"):
+        layout.append(",".join(entry["id"] for entry in CATALOG[option]))
+    (adventure_avatars / "layers.txt").write_text("\n".join(layout) + "\n", encoding="utf-8", newline="\n")
     for job in JOBS:
         build_atlas(upstream / f"{job}.png", avatars / f"{job}.png", job)
+        build_adventure_atlas(upstream / f"{job}.png", adventure_avatars / f"{job}.png", job)
 
     data = json.dumps(CATALOG, ensure_ascii=False, indent=2)
     (avatars / "catalog.json").write_text(data + "\n", encoding="utf-8", newline="\n")

@@ -143,4 +143,7 @@ public class WebJS {
 	@JSBody(params = "key", script = "try { return new URLSearchParams(location.search).get(key); } catch (e) { return null; }")
 	public static native String queryParam(String key);
 
+	@JSBody(params = "key", script = "return window.parent === window ? null : new URLSearchParams(location.hash.slice(1)).get(key);")
+	public static native String innProfileField(String key);
+
 }

@@ -25,6 +25,7 @@ import com.badlogic.gdx.Files;
 import com.badlogic.gdx.utils.Os;
 import com.badlogic.gdx.utils.SharedLibraryLoader;
 import com.github.xpenatan.gdx.teavm.backends.web.WebApplicationConfiguration;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.watabou.noosa.Game;
 import com.watabou.utils.FileUtils;
 
@@ -106,7 +107,13 @@ public class WebLauncher {
 		config.baseUrlProvider = new WebBaseUrl();
 		config.preloadListener = assetLoader -> assetLoader.loadScript("freetype.js");
 
-		GameThread game = new GameThread(new WebInnGame());
+		String innName = WebJS.innProfileField("name");
+		boolean fromInn = innName != null && !innName.isBlank();
+		if (fromInn) {
+			InnAdventure.configure(innName, WebJS.innProfileField("job"), WebJS.innProfileField("hairColor"),
+					WebJS.innProfileField("outfitColor"), WebJS.innProfileField("hairStyle"), WebJS.innProfileField("accessory"));
+		}
+		GameThread game = new GameThread(new WebInnGame(fromInn));
 		new SPDWebApplication(game, new WebPreloader(), config);
 	}
 
