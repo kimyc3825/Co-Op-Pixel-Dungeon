@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules, PRISON } from './rules.mjs';
-import { Board, DIRECTIONS, canStep, canStrike, nextToward } from './board.mjs';
+import { Board, DIRECTIONS, canStep, canStrike, energyBand, nextToward } from './board.mjs';
 import { OriginalGame, warmOriginalRuntime } from './original.mjs';
 import { PlaySession } from './session.mjs';
 import { AvatarCatalog, normalizeAppearance } from './avatar-catalog.mjs';
@@ -826,9 +826,11 @@ function updateCombatUi() {
     const actor = slot.actor;
     const energy = actor.hp > 0 ? BattleRules.energyAt(actor, state.now, now) : 0;
     if (slot.energyMeter.value !== energy) slot.energyMeter.value = energy;
-    const ratio = energy / BattleRules.ENERGY_CAP;
-    const band = ratio > .5 ? 'high' : ratio > .25 ? 'low' : 'critical';
-    if (slot.root.dataset.energy !== band) slot.root.dataset.energy = band;
+    const { name, color } = energyBand(energy);
+    if (slot.root.dataset.energy !== name) {
+      slot.root.dataset.energy = name;
+      slot.root.style.setProperty('--energy-color', color);
+    }
     text(slot.energy, actor.hp > 0 ? `행동력 ${Math.floor(energy + 1e-8)}/${BattleRules.ENERGY_CAP}` : '쓰러짐');
     if (!slot.details.hidden) {
       for (const type of ['move', 'attack', 'shoot']) {

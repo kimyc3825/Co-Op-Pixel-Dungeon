@@ -35,6 +35,9 @@ final class DungeonActorView extends Group {
     private final RenderedTextBlock healthChange;
     private final ColorBlock healthBack;
     private final ColorBlock healthFill;
+    private final ColorBlock atbBack;
+    private final ColorBlock atbFill;
+    private float atbFraction;
     private final Group sweat;
     private final ColorBlock[][] sweatDrops;
     private final ColorBlock fatigueBack;
@@ -104,6 +107,9 @@ final class DungeonActorView extends Group {
         int color = enemy ? NativeDungeonScene.ENEMY : own || dummy ? NativeDungeonScene.SELF : NativeDungeonScene.ALLY;
         healthBack = NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xE8131715);
         healthFill = NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xFF000000 | color);
+        boolean partyMember = "player".equals(actor.kind()) || "guide".equals(actor.kind());
+        atbBack = partyMember ? NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xEC333E34) : null;
+        atbFill = partyMember ? NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xFFFFFFFF) : null;
         String nick = actor.name();
         if (nick.codePointCount(0, nick.length()) > 9) nick = nick.substring(0, nick.offsetByCodePoints(0, 8)) + "…";
         name = NativeDungeonScene.label(overlay, enemy ? "" : nick, 6, color, 0, 0, 65);
@@ -152,6 +158,14 @@ final class DungeonActorView extends Group {
 
     Group overlay() { return overlay; }
     Group speechOverlay() { return speechOverlay; }
+
+    void showAtb(float fraction, int color) {
+        if (atbFill == null) return;
+        atbFraction = fraction;
+        atbFill.hardlight(color);
+        atbFill.visible = fraction > 0;
+        atbFill.size(atbBack.width() * fraction, atbBack.height());
+    }
 
     void waitForEnergy(boolean waiting) {
         if (sweat != null && sweat.visible != waiting) {
@@ -316,11 +330,22 @@ final class DungeonActorView extends Group {
         shadow.y = base - shadow.height() / 2;
         shadow.visible = actor.hp() > 0 || deadTime < 0.38f;
         float healthWidth = tile * 0.71f;
-        healthBack.x = healthFill.x = center - healthWidth / 2;
-        healthBack.y = healthFill.y = base + scale;
-        healthBack.size(healthWidth, 2 * scale);
-        healthFill.size(healthWidth * Math.max(0, actor.hp()) / Math.max(1, actor.maxHp()), 2 * scale);
-        healthBack.visible = healthFill.visible = actor.hp() > 0;
+        boolean partyMember = atbBack != null;
+        float barHeight = partyMember ? scale : 2 * scale;
+        float barCenter = partyMember ? sprite.x + sprite.width() / 2 : center;
+        float healthTop = partyMember ? sprite.y + sprite.height() + .25f * scale : base + scale;
+        healthBack.x = healthFill.x = barCenter - healthWidth / 2;
+        healthBack.y = healthFill.y = healthTop;
+        healthBack.size(healthWidth, barHeight);
+        healthFill.size(healthWidth * Math.max(0, actor.hp()) / Math.max(1, actor.maxHp()), barHeight);
+        healthBack.visible = partyMember || actor.hp() > 0;
+        healthFill.visible = actor.hp() > 0;
+        if (partyMember) {
+            atbBack.x = atbFill.x = healthBack.x;
+            atbBack.y = atbFill.y = healthTop + 1.5f * scale;
+            atbBack.size(healthWidth, barHeight);
+            atbFill.size(healthWidth * atbFraction, barHeight);
+        }
 
         name.visible = actor.hp() > 0 && !name.text().isBlank();
         if (name.visible) name.setPos(center - name.width() / 2, sprite.y - 7);

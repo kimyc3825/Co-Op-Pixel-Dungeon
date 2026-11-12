@@ -1611,6 +1611,8 @@ public final class NativeDungeonScene extends PixelScene {
             int color = InnAtbMeter.colorForFraction(remaining);
             charge.size(width * remaining, 2);
             charge.hardlight(color);
+            DungeonActorView view = actorViews.get(actor.id());
+            if (view != null) view.showAtb(remaining, color);
             energyLabel.hardlight(active && actor.hp() > 0 ? color : MUTED);
             String balance = "행동 " + (int) (energy + 1e-8) + "/" + BattleRules.ENERGY_CAP;
             setText(energyLabel, actor.hp() == 0 ? "쓰러짐" : active ? balance : "대기");

@@ -12,6 +12,11 @@ const WALL_HEIGHT = TILE * WALL_SOURCE_HEIGHT / ATLAS_TILE;
 const IMPACT_MS = 590;
 const SPEECH_LINES = 3;
 const SPEECH_SEGMENTER = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const ENERGY_BANDS = {
+  high: { name: 'high', color: '#91cbb0' },
+  low: { name: 'low', color: '#e5b766' },
+  critical: { name: 'critical', color: '#ef8580' },
+};
 const INN_VIEW_WIDTH = 15 * TILE;
 const INN_VIEW_HEIGHT = 10 * TILE;
 const INN_ZOOM = [.55, .75, 1, 1.25, 1.5, 2];
@@ -24,6 +29,11 @@ const NPC_COLORS = ['#9a8a73', '#ba8452', '#74997a', '#a982a3', '#b9986e'];
 const INN = ['############', '#BBBBBBBB..#', '#..........#', '#..TT..TT..#', '#..........#',
   '#..TT..TT..#', '#..........#', '#....DD....#', '############'];
 export const DIRECTIONS = [[1, 0], [-1, 0], [0, -1], [0, 1], [1, -1], [-1, -1], [1, 1], [-1, 1]];
+
+export function energyBand(energy) {
+  const ratio = energy / BattleRules.ENERGY_CAP;
+  return ratio > .5 ? ENERGY_BANDS.high : ratio > .25 ? ENERGY_BANDS.low : ENERGY_BANDS.critical;
+}
 
 function speechLines(context, text, width) {
   const letters = SPEECH_SEGMENTER ? [...SPEECH_SEGMENTER.segment(text)].map(({ segment }) => segment) : [...text];
@@ -554,7 +564,7 @@ export class Board {
     }
     while (rowIndex < rows.length) this.drawWallRow(rows[rowIndex++]);
     for (const { figure, npc, tool } of objects) {
-      if (figure) this.drawFigureLabels(figure, now);
+      if (figure) this.drawFigureLabels(figure, now, gameNow);
       if (figure && figure === fatigued) this.drawSweat(figure, now);
       if (npc) this.caption(npc.name, (npc.x + .5) * TILE, Math.max(9, npc.y * TILE - 5), '#f5d9a9');
       const prop = tool && TRAINING_PROPS.get(tool.id);
@@ -823,7 +833,7 @@ export class Board {
     context.restore();
   }
 
-  drawFigureLabels(figure, now) {
+  drawFigureLabels(figure, now, gameNow) {
     const { actor } = figure;
     if (actor.hp === 0) return;
     const own = actor.id === this.snapshot?.selfId;
@@ -835,6 +845,14 @@ export class Board {
     if (this.dungeon) {
       paint(context, '#222620', x - 11, y + 1, 22, 3);
       paint(context, enemy || dummy ? '#dd957b' : own ? '#dfb96c' : '#9bd2c0', x - 11, y + 1, 22 * actor.hp / actor.maxHp, 3);
+      if (actor.kind === 'player' || actor.kind === 'guide') {
+        const snapshotNow = this.snapshot.now;
+        const energy = BattleRules.energyAt(actor, snapshotNow, gameNow ?? snapshotNow);
+        const { color } = energyBand(energy);
+        paint(context, '#222620', x - 11, y + 5, 22, 3);
+        paint(context, color + '45', x - 11, y + 5, 22, 3);
+        if (energy > 0) paint(context, color, x - 11, y + 5, 22 * energy / BattleRules.ENERGY_CAP, 3);
+      }
     }
     if (!enemy && !actor.queued) {
       if (figure.captionName !== actor.name) {

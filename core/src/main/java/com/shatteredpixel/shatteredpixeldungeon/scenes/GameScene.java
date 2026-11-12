@@ -102,6 +102,7 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.CharHealthIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.GameLog;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
 import com.shatteredpixel.shatteredpixeldungeon.ui.InnAtbMeter;
+import com.shatteredpixel.shatteredpixeldungeon.ui.InnHeroVitals;
 import com.shatteredpixel.shatteredpixeldungeon.ui.InventoryPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.LootIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.MenuPane;
@@ -326,6 +327,7 @@ public class GameScene extends PixelScene {
 		hero.place( Dungeon.hero.pos );
 		hero.updateArmor();
 		mobs.add( hero );
+		if (InnAdventure.atb()) healthIndicators.add(new InnHeroVitals(Dungeon.hero));
 		
 		for (Mob mob : Dungeon.level.mobs) {
 			addMobSprite( mob );
