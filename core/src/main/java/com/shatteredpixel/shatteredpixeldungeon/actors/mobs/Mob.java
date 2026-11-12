@@ -936,6 +936,11 @@ public abstract class Mob extends Char {
 		return enemy == ch;
 	}
 
+	public boolean seesTarget(Char ch) {
+		return ch != null && enemy == ch && enemySeen && ch.invisible <= 0
+				&& (fieldOfView == null || ch.pos >= 0 && ch.pos < fieldOfView.length && fieldOfView[ch.pos]);
+	}
+
 	@Override
 	public void damage( int dmg, Object src ) {
 

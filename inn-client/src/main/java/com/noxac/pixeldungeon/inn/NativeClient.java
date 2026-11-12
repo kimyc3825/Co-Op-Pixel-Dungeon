@@ -2,16 +2,19 @@
 package com.noxac.pixeldungeon.inn;
 
 import com.badlogic.gdx.Gdx;
+import com.google.gson.Gson;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.InnAdventureScene;
 
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.prefs.Preferences;
 
 final class NativeClient {
     private enum View { INN, ENTERING, DUNGEON, SOLO }
+    private record DefeatLine(String text, String author) {}
 
     private static final Preferences SETTINGS = Preferences.userNodeForPackage(NativeClient.class);
     private static InnApi api;
@@ -22,6 +25,7 @@ final class NativeClient {
     private static View view = View.INN;
     private static String ignoredMatch;
     private static String innNotice = "";
+    private static String defeatNotice;
     private static long noticeUntil;
     private static String nickname;
     private static InnApi.Appearance appearance;
@@ -235,8 +239,36 @@ final class NativeClient {
         returnToInn(null);
     }
 
+    static void returnDefeated() {
+        if (view == View.INN) return;
+        defeatNotice = chooseDefeatLine();
+        returnToInn(null);
+    }
+
+    static String takeDefeatNotice() {
+        String notice = defeatNotice;
+        defeatNotice = null;
+        return notice;
+    }
+
+    private static String chooseDefeatLine() {
+        try {
+            String source = Gdx.files.internal("inn/defeat-lines.json").readString("UTF-8");
+            DefeatLine[] lines = new Gson().fromJson(source, DefeatLine[].class);
+            DefeatLine line = lines[ThreadLocalRandom.current().nextInt(lines.length)];
+            return "“" + line.text() + "”\n— " + line.author();
+        } catch (RuntimeException unavailable) {
+            return "여관으로 돌아왔습니다.";
+        }
+    }
+
     static void returnToInn(String message) {
         if (view == View.INN) return;
+        InnApi.DungeonState outcome = dungeonState();
+        if (outcome != null && ("lost".equals(outcome.status()) || outcome.actors().stream()
+                .anyMatch(actor -> outcome.selfId().equals(actor.id()) && actor.hp() <= 0))) {
+            defeatNotice = chooseDefeatLine();
+        }
         if (inSolo()) {
             InnAdventure.retreat();
             InnAdventure.clear();

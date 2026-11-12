@@ -27,6 +27,7 @@ import com.shatteredpixel.shatteredpixeldungeon.Bones;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
+import com.shatteredpixel.shatteredpixeldungeon.InnEncounter;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
@@ -832,7 +833,7 @@ public class Hero extends Char {
 				atbIndependent = true;
 				atbMoving = true;
 				atbMoveAt = Actor.now() + 0.225f * time;
-				if (time > 0 && visibleEnemies() > 0) InnAtb.spend(1);
+				if (time > 0 && innEncounter.phase().costsMovement()) InnAtb.spend(1);
 				break;
 			case MELEE:
 				atbIndependent = true;
@@ -851,6 +852,7 @@ public class Hero extends Char {
 
 	private enum AtbSpend { NORMAL, MOVE, MELEE, WAIT }
 	private AtbSpend atbSpend = AtbSpend.NORMAL;
+	private final InnEncounter innEncounter = new InnEncounter();
 	// Only movement and melee replace the original hero-wide cooldown.
 	private boolean atbIndependent;
 	private volatile boolean atbMoving;
@@ -909,7 +911,16 @@ public class Hero extends Char {
 	}
 
 	private boolean atbHasMoveEnergy() {
-		return visibleEnemies() == 0 || buff(GreaterHaste.class) != null || InnAtb.canSpend(1);
+		return !innEncounter.phase().costsMovement() || buff(GreaterHaste.class) != null || InnAtb.canSpend(1);
+	}
+
+	public InnEncounter innEncounter() {
+		return innEncounter;
+	}
+
+	public void observeInnEncounter() {
+		Level level = Dungeon.level;
+		if (level != null) innEncounter.observe(this, level, level.mobs.toArray(new Mob[0]));
 	}
 
 	private boolean atbHasMeleeEnergy() {
@@ -1864,7 +1875,8 @@ public class Hero extends Char {
 		boolean newMob = false;
 
 		Mob target = null;
-		for (Mob m : Dungeon.level.mobs.toArray(new Mob[0])) {
+		Mob[] mobs = Dungeon.level.mobs.toArray(new Mob[0]);
+		for (Mob m : mobs) {
 			if (fieldOfView[ m.pos ] && m.landmark() != null){
 				Notes.add(m.landmark());
 			}
@@ -1909,6 +1921,7 @@ public class Hero extends Char {
 		}
 
 		visibleEnemies = visible;
+		if (InnAdventure.atb()) innEncounter.observe(this, Dungeon.level, mobs);
 
 		//we also scan for blob landmarks here
 		for (Blob b : Dungeon.level.blobs.values().toArray(new Blob[0])){

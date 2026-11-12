@@ -54,10 +54,11 @@
 		// Detaching the frame can dispatch this after the backend input has been disposed.
 		if (exiting) event.stopImmediatePropagation();
 	}, true);
-	function notifyParent(type, percent) {
+	function notifyParent(type, percent, reason) {
 		if (window.parent === window) return;
 		var message = { type: type };
 		if (typeof percent === "number") message.percent = percent;
+		if (reason === "death") message.reason = reason;
 		window.parent.postMessage(message, location.origin);
 	}
 	spd.ready = function () {
@@ -101,13 +102,13 @@
 		var text = $("crash-text").textContent;
 		if (navigator.clipboard) navigator.clipboard.writeText(text);
 	};
-	spd.exit = function () {
+	spd.exit = function (reason) {
 		if (finished) return;
 		finished = true;
 		exiting = true;
 		$("closed").classList.remove("hidden");
 		if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen();
-		notifyParent("noxac-original-exit");
+		notifyParent("noxac-original-exit", null, reason);
 	};
 	window.addEventListener("error", function (e) {
 		// script failed to load or an error escaped the game loop

@@ -46,7 +46,7 @@ final class NativeGame extends ShatteredPixelDungeon {
         scene.add(new Delayer(1.5f) {
             @Override
             protected void onComplete() {
-                NativeClient.returnToInn("원본 던전에서 사망하여 여관으로 돌아왔습니다.");
+                NativeClient.returnDefeated();
             }
         });
         return true;

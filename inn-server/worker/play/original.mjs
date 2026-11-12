@@ -133,7 +133,7 @@ export class OriginalGame {
   onMessage(event) {
     if (!this.frame || event.source !== this.frame.contentWindow || event.origin !== window.location.origin ||
         this.phase === 'returning') return;
-    const { type, percent } = event.data ?? {};
+    const { type, percent, reason } = event.data ?? {};
     if (type === 'noxac-original-progress' && this.phase === 'loading' &&
         Number.isInteger(percent) && percent >= 0 && percent <= 100 && percent > this.progress) {
       this.progress = percent;
@@ -150,7 +150,7 @@ export class OriginalGame {
       if (this.phase === 'retreating') void this.returnToInn();
       else this.fail('원본 게임이 중단되었습니다');
     } else if (type === 'noxac-original-exit') {
-      void this.returnToInn();
+      void this.returnToInn(reason === 'death' ? reason : undefined);
     }
   }
 
@@ -182,7 +182,7 @@ export class OriginalGame {
     this.setPhase('failed', label);
   }
 
-  async returnToInn() {
+  async returnToInn(reason) {
     if (this.phase === 'returning') return;
     this.attempt?.abort();
     this.clearFrame();
@@ -192,6 +192,6 @@ export class OriginalGame {
     this.suspending = this.attempt = this.phase = this.launchProfile = null;
     this.screen.hidden = true;
     this.shell.hidden = false;
-    this.onChange(false);
+    this.onChange(false, reason);
   }
 }

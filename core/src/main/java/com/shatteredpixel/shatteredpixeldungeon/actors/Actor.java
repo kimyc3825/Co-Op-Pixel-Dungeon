@@ -386,9 +386,9 @@ public abstract class Actor implements Bundlable {
 					if (doNext && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
 						doNext = false;
 						current = null;
-					} else if (timed && doNext && acting instanceof Mob && hero != null
-							&& hero.atbCanSkipIdle() && hero.fieldOfView != null && !Game.switchingScene()) {
-						hero.checkVisibleMobs();
+					} else if (timed && acting instanceof Mob && hero != null && !Game.switchingScene()) {
+						if (doNext && hero.atbCanSkipIdle() && hero.fieldOfView != null) hero.checkVisibleMobs();
+						else hero.observeInnEncounter();
 					}
 				}
 			} else {

@@ -658,12 +658,14 @@ final class NativeInnBoard extends Group {
     private final class Figure extends Group {
         private final InnMotion motion;
         private final boolean companion;
+        private final boolean player;
         private final int npcColumn;
         private final Image sprite;
         private final String baseSprite;
         private final ColorBlock marker;
-        private final ColorBlock nameplate = new ColorBlock(1, 1, 0xe1231817);
-        private final RenderedTextBlock label = PixelScene.renderTextBlock(5);
+        private final ColorBlock nameplateEdge;
+        private final ColorBlock nameplate;
+        private final RenderedTextBlock label;
         private final ColorBlock mug = new ColorBlock(3, 3, 0xffe8b75f);
         private Image sign;
         private RenderedTextBlock signText;
@@ -677,17 +679,22 @@ final class NativeInnBoard extends Group {
         Figure(InnMotion motion, String name, boolean own, boolean companion, int npcColumn) {
             this.motion = motion;
             this.companion = companion;
+            player = npcColumn < 0 && !companion;
             this.npcColumn = npcColumn;
             baseSprite = npcColumn >= 0 ? NPC_SPRITES : own ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
             sprite = new Image(baseSprite);
             marker = new ColorBlock(1, 1, own ? 0xffefbb77 : companion ? 0xff98d4eb : 0x99231613);
+            nameplateEdge = player ? new ColorBlock(1, 1, own ? 0xefba8b57 : 0xea8e7259) : null;
+            nameplate = new ColorBlock(1, 1, player ? 0xf0241c1a : 0xe1231817);
+            label = PixelScene.renderTextBlock(player ? 8 : 5, !player);
             add(marker);
             add(sprite);
             add(mug);
+            if (nameplateEdge != null) add(nameplateEdge);
             add(nameplate);
             add(label);
             label.setHightlighting(false);
-            label.hardlight(own ? GOLD : companion ? BLUE : CREAM);
+            label.hardlight(own ? 0xffe6ad : companion ? BLUE : CREAM);
             rename(name);
         }
 
@@ -721,7 +728,8 @@ final class NativeInnBoard extends Group {
 
         void placeSpeech(long now) {
             if (speech != null) {
-                float anchor = sign != null && sign.visible ? sign.y : nameplate.y;
+                float anchor = nameplateEdge == null ? nameplate.y : nameplateEdge.y;
+                if (sign != null && sign.visible) anchor = Math.min(anchor, sign.y);
                 speech.place(sprite.x + sprite.width() / 2, anchor, sprite.y, depth, now);
             }
         }
@@ -730,7 +738,8 @@ final class NativeInnBoard extends Group {
             if (value.equals(name)) return;
             name = value;
             int letters = name.codePointCount(0, name.length());
-            label.text(letters <= 10 ? name : name.substring(0, name.offsetByCodePoints(0, 9)) + "…");
+            int limit = player ? 12 : 10;
+            label.text(letters <= limit ? name : name.substring(0, name.offsetByCodePoints(0, limit - 1)) + "…");
         }
 
         void seeking(boolean enabled) {
@@ -766,31 +775,34 @@ final class NativeInnBoard extends Group {
             marker.size(10, 2);
             marker.x = center - marker.width() / 2;
             marker.y = depth;
-            float labelX = Math.max(2, Math.min(mapWidth - label.width() - 2, center - label.width() / 2));
-            float labelY = Math.max(1, sprite.y - label.height() - (companion ? 8 : 2));
+            int side = player ? 3 : 1;
+            int pad = player ? 2 : 1;
+            float labelX = pixel(Math.clamp(center - label.width() / 2,
+                side + 1, Math.max(side + 1, mapWidth - label.width() - side - 1)));
+            float labelY = pixel(Math.max(pad + 1, sprite.y - label.height() - (companion ? 8 : player ? 4 : 2)));
             label.setPos(labelX, labelY);
-            nameplate.size(label.width() + 2, label.height() + 2);
-            nameplate.x = labelX - 1;
-            nameplate.y = labelY - 1;
+            nameplate.size(label.width() + side * 2, label.height() + pad * 2);
+            nameplate.x = labelX - side;
+            nameplate.y = labelY - pad;
+            if (nameplateEdge != null) {
+                nameplateEdge.size(nameplate.width() + 2, nameplate.height() + 2);
+                nameplateEdge.x = nameplate.x - 1;
+                nameplateEdge.y = nameplate.y - 1;
+            }
             mug.visible = pose.drinkSeconds() >= 0;
             mug.x = center + (pose.facingLeft() ? -6 : 4);
             mug.y = sprite.y + (float) Math.min(pose.drinkSeconds() * 8, 6);
             if (sign != null && sign.visible) {
                 sign.scale.set(.72f);
-                sign.x = Math.max(1, Math.min(mapWidth - sign.width() - 1, center - sign.width() / 2));
-                sign.y = Math.max(0, labelY - sign.height() + 2);
-                if (sign.y + sign.height() >= labelY + 2) {
-                    label.visible = false;
-                    nameplate.visible = false;
-                } else {
-                    label.visible = true;
-                    nameplate.visible = true;
-                }
-                signText.setPos(sign.x + (sign.width() - signText.width()) / 2, sign.y + 3);
-            } else {
-                label.visible = true;
-                nameplate.visible = true;
+                sign.x = pixel(Math.max(1, Math.min(mapWidth - sign.width() - 1, center - sign.width() / 2)));
+                float above = nameplate.y - sign.height() - 2;
+                sign.y = pixel(above >= 0 ? above : Math.min(mapHeight - sign.height(), depth + 3));
+                signText.setPos(pixel(sign.x + (sign.width() - signText.width()) / 2), pixel(sign.y + 3));
             }
+        }
+
+        private float pixel(float value) {
+            return Math.round(value * boardCamera.zoom) / boardCamera.zoom;
         }
     }
 }

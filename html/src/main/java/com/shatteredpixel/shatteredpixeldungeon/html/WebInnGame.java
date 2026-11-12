@@ -41,7 +41,7 @@ final class WebInnGame extends ShatteredPixelDungeon {
         scene.add(new Delayer(1.5f) {
             @Override
             protected void onComplete() {
-                returnToInn();
+                returnToInn(true);
             }
         });
         return true;
@@ -53,10 +53,14 @@ final class WebInnGame extends ShatteredPixelDungeon {
     }
 
     void returnToInn() {
+        returnToInn(false);
+    }
+
+    private void returnToInn(boolean defeated) {
         if (returning) return;
         returning = true;
         InnAdventure.retreat();
         pause();
-        WebJS.exit();
+        WebJS.exit(defeated);
     }
 }

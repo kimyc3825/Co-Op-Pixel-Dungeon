@@ -782,6 +782,7 @@ public class WndSettings extends WndTabbed {
 		CheckBox chkUpdates;
 		CheckBox chkBetas;
 		CheckBox chkWifi;
+		RedButton license;
 
 		@Override
 		protected void createChildren() {
@@ -840,6 +841,22 @@ public class WndSettings extends WndTabbed {
 				chkWifi.checked(SPDSettings.WiFi());
 				add(chkWifi);
 			}
+
+			license = new RedButton(Messages.get(this, "license")) {
+				@Override
+				protected void onClick() {
+					ShatteredPixelDungeon.scene().addToFront(new WndOptions(Icons.get(Icons.INFO),
+							Messages.get(DataTab.this, "license"), Messages.get(DataTab.this, "license_info"),
+							Messages.get(DataTab.this, "license_text"), Messages.get(DataTab.this, "source")) {
+						@Override
+						protected void onSelect(int index) {
+							ShatteredPixelDungeon.platform.openURI(index == 0 ? "https://www.gnu.org/licenses/gpl-3.0.html" :
+									"https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.15.12");
+						}
+					});
+				}
+			};
+			add(license);
 		}
 
 		@Override
@@ -872,7 +889,8 @@ public class WndSettings extends WndTabbed {
 				pos = chkWifi.bottom();
 			}
 
-			height = pos;
+			license.setRect(0, pos + 3 * GAP, width, BTN_HEIGHT);
+			height = license.bottom();
 
 		}
 	}

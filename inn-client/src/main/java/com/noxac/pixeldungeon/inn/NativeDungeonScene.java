@@ -14,6 +14,7 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Window;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndSettings;
 import com.watabou.input.KeyEvent;
 import com.watabou.input.PointerEvent;
 import com.watabou.input.ScrollEvent;
@@ -122,6 +123,9 @@ public final class NativeDungeonScene extends PixelScene {
     private RenderedTextBlock pauseCountdown;
     private RenderedTextBlock floorTitle;
     private RenderedTextBlock floorStatus;
+    private RenderedTextBlock encounterLabel;
+    private ColorBlock encounterBackdrop;
+    private ColorBlock encounterStripe;
     private RenderedTextBlock queueLabel;
     private RenderedTextBlock fireLabel;
     private RenderedTextBlock notice;
@@ -259,7 +263,10 @@ public final class NativeDungeonScene extends PixelScene {
         pauseButton = button(hud, "정지 · P", this::togglePause);
         pauseButton.setRect(right - 117, top, 50, 17);
         floorTitle = label(hud, NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS), 7, SELF, left, top + 30, 56);
-        floorStatus = label(hud, " ", 6, TEXT, left + 58, top + 31, right - left - 114);
+        encounterBackdrop = panel(hud, left + 57, top + 27, 47, 14, 0xF0262522);
+        encounterStripe = panel(hud, left + 57, top + 27, 2, 14, 0xFFFFFFFF);
+        encounterLabel = label(hud, "", 7, MUTED, left + 62, top + 30, 40);
+        floorStatus = label(hud, " ", 6, TEXT, left + 109, top + 31, right - left - 165);
         fireLabel = label(hud, " ", 6, MUTED, right - 54, top + 31, 54);
 
         StyledButton bag = button(hud, "배낭", () -> showPanel(BackpackWindow::new));
@@ -341,6 +348,10 @@ public final class NativeDungeonScene extends PixelScene {
         long receipt = System.nanoTime();
         for (DungeonActorView view : actorViews.values()) view.expireSpeech(receipt);
         super.update();
+        if (self != null && party[1].actor != null) {
+            DungeonActorView ally = actorViews.get(party[1].actor.id());
+            if (ally != null) ally.separateNicknameFrom(actorViews.get(self.id()));
+        }
         world.sort(WORLD_DEPTH);
     }
 
@@ -352,6 +363,7 @@ public final class NativeDungeonScene extends PixelScene {
         InnApi.DungeonState prior = state;
         InnApi.Combatant priorSelf = self;
         state = next;
+        updateEncounterBadge();
         boolean paused = paused();
         // The actor layer remains visible while its interpolation and sprite animations are stopped.
         world.active = !paused;
@@ -454,8 +466,7 @@ public final class NativeDungeonScene extends PixelScene {
         boolean solo = isSoloAtb();
         floorSummary = (practice ? "길잡이 훈련" : solo ? "1인 ATB 원정" : "2인 원정") +
             ("won".equals(next.status()) ? "   ·   소탕 완료" :
-            training && enemies == 0 ? "   ·   허수아비 훈련" :
-                (next.inCombat() ? "   ·   교전" : "   ·   탐색") + "   ·   남은 적 " + enemies);
+            training && enemies == 0 ? "   ·   허수아비 훈련" : "   ·   남은 적 " + enemies);
         if (!"active".equals(next.status()) && !"won".equals(next.status())) {
             showWaiting(switch (next.status()) {
                 case "lost" -> solo ? "쓰러졌습니다" : "파티가 쓰러졌습니다";
@@ -486,6 +497,31 @@ public final class NativeDungeonScene extends PixelScene {
             image.destroy();
         }
         images.clear();
+    }
+
+    private void updateEncounterBadge() {
+        boolean visible = state != null && !state.waitingForPartner() && "active".equals(state.status());
+        encounterBackdrop.visible = encounterStripe.visible = visible;
+        if (!visible) {
+            setText(encounterLabel, "");
+            return;
+        }
+        String encounter = state.encounter();
+        int color = switch (encounter) {
+            case "alert" -> 0xF4D28F;
+            case "combat" -> 0xF3A699;
+            case "pursuit" -> 0xF3B580;
+            default -> 0xC4CFB8;
+        };
+        String name = switch (encounter) {
+            case "alert" -> "적 경계";
+            case "combat" -> "교전";
+            case "pursuit" -> "추격";
+            default -> "탐색";
+        };
+        encounterStripe.hardlight(color);
+        encounterLabel.hardlight(color);
+        setText(encounterLabel, name);
     }
 
     private void showTrainingTools(InnApi.DungeonState next, InnApi.Combatant priorSelf) {
@@ -1199,9 +1235,20 @@ public final class NativeDungeonScene extends PixelScene {
 
     private void openGameMenu() {
         showPanel(() -> {
-            DungeonWindow menu = new DungeonWindow("원정 메뉴", 112, 67);
+            DungeonWindow menu = new DungeonWindow("원정 메뉴", 112, 89);
             button(menu, "계속하기", menu::hide).setRect(4, 22, 104, 18);
-            button(menu, "여관으로", this::leave).setRect(4, 44, 104, 18);
+            button(menu, "설정", () -> {
+                menu.hide();
+                showPanel(() -> new WndSettings() {
+                    @Override
+                    public void destroy() {
+                        if (panelWindow == this) panelWindow = null;
+                        movement.reset();
+                        super.destroy();
+                    }
+                });
+            }).setRect(4, 44, 104, 18);
+            button(menu, "여관으로", this::leave).setRect(4, 66, 104, 18);
             return menu;
         });
     }

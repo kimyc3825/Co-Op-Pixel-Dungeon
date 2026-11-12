@@ -521,9 +521,11 @@ public class GameScene extends PixelScene {
 		add(boss);
 
 		if (InnAdventure.atb()) {
+			Dungeon.hero.innEncounter().advance(Dungeon.level, 0);
 			InnAtbMeter meter = new InnAtbMeter();
 			meter.camera = uiCamera;
-			meter.setRect((uiCamera.width - 68) / 2f, Math.max(screentop + 26, boss.bottom() + 2), 68, 14);
+			meter.setRect((uiCamera.width - InnAtbMeter.WIDTH) / 2f, Math.max(screentop + 26, boss.bottom() + 2),
+					InnAtbMeter.WIDTH, InnAtbMeter.HEIGHT);
 			add(meter);
 		}
 
@@ -913,7 +915,10 @@ public class GameScene extends PixelScene {
 		if (InnAdventure.atb()) {
 			// UI windows hold the world and energy. Clamp delayed frames rather than fast-forwarding.
 			float elapsed = Math.min(0.1f, Game.elapsed);
-			if (!atbBlocked) InnAtb.advance(elapsed);
+			if (!atbBlocked) {
+				InnAtb.advance(elapsed);
+				if (Dungeon.hero.innAtbActive()) Dungeon.hero.innEncounter().advance(Dungeon.level, elapsed);
+			}
 			Actor.updateAtb(elapsed, atbBlocked);
 		}
 

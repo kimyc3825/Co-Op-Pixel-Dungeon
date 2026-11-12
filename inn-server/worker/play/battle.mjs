@@ -10,6 +10,9 @@ const { ENERGY_CAP, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS, SHOOT_RANGE, SHOOT_DAM
   CHAT_LIMIT, cost } = BattleRules;
 const RAT_MOVE_COOLDOWN_MS = 380;
 const AWARENESS = 4;
+const SIGHT_RANGE = 6;
+const CONTACT_HOLD_MS = 450;
+const PURSUIT_HOLD_MS = 2400;
 const CHAT_HISTORY = 16;
 const ATTACK_HISTORY = 16;
 const ENERGY_CAP_UNITS = ENERGY_CAP * REGEN_POINT_MS;
@@ -151,6 +154,15 @@ function awareOf(observer, target) {
   return target.hp > 0 && opponents(observer, target) && distance(observer.x, observer.y, target) <= AWARENESS;
 }
 
+function visibleThrough(map, from, target) {
+  let { x, y } = from;
+  for (const cell of projectilePath(x, y, target)) {
+    if (!stepAllowed(map, x, y, cell.x - x, cell.y - y)) return false;
+    ({ x, y } = cell);
+  }
+  return true;
+}
+
 function lootRoll(seed, enemyId) {
   // Mix the seed and enemy ID independently so loot does not depend on kill order.
   let hash = 0x811c9dc5;
@@ -185,7 +197,9 @@ export class HostBattle {
   #nextAttackEventId = 0;
   #nextProjectileId = 0;
   #status = 'active';
-  #inCombat = false;
+  #encounter = 'exploration';
+  #contactUntil = 0;
+  #pursuitUntil = 0;
   #revision = 1;
 
   constructor(id, host, guest, now, seed, theme = SEWERS, friendlyFire = false, practice = !guest) {
@@ -215,8 +229,8 @@ export class HostBattle {
         { id: 'ration-rack', x: partner.x - 1, y: partner.y + 1 },
         { id: 'recovery-kit', x: partner.x + 1, y: partner.y + 1 },
       ];
-      this.#inCombat = this.#engaged();
     }
+    this.#updateEncounter(this.#battleAt);
   }
 
   get revision() {
@@ -243,6 +257,7 @@ export class HostBattle {
       const turn = this.#nextTurn(this.#gameObservedAt);
       const projectile = this.#nextProjectile(this.#gameObservedAt);
       if (!turn && !projectile) break;
+      this.#updateEncounter(Math.min(turn?.at ?? Infinity, projectile?.stepAt ?? Infinity));
       if (projectile && (!turn || projectile.stepAt < turn.at)) {
         this.#battleAt = projectile.stepAt;
         this.#stepProjectile(projectile);
@@ -253,6 +268,7 @@ export class HostBattle {
       }
       this.#revision++;
     }
+    this.#updateEncounter(now);
   }
 
   input(actorId, sequence, action, now) {
@@ -297,7 +313,7 @@ export class HostBattle {
       queued: self.queued ? { ...self.queued } : null, status: this.#status, waitingForPartner: false,
       revision: this.#revision, drops: this.#drops.map((drop) => ({ ...drop })),
       identifiedItems: Array.from(this.#identifiedPotions, item => ({ item, effect: this.#potionEffect(item) })),
-      commandAck: self.commandAck, inCombat: this.#inCombat, theme: this.#layout.theme,
+      commandAck: self.commandAck, inCombat: this.#combatCosts(), encounter: this.#encounter, theme: this.#layout.theme,
       ...(this.#trainingTools.length > 0 && { trainingTools: this.#trainingTools.map((tool) => ({ ...tool })) }),
       wallNow, pausedUntil: this.#pausedUntil, pauseReadyAt: this.#pauseReadyAt,
       messages: this.#messages.map((message) => ({ ...message })),
@@ -315,7 +331,7 @@ export class HostBattle {
     this.#gameObservedAt = this.#gameTime(this.#wallObservedAt);
     this.#pausedUntil = 0;
     this.#status = 'closed';
-    this.#inCombat = false;
+    this.#updateEncounter(this.#gameObservedAt);
     this.#clearQueue();
     this.#projectiles.length = 0;
     this.#revision++;
@@ -392,7 +408,7 @@ export class HostBattle {
   }
 
   #costUnits(actor, action) {
-    return actor.kind === 'enemy' ? 0 : cost(action.type, this.#inCombat) * REGEN_POINT_MS;
+    return actor.kind === 'enemy' ? 0 : cost(action.type, this.#combatCosts()) * REGEN_POINT_MS;
   }
 
   #readyAt(actor, action) {
@@ -442,7 +458,7 @@ export class HostBattle {
     actor.actionSeq++;
     actor.lastAction = action.type;
     this.#updateOutcome();
-    this.#inCombat = this.#status === 'active' && this.#engaged();
+    this.#updateEncounter(at);
   }
 
   #potionEffect(item) {
@@ -509,7 +525,7 @@ export class HostBattle {
     } else {
       this.#hit(owner, 'shoot', target, SHOOT_DAMAGE, stepAt);
       this.#updateOutcome();
-      this.#inCombat = this.#status === 'active' && this.#engaged();
+      this.#updateEncounter(stepAt);
     }
   }
 
@@ -543,12 +559,47 @@ export class HostBattle {
     }
   }
 
-  #engaged() {
+  #combatCosts() {
+    return this.#encounter === 'combat' || this.#encounter === 'pursuit';
+  }
+
+  #updateEncounter(at) {
     const dummy = this.#find(DUMMY_ID);
-    if (dummy && this.#actors.some((actor) => actor.kind === 'player' && actor.hp > 0 &&
-        distance(actor.x, actor.y, dummy) <= DUMMY_COMBAT_RANGE)) return true;
-    return this.#actors.some((enemy) => enemy.kind === 'enemy' && enemy.hp > 0 &&
-      this.#actors.some((partyMember) => awareOf(enemy, partyMember)));
+    let activeEnemy = false;
+    let visible = false;
+    let aware = false;
+    let contact = false;
+    if (this.#status === 'active') {
+      for (const enemy of this.#actors) {
+        if (enemy.kind !== 'enemy' || enemy.hp <= 0) continue;
+        activeEnemy = true;
+        for (const member of this.#actors) {
+          if (member.hp <= 0 || member.kind !== 'player' && member.kind !== 'guide') continue;
+          const range = distance(enemy.x, enemy.y, member);
+          if (range > SIGHT_RANGE) continue;
+          const seen = visibleThrough(this.#layout.map, member, enemy);
+          visible ||= seen;
+          if (range <= AWARENESS) {
+            aware = true;
+            contact ||= seen;
+          }
+        }
+      }
+    }
+    if (activeEnemy) {
+      if (contact) this.#contactUntil = at + CONTACT_HOLD_MS;
+      if (aware) this.#pursuitUntil = at + PURSUIT_HOLD_MS;
+    } else {
+      this.#contactUntil = this.#pursuitUntil = 0;
+    }
+    const training = this.#status === 'active' && dummy && this.#actors.some(actor =>
+      actor.kind === 'player' && actor.hp > 0 && distance(actor.x, actor.y, dummy) <= DUMMY_COMBAT_RANGE);
+    const next = training || contact || at < this.#contactUntil ? 'combat' :
+      aware || at < this.#pursuitUntil ? 'pursuit' : visible ? 'alert' : 'exploration';
+    if (next !== this.#encounter) {
+      this.#encounter = next;
+      this.#revision++;
+    }
   }
 
   #updateOutcome() {

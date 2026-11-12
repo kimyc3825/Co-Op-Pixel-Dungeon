@@ -1,22 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.shatteredpixel.shatteredpixeldungeon.ui;
 
+import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
+import com.shatteredpixel.shatteredpixeldungeon.InnEncounter;
+import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.ui.Component;
 
 /** Compact action budget indicator for the original game HUD. */
 public final class InnAtbMeter extends Component {
+    public static final int WIDTH = 68;
+    public static final int HEIGHT = 22;
     private ColorBlock back;
     private ColorBlock track;
     private ColorBlock fill;
+    private ColorBlock encounterDot;
     private RenderedTextBlock text;
+    private RenderedTextBlock encounterText;
     private int lastValue = -1;
     private int lastColor = -1;
+    private InnEncounter.Phase lastPhase;
 
     public InnAtbMeter() {
-        setSize(68, 14);
+        setSize(WIDTH, HEIGHT);
     }
 
     @Override
@@ -25,6 +33,8 @@ public final class InnAtbMeter extends Component {
         add(track = new ColorBlock(1, 1, 0xFF333E34));
         add(fill = new ColorBlock(1, 1, 0xFFFFFFFF));
         add(text = PixelScene.renderTextBlock(6));
+        add(encounterDot = new ColorBlock(3, 3, 0xFFFFFFFF));
+        add(encounterText = PixelScene.renderTextBlock(6));
     }
 
     @Override
@@ -33,9 +43,12 @@ public final class InnAtbMeter extends Component {
         back.y = y;
         back.size(width, height);
         track.x = fill.x = x + 2;
-        track.y = fill.y = y + 10;
+        track.y = fill.y = y + 18;
         track.size(width - 4, 2);
         text.setPos(x + 3, y + 1);
+        encounterDot.x = x + 3;
+        encounterDot.y = y + 11;
+        encounterText.setPos(x + 9, y + 9);
         refresh();
     }
 
@@ -66,5 +79,21 @@ public final class InnAtbMeter extends Component {
             lastValue = value;
             text.text("ATB  " + value + "/" + (int) InnAtb.CAPACITY);
         }
+        InnEncounter.Phase phase = Dungeon.hero == null ? InnEncounter.Phase.EXPLORE : Dungeon.hero.innEncounter().phase();
+        if (lastPhase != phase) {
+            lastPhase = phase;
+            switch (phase) {
+                case ALERT: showEncounter("alert", 0xE5B766); break;
+                case ENGAGED: showEncounter("engaged", 0xEF8580); break;
+                case PURSUIT: showEncounter("pursuit", 0xF29F71); break;
+                default: showEncounter("explore", 0x91CBB0);
+            }
+        }
+    }
+
+    private void showEncounter(String key, int color) {
+        encounterText.text(Messages.get(InnAtbMeter.class, key));
+        encounterText.hardlight(color);
+        encounterDot.hardlight(color);
     }
 }

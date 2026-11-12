@@ -18,12 +18,17 @@
       <div class="top-actions">
         <button type="button" id="pause" class="hud-button" hidden>일시정지 <kbd>P</kbd></button>
         <button type="button" id="help-toggle" class="hud-button" aria-controls="help" aria-expanded="false" aria-keyshortcuts="F8">조작법 <kbd>F8</kbd></button>
+        <button type="button" class="hud-button" data-open-settings aria-controls="settings-dialog" aria-haspopup="dialog">설정</button>
       </div>
     </header>
 
     <div class="layout" data-profile-entry="true">
       <section class="stage" aria-labelledby="board-title">
-        <header class="stage-heading"><h2 id="board-title" class="sr-only">여관 홀</h2><span id="board-status">모험가 대기 중</span></header>
+        <header class="stage-heading">
+          <h2 id="board-title" class="sr-only">여관 홀</h2>
+          <span id="encounter-status" class="encounter-status" role="status" hidden></span>
+          <span id="board-status">모험가 대기 중</span>
+        </header>
         <div class="canvas-wrap">
           <canvas id="board" class="game-board" width="384" height="288" tabindex="0" aria-label="여관 지도. 칸을 누르거나 방향키로 이동합니다."></canvas>
           <aside id="help" class="help" hidden aria-label="조작법">
@@ -43,7 +48,13 @@
             </dl>
           </aside>
           <aside id="inn-dialogue" class="inn-dialogue" aria-labelledby="npc-name" hidden>
-            <div><h3 id="npc-name"></h3><p id="npc-dialogue" aria-live="polite"></p></div>
+            <div>
+              <h3 id="npc-name"></h3><p id="npc-dialogue" aria-live="polite"></p>
+              <details id="npc-lessons" class="npc-lessons" hidden>
+                <summary>행동력과 전투 상태</summary>
+                <div id="npc-lessons-content"></div>
+              </details>
+            </div>
             <button id="npc-close" type="button">닫기</button>
           </aside>
           <p id="battle-overlay" class="battle-overlay" hidden></p>
@@ -146,7 +157,7 @@
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 1인 저장</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.15.11/NoxacPixelDungeon-Inn-0.15.11-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.15.11</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.15.12/NoxacPixelDungeon-Inn-0.15.12-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.15.12</a>
             </div>
           </section>
 
@@ -198,7 +209,10 @@
   <section id="original-screen" class="original-screen" aria-labelledby="original-title" hidden>
     <header class="original-header">
       <h1 id="original-title">원본 1인 저장</h1>
-      <button id="original-return" type="button">여관으로</button>
+      <div class="top-actions">
+        <button type="button" data-open-settings aria-controls="settings-dialog" aria-haspopup="dialog">설정</button>
+        <button id="original-return" type="button">여관으로</button>
+      </div>
     </header>
     <div id="original-body" class="original-body">
       <div id="original-loading" class="loading-overlay">
@@ -209,5 +223,18 @@
       </div>
     </div>
   </section>
+  <dialog id="settings-dialog" class="game-window settings-dialog" aria-labelledby="settings-heading">
+    <form method="dialog" class="window-title">
+      <h2 id="settings-heading">설정</h2>
+      <button aria-label="닫기">×</button>
+    </form>
+    <p>Noxac Pixel Dungeon 0.15.12</p>
+    <p>이 게임은 Evan Debenham의 Shattered Pixel Dungeon 4.0.2를 기반으로 하며 GNU 일반 공중 사용 허가서(GPL) 버전 3 이상에 따라 배포됩니다.</p>
+    <ul class="settings-links">
+      <li><a href="/play/LICENSE.txt" target="_blank" rel="noopener">GPL 라이선스 전문</a></li>
+      <li><a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.15.12" target="_blank" rel="noopener">Noxac Pixel Dungeon 0.15.12 소스 코드</a></li>
+      <li><a href="https://github.com/00-Evan/shattered-pixel-dungeon" target="_blank" rel="noopener">Shattered Pixel Dungeon 원본 소스</a></li>
+    </ul>
+  </dialog>
 </body>
 </html>

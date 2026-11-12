@@ -74,6 +74,7 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
 }
 .brand h1 { font-size: clamp(.98rem, 2.8vw, 1.18rem); line-height: 1.2; }
 .top-actions { display: flex; align-items: center; gap: 5px; pointer-events: auto; }
+.top-actions button { white-space: nowrap; }
 .status { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: .68rem; color: var(--muted); }
 .status::before { content: ""; width: 5px; height: 5px; background: currentColor; }
 .status[data-tone="live"] { color: var(--green); }
@@ -81,9 +82,19 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
 .status[data-tone="offline"] { color: var(--hurt); }
 .stage-heading {
   position: absolute; z-index: 2; left: var(--left); top: calc(var(--top) + 57px);
+  display: flex; align-items: center; gap: 5px;
   color: var(--paper); font-size: .72rem; text-shadow: 1px 2px #11110e; pointer-events: none;
 }
 #board-status { padding: 3px 6px; background: #181911ca; }
+.encounter-status {
+  --encounter-color: var(--green);
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px;
+  border: 1px solid var(--encounter-color); background: #191b14f4; color: var(--encounter-color); white-space: nowrap;
+}
+.encounter-status::before { content: ""; width: 5px; height: 5px; background: currentColor; }
+.encounter-status[data-encounter="alert"] { --encounter-color: #f3d68a; }
+.encounter-status[data-encounter="combat"] { --encounter-color: #ff9e87; }
+.encounter-status[data-encounter="pursuit"] { --encounter-color: #ffbc77; }
 #pause[data-paused="true"] { border-color: #bd9559; color: var(--gold); }
 
 .game-interface { z-index: 3; pointer-events: none; }
@@ -134,6 +145,11 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
 .window-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 5px; border-bottom: 1px solid #514735; }
 .window-title h2 { font-size: .98rem; color: var(--gold); }
 .window-title button { min-width: 29px; min-height: 28px; padding: 0; font-size: 1.18rem; line-height: 1; }
+.settings-dialog { width: min(420px, calc(100% - var(--left) - var(--right))); max-height: 85dvh; overflow: auto; font-size: .86rem; line-height: 1.5; }
+.settings-dialog:not([open]) { display: none; }
+.settings-dialog::backdrop { background: #10110da8; }
+.settings-links { display: grid; gap: 5px; margin: 0; padding-left: 18px; }
+.settings-links a { color: var(--gold); overflow-wrap: anywhere; }
 .expedition-window, .backpack-window {
   position: absolute; z-index: 4; right: var(--right); bottom: calc(var(--bottom) + var(--dock));
   width: 330px; max-height: calc(100dvh - var(--top) - var(--bottom) - var(--dock) - 44px);
@@ -315,11 +331,17 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
 .inn-dialogue {
   left: 50%; bottom: calc(var(--bottom) + var(--dock) + 76px);
   transform: translateX(-50%); width: min(440px, calc(100% - var(--left) - var(--right)));
-  display: flex; justify-content: space-between; gap: 8px; padding: 9px; text-align: left;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 9px; text-align: left;
+  max-height: min(46dvh, 385px); overflow: auto; overscroll-behavior: contain;
 }
+.inn-dialogue > div { min-width: 0; }
 .inn-dialogue h3 { margin: 0 0 3px; color: var(--gold); font-size: .85rem; }
 .inn-dialogue p { font-size: .79rem; line-height: 1.4; overflow-wrap: anywhere; }
 .inn-dialogue button { min-height: 30px; flex: 0 0 auto; padding: 4px 7px; font-size: .75rem; }
+.npc-lessons { margin-top: 7px; border-top: 1px solid #514735; padding-top: 6px; }
+.npc-lessons summary { color: var(--gold); font-size: .8rem; cursor: pointer; }
+.npc-lessons section + section { margin-top: 8px; }
+.npc-lessons h4 { margin: 6px 0 2px; color: var(--paper); font-size: .79rem; }
 .battle-overlay {
   left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 86%; width: max-content;
   padding: 12px 14px; text-align: center; pointer-events: none;
@@ -355,6 +377,9 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
 }
 
 @media (max-width: 480px) {
+  .masthead .top-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .masthead .top-actions .hud-button { min-height: 33px; padding-inline: 6px; font-size: .73rem; }
+  .masthead .top-actions kbd { display: none; }
   .profile-card { grid-template-columns: minmax(0, 1fr); padding: 11px; gap: 9px; }
   .profile-art { min-height: 95px; height: min(19dvh, 138px); }
   .profile-preview { width: min(19dvh, 138px); }

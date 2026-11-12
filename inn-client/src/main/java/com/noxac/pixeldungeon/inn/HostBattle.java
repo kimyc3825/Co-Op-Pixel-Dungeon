@@ -153,7 +153,12 @@ final class HostBattle {
     private long nextEventId;
     private long nextProjectileId;
     private String status = "active";
-    private boolean inCombat;
+    private static final int SIGHT_RANGE = 6;
+    private static final long CONTACT_HOLD_MS = 450;
+    private static final long PURSUIT_HOLD_MS = 2400;
+    private String encounter = "exploration";
+    private long contactUntil;
+    private long pursuitUntil;
     private int revision = 1;
 
     HostBattle(String id, InnApi.Person host, InnApi.Person guestOrNull, long now, long seed) {
@@ -211,7 +216,7 @@ final class HostBattle {
             trainingTools = List.of();
         }
         actors = List.copyOf(participants);
-        if (trainingDummy != null) inCombat = engaged();
+        updateEncounter(now);
     }
 
     private static Actor player(InnApi.Person person, DungeonLayout.Cell start, long now, int hp, int food) {
@@ -244,6 +249,9 @@ final class HostBattle {
         while ("active".equals(status) || "won".equals(status)) {
             Turn turn = nextTurn(gameObservedAt);
             Shot shot = nextProjectile(gameObservedAt);
+            if (turn == null && shot == null) break;
+            updateEncounter(Math.min(turn == null ? Long.MAX_VALUE : turn.at,
+                shot == null ? Long.MAX_VALUE : shot.stepAt));
             if (turn != null && (shot == null || turn.at <= shot.stepAt)) {
                 turn.actor.queued = null;
                 battleAt = turn.at;
@@ -256,6 +264,7 @@ final class HostBattle {
             }
             revision++;
         }
+        updateEncounter(now);
     }
 
     void input(String actorId, long sequence, InnApi.Action action, long now) {
@@ -298,10 +307,10 @@ final class HostBattle {
         long snapshotTime = "closed".equals(status) ? gameObservedAt : gameTime(wallNow);
         return new InnApi.DungeonState(id, selfId, snapshotTime, layout.map(),
             actors.stream().map(actor -> actor.snapshot(snapshotTime)).toList(), self.queued, status, false, revision,
-            List.copyOf(drops), self.commandAck, inCombat, layout.theme(), wallNow, pausedUntil, pauseReadyAt,
+            List.copyOf(drops), self.commandAck, combatCosts(), layout.theme(), wallNow, pausedUntil, pauseReadyAt,
             List.copyOf(messages), friendlyFire, List.copyOf(attackEvents),
             projectiles.stream().map(Shot::snapshot).toList(), trainingTools,
-            identifiedPotions.stream().map(item -> new InnApi.ItemKnowledge(item, potionEffect(item))).toList());
+            identifiedPotions.stream().map(item -> new InnApi.ItemKnowledge(item, potionEffect(item))).toList(), encounter);
     }
 
     void close(long now) {
@@ -310,7 +319,7 @@ final class HostBattle {
         gameObservedAt = gameTime(wallObservedAt);
         pausedUntil = 0;
         status = "closed";
-        inCombat = false;
+        updateEncounter(gameObservedAt);
         clearQueue();
         projectiles.clear();
         revision++;
@@ -459,7 +468,7 @@ final class HostBattle {
     }
 
     private int costUnits(Actor actor, InnApi.Action action) {
-        return actor.kind == Kind.ENEMY ? 0 : BattleRules.cost(action.type(), inCombat) * BattleRules.REGEN_POINT_MS;
+        return actor.kind == Kind.ENEMY ? 0 : BattleRules.cost(action.type(), combatCosts()) * BattleRules.REGEN_POINT_MS;
     }
 
     private long readyAt(Actor actor, InnApi.Action action) {
@@ -539,7 +548,7 @@ final class HostBattle {
 
     private void updateBattleState() {
         updateOutcome();
-        inCombat = "active".equals(status) && engaged();
+        updateEncounter(battleAt);
     }
 
     private int damage(Actor target, int strength) {
@@ -652,18 +661,58 @@ final class HostBattle {
         }
     }
 
-    private boolean engaged() {
-        if (trainingDummy != null) {
-            Actor player = actors.getFirst();
-            if (player.hp > 0 && distance(player.x, player.y, trainingDummy) <= TRAINING_RANGE) return true;
+    private boolean combatCosts() {
+        return "combat".equals(encounter) || "pursuit".equals(encounter);
+    }
+
+    private boolean visibleThrough(Actor member, Actor enemy) {
+        List<DungeonLayout.Cell> cells = projectilePath(member, position(enemy));
+        for (int index = 1; index < cells.size(); index++) {
+            DungeonLayout.Cell from = cells.get(index - 1);
+            DungeonLayout.Cell next = cells.get(index);
+            if (!stepAllowed(from.x(), from.y(), next.x() - from.x(), next.y() - from.y())) return false;
         }
-        for (Actor enemy : actors) {
-            if (enemy.kind != Kind.ENEMY || enemy.hp == 0) continue;
-            for (Actor partyMember : actors) {
-                if (opponents(enemy, partyMember) && awareOf(enemy, partyMember)) return true;
+        return true;
+    }
+
+    private void updateEncounter(long at) {
+        boolean active = "active".equals(status);
+        boolean activeEnemy = false;
+        boolean visible = false;
+        boolean aware = false;
+        boolean contact = false;
+        if (active) {
+            for (Actor enemy : actors) {
+                if (enemy.kind != Kind.ENEMY || enemy.hp <= 0) continue;
+                activeEnemy = true;
+                for (Actor member : actors) {
+                    if (member.hp <= 0 || member.kind != Kind.PLAYER && member.kind != Kind.GUIDE) continue;
+                    int range = distance(enemy.x, enemy.y, member);
+                    if (range > SIGHT_RANGE) continue;
+                    boolean seen = visibleThrough(member, enemy);
+                    visible |= seen;
+                    if (range <= AWARENESS) {
+                        aware = true;
+                        contact |= seen;
+                    }
+                }
             }
         }
-        return false;
+        if (activeEnemy) {
+            if (contact) contactUntil = at + CONTACT_HOLD_MS;
+            if (aware) pursuitUntil = at + PURSUIT_HOLD_MS;
+        } else {
+            contactUntil = pursuitUntil = 0;
+        }
+        Actor player = actors.getFirst();
+        boolean training = active && trainingDummy != null && player.hp > 0 &&
+            distance(player.x, player.y, trainingDummy) <= TRAINING_RANGE;
+        String next = training || contact || at < contactUntil ? "combat" :
+            aware || at < pursuitUntil ? "pursuit" : visible ? "alert" : "exploration";
+        if (!next.equals(encounter)) {
+            encounter = next;
+            revision++;
+        }
     }
 
     private static boolean awareOf(Actor observer, Actor target) {

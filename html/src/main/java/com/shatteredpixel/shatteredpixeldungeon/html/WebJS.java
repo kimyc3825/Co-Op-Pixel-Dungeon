@@ -118,8 +118,10 @@ public class WebJS {
 	@JSBody(params = "message", script = "console.error(message); if (window.spd && window.spd.crash) window.spd.crash(message);")
 	public static native void crash(String message);
 
-	@JSBody(script = "if (window.spd && window.spd.exit) window.spd.exit();")
-	public static native void exit();
+	public static void exit() { exit(false); }
+
+	@JSBody(params = "defeated", script = "if (window.spd && window.spd.exit) window.spd.exit(defeated ? 'death' : null);")
+	public static native void exit(boolean defeated);
 
 	@JSBody(script = "if (window.spd && window.spd.ready) window.spd.ready();")
 	public static native void ready();

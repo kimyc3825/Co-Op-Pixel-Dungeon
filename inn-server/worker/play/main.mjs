@@ -10,17 +10,17 @@ import { loadBattleRuntime } from './runtime-loader.mjs';
 const byId = (id) => document.getElementById(id);
 const board = new Board(byId('board'));
 const fields = Object.fromEntries([
-  'scene-title', 'connection', 'board-title', 'board-status', 'help', 'help-toggle', 'pause', 'battle-overlay', 'notice',
+  'scene-title', 'connection', 'board-title', 'board-status', 'encounter-status', 'help', 'help-toggle', 'pause', 'battle-overlay', 'notice',
   'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'friendly-fire', 'match', 'guide', 'solo', 'drink', 'seekers',
   'profile-preview', 'profile-summary', 'profile-name', 'profile-job-label', 'profile-change', 'profile-cancel', 'profile-notice',
   'profile-job', 'profile-hair-style', 'profile-hair-color', 'profile-hair-swatch', 'profile-outfit-color', 'profile-outfit-swatch', 'profile-accessory',
   'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
   'touch-controls', 'touch-battle', 'touch-attack', 'touch-shoot', 'touch-eat', 'backpack', 'backpack-hint', 'backpack-use', 'attack-log', 'aim-hint',
   'dungeon-chat-log', 'dungeon-chat-message', 'dungeon-chat-send',
-  'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
+  'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close', 'npc-lessons', 'npc-lessons-content',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
   'original-launch', 'expedition-window', 'expedition-toggle', 'backpack-window', 'backpack-toggle', 'inn-backpack-toggle', 'chat-toggle', 'hud-scrim',
-  'prepare-expedition', 'preparation-result',
+  'prepare-expedition', 'preparation-result', 'settings-dialog',
 ].map((id) => [id, byId(id)]));
 
 const trainingHint = document.createElement('p');
@@ -54,6 +54,11 @@ const ATTACK_RESULTS = {
   miss: '빗나감',
   ally_blocked: '아군에 막힘',
 };
+const ENCOUNTER_LABELS = { exploration: '탐색', alert: '적 경계', combat: '교전', pursuit: '추격' };
+const defeatLines = fetch('/play/defeat-lines.json')
+  .then(response => response.ok ? response.json() : [])
+  .then(lines => Array.isArray(lines) ? lines.filter(line => typeof line?.text === 'string' && line.text && typeof line.author === 'string') : [])
+  .catch(() => []);
 const LOADING_TIPS = [
   '대장장이가 무기를 제련하는 중…',
   '길잡이가 맥주를 한 잔 더 주문하는 중…',
@@ -90,6 +95,7 @@ const profileFields = [
   { input: fields['profile-accessory'], field: 'accessory', options: AvatarCatalog.accessories },
 ];
 const profileCard = fields['name-form'].closest('.profile-card');
+const settingsDialog = fields['settings-dialog'];
 const layout = profileCard.closest('.layout');
 const gameWindows = [
   [fields['expedition-window'], fields['expedition-toggle']],
@@ -125,6 +131,7 @@ let noticeUntil = 0;
 let localNotice = '';
 let connectionNotice = '';
 let lastBattle;
+let nextDefeatLine;
 let lastAttackEventId = 0;
 let seekersKey = '';
 let frozenAt = null;
@@ -154,6 +161,7 @@ const play = new PlaySession({
   },
   onBattle(frame) {
     if (!frame) {
+      const defeated = lastBattle?.status === 'lost' || ownActor(lastBattle)?.hp === 0;
       clearMovement();
       setAim(null);
       setExamining(false);
@@ -163,11 +171,13 @@ const play = new PlaySession({
       resetVisualClock();
       board.set(play.inn, false);
       updateScene();
+      if (defeated) void showDefeat();
       return;
     }
     const state = frame.state;
     const prior = lastBattle;
     if (prior?.id !== state.id) {
+      noticeUntil = 0;
       clearMovement();
       resetVisualClock();
       clearAttackLog();
@@ -226,12 +236,14 @@ const original = new OriginalGame({
   getProfile: ownProfile,
   getPreparation: () => play.inn?.preparation,
   usePreparation: id => play.usePreparation(id),
-  onChange(active) {
+  onChange(active, reason) {
+    if (active) noticeUntil = 0;
     clearMovement();
     setExamining(false);
     showDialogue();
     updateScene();
     if (!active) focusBoard();
+    if (!active && reason === 'death') void showDefeat();
   },
   tips: LOADING_TIPS,
 });
@@ -245,10 +257,23 @@ function status(label, tone) {
   fields.connection.dataset.tone = tone;
 }
 
-function flash(message) {
+function flash(message, duration = 2300) {
   localNotice = message;
-  noticeUntil = performance.now() + 2300;
+  noticeUntil = performance.now() + duration;
   updateNotice(performance.now());
+}
+
+async function showDefeat() {
+  const lines = await defeatLines;
+  if (play.battle || play.frame || original.active) return;
+  if (!lines.length) {
+    flash('정신을 차려 보니 여관이었습니다.', 6500);
+    return;
+  }
+  nextDefeatLine ??= Math.floor(Math.random() * lines.length);
+  const { text, author } = lines[nextDefeatLine];
+  nextDefeatLine = (nextDefeatLine + 1) % lines.length;
+  flash(author ? `${text} · ${author}` : text, 6500);
 }
 
 function updateNotice(now) {
@@ -420,7 +445,7 @@ function toggleHeroStatus() {
 }
 
 function gameUiBlocksMovement() {
-  return profileCard.open || gameWindows.some(([panel]) => !panel.hidden) ||
+  return profileCard.open || settingsDialog.open || gameWindows.some(([panel]) => !panel.hidden) ||
     [...party.values()].some(({ details }) => !details.hidden);
 }
 
@@ -505,6 +530,7 @@ function updateInn() {
   else if (play.name && connectionNotice) status('재접속 중', 'offline');
   else status('입장 대기', 'idle');
   text(fields['board-status'], online ? `모험가 ${state.people.length}명` : '모험가 대기 중');
+  fields['encounter-status'].hidden = true;
   const queued = Boolean(state?.queued);
   const rulesLocked = queued || entering || returning || busy.has('match') || busy.has('prepare');
   updateProfile(state, online, rulesLocked || busy.has('name'));
@@ -573,6 +599,19 @@ function showDialogue(npc) {
   destination = null;
   text(fields['npc-name'], npc.name);
   text(fields['npc-dialogue'], npc.dialogue);
+  const lessons = Array.isArray(npc.lessons) ? npc.lessons : [];
+  const notes = lessons.map(({ title, text: content }) => {
+    const section = document.createElement('section');
+    const heading = document.createElement('h4');
+    const paragraph = document.createElement('p');
+    heading.textContent = title;
+    paragraph.textContent = content;
+    section.append(heading, paragraph);
+    return section;
+  });
+  fields['npc-lessons'].open = false;
+  fields['npc-lessons'].hidden = notes.length === 0;
+  fields['npc-lessons-content'].replaceChildren(...notes);
 }
 
 function talkNearby() {
@@ -629,8 +668,12 @@ function updateBattle() {
   const practice = Boolean(state.trainingTools?.length);
   const solo = connection === 'local' && !practice;
   status(({ direct: 'P2P 직접 연결', relay: '중계 연결', local: practice ? '길잡이 연습' : '1인 원정' })[connection], 'live');
-  text(fields['board-status'], state.status === 'won' ? '소탕 완료' : practice && enemies === 0 ? '소탕 완료 · 표적 연습' :
-    `${state.inCombat ? '교전' : '탐색'} · 남은 적 ${enemies}`);
+  const encounter = Object.hasOwn(ENCOUNTER_LABELS, state.encounter) ? state.encounter : state.inCombat ? 'combat' : 'exploration';
+  const indicator = fields['encounter-status'];
+  indicator.hidden = state.status !== 'active' || state.waitingForPartner || enemies === 0;
+  indicator.dataset.encounter = encounter;
+  text(indicator, ENCOUNTER_LABELS[encounter]);
+  text(fields['board-status'], state.status === 'won' ? '소탕 완료' : practice && enemies === 0 ? '소탕 완료 · 표적 연습' : `남은 적 ${enemies}`);
   trainingHint.hidden = !practice;
   const overlay = state.status === 'lost' ? (solo ? '쓰러졌습니다' : '파티가 쓰러졌습니다') : state.status === 'closed' ? '원정이 끝났습니다' :
     state.waitingForPartner ? '동료가 들어오는 중…' : player?.hp === 0 ? '쓰러졌습니다 · 동료의 전투를 지켜봅니다' : '';
@@ -1422,7 +1465,15 @@ for (const close of document.querySelectorAll('[data-close-window]')) {
   close.addEventListener('click', () => toggleGameWindow(close.dataset.closeWindow === 'expedition' ? 0 : 1));
 }
 fields['hud-scrim'].addEventListener('click', () => { closeGameWindows(); focusBoard(); });
+for (const button of document.querySelectorAll('[data-open-settings]')) {
+  button.addEventListener('click', () => {
+    closeGameWindows();
+    clearMovement();
+    settingsDialog.showModal();
+  });
+}
 document.addEventListener('keydown', (event) => {
+  if (settingsDialog.open) return;
   const editing = typing(event.target);
   const close = event.code === 'Escape' || event.key === 'Escape' ||
     (event.code === 'Backspace' || event.key === 'Backspace') && !editing;
@@ -1638,7 +1689,7 @@ function movementCode(event) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (original.active || event.defaultPrevented) return;
+  if (original.active || settingsDialog.open || event.defaultPrevented) return;
   const enter = event.key === 'Enter' || event.code === 'Enter' || event.code === 'NumpadEnter';
   const escape = event.key === 'Escape' || event.code === 'Escape' ||
     (event.key === 'Backspace' || event.code === 'Backspace') && !typing(event.target);

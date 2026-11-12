@@ -585,9 +585,11 @@ export class Board {
   }
 
   drawSpeech(now, fatigued) {
-    const speakers = [...this.figures.values()].filter(({ speech }) => speech?.until > now);
+    const figures = [...this.figures.values()];
+    const speakers = figures.filter(({ speech }) => speech?.until > now);
+    const names = figures.filter((figure) => this.hasScreenName(figure));
     const overlay = this.speechCanvas;
-    const hideSpeech = speakers.length === 0 && !fatigued;
+    const hideSpeech = speakers.length === 0 && names.length === 0 && !fatigued;
     if (overlay && overlay.hidden !== hideSpeech) overlay.hidden = hideSpeech;
     if (hideSpeech) return;
     speakers.sort((a, b) => b.speech.id - a.speech.id);
@@ -617,6 +619,7 @@ export class Board {
     if (textWidth < fontSize) return;
     const placed = [];
     context.save();
+    const captions = this.drawPlayerNames(context, names, width, height, scaleX, scaleY);
     context.textBaseline = 'top';
     context.font = `400 ${fontSize}px "Malgun Gothic", system-ui, sans-serif`;
     context.textAlign = 'left';
@@ -625,7 +628,7 @@ export class Board {
       const headX = Math.round(((figure.x + .5) * TILE - this.viewX) * scaleX);
       const feetY = Math.round(((figure.y + .87) * TILE - this.viewY) * scaleY);
       if (headX < 0 || headX > width || feetY < 0 || feetY - TILE * scaleY > height) continue;
-      const headY = feetY - (figure.actor.queued ? 57 : 36) * scaleY;
+      const headY = Math.min(feetY - (figure.actor.queued ? 57 : 36) * scaleY, (captions.get(figure) ?? Infinity) - 4);
       const speech = figure.speech;
       if (!speech.layout || speech.layout.fontSize !== fontSize || speech.layout.textWidth !== textWidth) {
         const lines = speechLines(context, speech.text, textWidth);
@@ -667,10 +670,55 @@ export class Board {
       const headX = Math.round(((fatigued.x + .5) * TILE - this.viewX) * scaleX);
       const feetY = Math.round(((fatigued.y + .87) * TILE - this.viewY) * scaleY);
       if (headX >= 0 && headX <= width && feetY >= 0 && feetY - TILE * scaleY <= height) {
-        this.drawFatigueLabel(context, headX, feetY - 43 * scaleY, width, height, margin, placed);
+        const bottom = Math.min(feetY - 43 * scaleY, (captions.get(fatigued) ?? Infinity) - 3);
+        this.drawFatigueLabel(context, headX, bottom, width, height, margin, placed);
       }
     }
     context.restore();
+  }
+
+  hasScreenName({ actor }) {
+    return this.speechCanvas && actor.hp !== 0 && !actor.queued &&
+      (!this.dungeon || actor.kind === 'player' || actor.kind === 'guide');
+  }
+
+  drawPlayerNames(context, names, width, height, scaleX, scaleY) {
+    const fontSize = Math.round(Math.max(15, Math.min(28, 10.5 * scaleY)));
+    const maxWidth = Math.min(width - 12, 196, Math.max(156, 1.8 * TILE * scaleX));
+    const tops = new Map();
+    const placed = [];
+    context.font = `600 ${fontSize}px "Malgun Gothic", system-ui, sans-serif`;
+    context.textAlign = 'center';
+    context.textBaseline = 'bottom';
+    context.strokeStyle = '#151713';
+    context.lineJoin = 'round';
+    context.lineWidth = 2;
+    for (const figure of names) {
+      const x = ((figure.x + .5) * TILE - this.viewX) * scaleX;
+      const feet = ((figure.y + .87) * TILE - this.viewY) * scaleY;
+      if (x < 0 || x > width || feet < 0 || feet - TILE * scaleY > height) continue;
+      const { actor } = figure;
+      const previous = figure.screenCaption;
+      if (!previous || previous.name !== actor.name || previous.fontSize !== fontSize || previous.maxWidth !== maxWidth) {
+        const label = this.fitName(actor.name, context, maxWidth);
+        figure.screenCaption = { name: actor.name, fontSize, maxWidth, label, width: context.measureText(label).width };
+      }
+      const { label, width: labelWidth } = figure.screenCaption;
+      const half = labelWidth / 2 + 4;
+      const center = Math.round(Math.max(half, Math.min(width - half, x)));
+      let bottom = Math.max(fontSize + 3, Math.round(feet - 31 * scaleY - 2));
+      for (const other of placed) {
+        if (center - half < other.right && center + half > other.left &&
+            bottom - fontSize < other.bottom && bottom > other.top) bottom = Math.max(fontSize + 3, other.top - 3);
+      }
+      const top = bottom - fontSize;
+      placed.push({ left: center - half, right: center + half, top, bottom });
+      tops.set(figure, top);
+      context.fillStyle = actor.id === this.snapshot?.selfId ? '#ffe1a3' : '#e2efdb';
+      context.strokeText(label, center, bottom);
+      context.fillText(label, center, bottom);
+    }
+    return tops;
   }
 
   drawFatigueLabel(context, headX, bottom, width, height, margin, bubbles) {
@@ -859,17 +907,18 @@ export class Board {
         if (energy > 0) paint(context, color, x - 11, y + 5, 22 * energy / BattleRules.ENERGY_CAP, 3);
       }
     }
-    if (!enemy && !actor.queued) {
+    if (!enemy && !actor.queued && !this.hasScreenName(figure)) {
       if (figure.captionName !== actor.name) {
         figure.captionName = actor.name;
-        figure.shortName = this.fitName(dummy ? '허수아비' : actor.name);
+        context.font = 'bold 8px "Malgun Gothic", sans-serif';
+        figure.shortName = this.fitName(dummy ? '허수아비' : actor.name, context, TILE - 5);
       }
       this.caption(figure.shortName, x, Math.max(9, y - 32), own ? '#ffe1a3' : '#d8e4cf');
     }
     if (figure.hurtUntil > now) {
       const change = figure.hpChange;
       this.caption(change > 0 ? `+${change}` : String(change), x,
-        y - 37 - (1 - (figure.hurtUntil - now) / 590) * 14, change > 0 ? '#a4e4b4' : '#ffa68b');
+        y - (this.hasScreenName(figure) ? 47 : 37) - (1 - (figure.hurtUntil - now) / 590) * 14, change > 0 ? '#a4e4b4' : '#ffa68b');
     }
   }
 
@@ -898,12 +947,9 @@ export class Board {
     context.fillText(text, x, y);
   }
 
-  fitName(name) {
-    const context = this.context;
-    context.font = 'bold 8px "Malgun Gothic", sans-serif';
-    const width = TILE - 5;
+  fitName(name, context, width) {
     if (context.measureText(name).width <= width) return name;
-    const letters = [...name];
+    const letters = SPEECH_SEGMENTER ? [...SPEECH_SEGMENTER.segment(name)].map(({ segment }) => segment) : [...name];
     let shorter;
     do {
       letters.pop();

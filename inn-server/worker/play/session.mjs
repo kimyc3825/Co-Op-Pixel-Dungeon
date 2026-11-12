@@ -711,6 +711,7 @@ class BattleSession {
       Number.isSafeInteger(state.wallNow) && Number.isSafeInteger(state.pausedUntil) &&
       Number.isSafeInteger(state.pauseReadyAt) &&
       ['active', 'won', 'lost'].includes(state.status) &&
+      (state.encounter == null || (state.inCombat ? ['combat', 'pursuit'] : ['alert', 'exploration']).includes(state.encounter)) &&
       Array.isArray(state.map) && state.map.length > 0 && typeof state.map[0] === 'string' && state.map[0].length > 0 &&
       state.map.every(row => typeof row === 'string' && row.length === state.map[0].length) &&
       Array.isArray(state.actors) && state.actors.some(actor => actor?.id === state.selfId) && state.actors.every(actor =>

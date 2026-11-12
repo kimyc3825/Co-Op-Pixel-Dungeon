@@ -11,6 +11,7 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndSettings;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndTitledMessage;
 import com.watabou.input.PointerEvent;
 import com.watabou.noosa.Camera;
@@ -24,6 +25,7 @@ import com.watabou.noosa.ui.Component;
 import com.watabou.utils.RectF;
 
 import java.util.List;
+import java.util.function.IntConsumer;
 
 public final class NativeInnScene extends PixelScene {
     private static final int BACKGROUND = 0xff1b1515;
@@ -86,7 +88,7 @@ public final class NativeInnScene extends PixelScene {
         float top = insets.top + EDGE;
         float right = w - insets.right - EDGE;
         float bottom = h - insets.bottom - EDGE;
-        boolean compactHud = right - left < 218;
+        boolean compactHud = right - left < 256;
         add(block(0, 0, w, h, BACKGROUND));
         board = new NativeInnBoard(0, 0, w, h,
             cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc);
@@ -99,6 +101,8 @@ public final class NativeInnScene extends PixelScene {
         add(presence);
         button("F1 배낭", compactHud ? left : right - 140, compactHud ? top + 29 : top,
             49, 17, false, this::openBackpack);
+        button("설정", compactHud ? left + 51 : right - 178, compactHud ? top + 29 : top,
+            36, 17, false, this::openSettings);
         profile = button("모험가", right - 89, top, 47, 17, false, this::editProfile);
         button("F8 도움말", right - 40, top, 40, 17, false, this::toggleHelp);
 
@@ -132,6 +136,10 @@ public final class NativeInnScene extends PixelScene {
         notice = label("", 7, CREAM, left, toolbarY + 2);
         notice.maxWidth((int) Math.max(65, right - left - 140));
         add(notice);
+        String defeat = NativeClient.takeDefeatNotice();
+        if (defeat != null && !defeat.isBlank()) {
+            add(defeatNotice(defeat, left, top + (compactHud ? 50 : 30), right));
+        }
         help = buildHelp(left, top + (compactHud ? 50 : 30), Math.min(124, right - left));
         add(help);
         help.visible = help.active = false;
@@ -353,6 +361,20 @@ public final class NativeInnScene extends PixelScene {
         });
     }
 
+    private void openSettings() {
+        if (modalOpen || editor != null) return;
+        destination = null;
+        keyboard.reset();
+        modalOpen = true;
+        add(new WndSettings() {
+            @Override
+            public void destroy() {
+                modalOpen = false;
+                super.destroy();
+            }
+        });
+    }
+
     private void openExpeditions() {
         if (modalOpen || !NativeClient.profileConfirmed()) return;
         closeComposer();
@@ -430,6 +452,10 @@ public final class NativeInnScene extends PixelScene {
         closeComposer();
         destination = null;
         keyboard.reset();
+        if (!npc.lessons().isEmpty()) {
+            openLessons(npc);
+            return;
+        }
         modalOpen = true;
         add(new WndTitledMessage(Icons.INFO.get(), npc.name(), npc.dialogue()) {
             @Override
@@ -438,6 +464,73 @@ public final class NativeInnScene extends PixelScene {
                 super.destroy();
             }
         });
+    }
+
+    private void openLessons(InnApi.Npc npc) {
+        List<InnApi.Lesson> lessons = npc.lessons();
+        String[] options = new String[lessons.size() + 1];
+        for (int i = 0; i < lessons.size(); i++) options[i] = lessons.get(i).title();
+        options[lessons.size()] = "닫기";
+        showLessonWindow(npc.name(), npc.dialogue(), selection -> {
+            if (selection >= lessons.size()) return;
+            InnApi.Lesson lesson = lessons.get(selection);
+            showLessonWindow(lesson.title(), lesson.text(), action -> {
+                if (action == 0) openLessons(npc);
+            }, "목록으로", "닫기");
+        }, options);
+    }
+
+    private void showLessonWindow(String title, String text, IntConsumer select, String... options) {
+        modalOpen = true;
+        add(new WndOptions(Icons.INFO.get(), title, text, options) {
+            @Override
+            protected void onSelect(int index) {
+                select.accept(index);
+            }
+
+            @Override
+            public void destroy() {
+                modalOpen = false;
+                super.destroy();
+            }
+        });
+    }
+
+    private Group defeatNotice(String message, float left, float top, float right) {
+        Group toast = new Group() {
+            private float remaining = 8f;
+
+            @Override
+            public void update() {
+                remaining -= Game.elapsed;
+                if (remaining <= 0) {
+                    remove();
+                    destroy();
+                } else {
+                    super.update();
+                }
+            }
+        };
+        float width = Math.min(222, right - left);
+        float x = align((left + right - width) / 2);
+        RenderedTextBlock quote = renderTextBlock(8, false);
+        quote.setHightlighting(false);
+        quote.hardlight(CREAM);
+        quote.text(message, Math.max(1, (int) width - 14));
+        quote.setPos(x + 7, top + 17);
+        ColorBlock backdrop = block(x, top, width, quote.height() + 24, 0xF5261C19);
+        toast.add(backdrop);
+        toast.add(block(x, top, width, 1, 0xE5AD8057));
+        toast.add(label("원정에서 쓰러졌습니다", 8, GOLD, x + 7, top + 4));
+        toast.add(quote);
+        toast.add(new PointerArea(backdrop) {
+            @Override
+            protected void onClick(PointerEvent event) {
+                toast.remove();
+                toast.destroy();
+            }
+        });
+        return toast;
     }
 
     private void chooseTheme() {

@@ -381,7 +381,7 @@ final class DungeonSession implements AutoCloseable {
                     validInventory(actor.inventory())) &&
             state.actors().stream().anyMatch(actor -> state.selfId().equals(actor.id())) &&
             validKnowledge(state.identifiedItems()) &&
-            state.trainingTools().isEmpty() &&
+            state.trainingTools().isEmpty() && validEncounter(state) &&
             state.drops() != null && state.drops().stream().allMatch(drop ->
                 drop != null && drop.id() != null && drop.item() != null) &&
             state.messages().size() <= 16 && state.messages().stream().allMatch(message ->
@@ -397,6 +397,14 @@ final class DungeonSession implements AutoCloseable {
                     mapCell(state, projectile.nextX(), projectile.nextY()) &&
                     Math.max(Math.abs(projectile.nextX() - projectile.x()), Math.abs(projectile.nextY() - projectile.y())) == 1) &&
             ("active".equals(state.status()) || "won".equals(state.status()) || "lost".equals(state.status()));
+    }
+
+    private static boolean validEncounter(InnApi.DungeonState state) {
+        return switch (state.encounter()) {
+            case "combat", "pursuit" -> state.inCombat();
+            case "alert", "exploration" -> !state.inCombat();
+            default -> false;
+        };
     }
 
     private static boolean validInventory(List<InnApi.InventoryItem> inventory) {

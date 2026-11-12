@@ -31,6 +31,7 @@ final class DungeonActorView extends Group {
     private final Image shadow;
     private final Group overlay = new Group();
     private final Group speechOverlay = new Group();
+    private final ColorBlock nameplate;
     private final RenderedTextBlock name;
     private final RenderedTextBlock healthChange;
     private final ColorBlock healthBack;
@@ -85,7 +86,8 @@ final class DungeonActorView extends Group {
         dummy = "dummy".equals(actor.kind());
         String baseSprite = dummy ? NativeDungeonScene.TRAINING_SPRITES
             : enemy ? Assets.Sprites.RAT : host ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
-        outfit = "player".equals(actor.kind()) ? AvatarSprites.acquire(actor.appearance(), baseSprite) : null;
+        boolean player = "player".equals(actor.kind());
+        outfit = player ? AvatarSprites.acquire(actor.appearance(), baseSprite) : null;
         Object texture = outfit == null ? baseSprite : outfit.texture();
         sprite = new MovieClip(texture);
         if (dummy) {
@@ -111,8 +113,20 @@ final class DungeonActorView extends Group {
         atbBack = partyMember ? NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xEC333E34) : null;
         atbFill = partyMember ? NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xFFFFFFFF) : null;
         String nick = actor.name();
-        if (nick.codePointCount(0, nick.length()) > 9) nick = nick.substring(0, nick.offsetByCodePoints(0, 8)) + "…";
-        name = NativeDungeonScene.label(overlay, enemy ? "" : nick, 6, color, 0, 0, 65);
+        int nickLimit = player ? 10 : 9;
+        if (nick.codePointCount(0, nick.length()) > nickLimit) {
+            nick = nick.substring(0, nick.offsetByCodePoints(0, nickLimit - 1)) + "…";
+        }
+        nameplate = player ? NativeDungeonScene.panel(overlay, 0, 0, 1, 1, 0xEE211E1A) : null;
+        if (player) {
+            name = PixelScene.renderTextBlock(7, false);
+            name.setHightlighting(false);
+            name.hardlight(color);
+            name.text(nick, 74);
+            overlay.add(name);
+        } else {
+            name = NativeDungeonScene.label(overlay, enemy ? "" : nick, 6, color, 0, 0, 65);
+        }
         healthChange = NativeDungeonScene.label(overlay, "", 8, NativeDungeonScene.ENEMY, 0, 0, 38);
         sweat = own ? new Group() : null;
         sweatDrops = own ? new ColorBlock[3][] : null;
@@ -158,6 +172,19 @@ final class DungeonActorView extends Group {
 
     Group overlay() { return overlay; }
     Group speechOverlay() { return speechOverlay; }
+
+    void separateNicknameFrom(DungeonActorView other) {
+        if (nameplate == null || other == null || other.nameplate == null ||
+                !nameplate.visible || !other.nameplate.visible) return;
+        float top = nicknameTop();
+        ColorBlock nearby = other.nameplate;
+        if (nameplate.x < nearby.x + nearby.width() && nameplate.x + nameplate.width() > nearby.x &&
+                top - 1 < nearby.y + nearby.height() && top + name.height() + 1 > nearby.y) {
+            top = nearby.y - name.height() - 3;
+        }
+        placeNickname(name.left(), top);
+        layoutSpeech();
+    }
 
     void showAtb(float fraction, int color) {
         if (atbFill == null) return;
@@ -348,7 +375,8 @@ final class DungeonActorView extends Group {
         }
 
         name.visible = actor.hp() > 0 && !name.text().isBlank();
-        if (name.visible) name.setPos(center - name.width() / 2, sprite.y - 7);
+        if (nameplate != null) nameplate.visible = name.visible;
+        if (name.visible) placeNickname(center - name.width() / 2, nicknameTop());
         healthChange.visible = !hurt && healthChangeTime < DAMAGE_DURATION;
         if (healthChange.visible) {
             healthChange.setPos(center - healthChange.width() / 2, sprite.y - 7 - 13 * healthChangeTime / DAMAGE_DURATION);
@@ -356,6 +384,19 @@ final class DungeonActorView extends Group {
         }
         if (sweat != null && sweat.visible) layoutFatigue(center, scale);
         layoutSpeech();
+    }
+
+    private float nicknameTop() {
+        return nameplate == null ? sprite.y - 7 : sprite.y - name.height() - 2;
+    }
+
+    private void placeNickname(float x, float y) {
+        name.setPos(PixelScene.align(x), PixelScene.align(y));
+        if (nameplate != null) {
+            nameplate.x = name.left() - 2;
+            nameplate.y = name.top() - 1;
+            nameplate.size(name.width() + 4, name.height() + 2);
+        }
     }
 
     private void layoutFatigue(float center, float scale) {
@@ -394,7 +435,8 @@ final class DungeonActorView extends Group {
         float width = Math.min(speechRight - speechLeft, speechText.width() + 8);
         float height = speechText.height() + 5;
         float x = Math.clamp(center - width / 2, speechLeft, speechRight - width);
-        float anchor = sweat != null && sweat.visible ? fatigueBack.y - 2 : sprite.y - (name.visible ? 9 : 3);
+        float anchor = sweat != null && sweat.visible ? fatigueBack.y - 2
+            : nameplate != null && nameplate.visible ? nameplate.y - 2 : sprite.y - (name.visible ? 9 : 3);
         float y = Math.max(speechTop, anchor - height);
         speechBack.size(width, height);
         speechBack.x = x;
