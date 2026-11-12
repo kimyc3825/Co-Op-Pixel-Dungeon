@@ -733,9 +733,10 @@ public final class NativeDungeonScene extends PixelScene {
             int dx = projectile.nextX() - projectile.x();
             int dy = projectile.nextY() - projectile.y();
             float progress = 1f - Math.clamp((projectile.stepAt() - now) / (float) BattleRules.PROJECTILE_STEP_MS, 0, 1);
-            dart.origin.set(dart.width() / 2, .5f);
-            dart.x = mapX + (projectile.x() + .5f + dx * progress) * tile - dart.origin.x;
-            dart.y = mapY + (projectile.y() + .48f + dy * progress) * tile;
+            // ColorBlock scales a unit quad, so its rotation pivot is in unit coordinates.
+            dart.origin.set(.5f, .5f);
+            dart.x = mapX + (projectile.x() + .5f + dx * progress) * tile - .5f;
+            dart.y = mapY + (projectile.y() + .48f + dy * progress) * tile - .5f;
             dart.angle = (float) Math.toDegrees(Math.atan2(dy, dx));
         }
         impactLabels.removeIf(impact -> {
