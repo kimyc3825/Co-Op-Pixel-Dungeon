@@ -21,10 +21,13 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.effects;
 
+import com.badlogic.gdx.graphics.Pixmap;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.CharSprite;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
+import com.watabou.gltextures.SmartTexture;
+import com.watabou.gltextures.TextureCache;
 import com.watabou.noosa.Game;
 import com.watabou.noosa.Image;
 import com.watabou.utils.PointF;
@@ -75,6 +78,45 @@ public class EmoIcon extends Image {
 		return new PointF(width()/2f, height()/2f);
 	};
 	
+	public static class Sweat extends EmoIcon {
+
+		private static SmartTexture dropTexture;
+
+		public Sweat(CharSprite owner) {
+			super(owner);
+			texture(drop());
+			maxSize = 1.35f;
+			timeScale = 2f;
+			x = owner.x + owner.width - width / 2f;
+			y = owner.y - height / 2f;
+		}
+
+		private static SmartTexture drop() {
+			if (dropTexture != null && dropTexture.bitmap != null) return dropTexture;
+			String[] pixels = {
+					"  #  ",
+					" #+  ",
+					" #+# ",
+					"#+..#",
+					"#+..#",
+					" #.# ",
+					"  #  "
+			};
+			Pixmap bitmap = new Pixmap(pixels[0].length(), pixels.length, Pixmap.Format.RGBA8888);
+			for (int y = 0; y < pixels.length; y++) {
+				for (int x = 0; x < pixels[y].length(); x++) {
+					switch (pixels[y].charAt(x)) {
+						case '#': bitmap.drawPixel(x, y, 0x204C64FF); break;
+						case '+': bitmap.drawPixel(x, y, 0xC5F5FAFF); break;
+						case '.': bitmap.drawPixel(x, y, 0x69C6E3FF); break;
+					}
+				}
+			}
+			dropTexture = TextureCache.get(bitmap);
+			return dropTexture;
+		}
+	}
+
 	public static class Sleep extends EmoIcon {
 		
 		public Sleep( CharSprite owner ) {

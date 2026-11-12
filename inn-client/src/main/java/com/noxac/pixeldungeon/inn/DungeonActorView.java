@@ -33,6 +33,9 @@ final class DungeonActorView extends Group {
     private final RenderedTextBlock healthChange;
     private final ColorBlock healthBack;
     private final ColorBlock healthFill;
+    private final Group sweat;
+    private final ColorBlock[] sweatPixels;
+    private float sweatTime;
     private Group speech;
     private ColorBlock speechBack;
     private ColorBlock speechTail;
@@ -101,6 +104,17 @@ final class DungeonActorView extends Group {
         if (nick.codePointCount(0, nick.length()) > 9) nick = nick.substring(0, nick.offsetByCodePoints(0, 8)) + "…";
         name = NativeDungeonScene.label(overlay, enemy ? "" : nick, 6, color, 0, 0, 65);
         healthChange = NativeDungeonScene.label(overlay, "", 8, NativeDungeonScene.ENEMY, 0, 0, 38);
+        sweat = own ? new Group() : null;
+        sweatPixels = own ? new ColorBlock[] {
+            NativeDungeonScene.panel(sweat, 0, 0, 1, 5, 0xFF204C64),
+            NativeDungeonScene.panel(sweat, 0, 0, 3, 2, 0xFF204C64),
+            NativeDungeonScene.panel(sweat, 0, 0, 1, 3, 0xFF69C6E3),
+            NativeDungeonScene.panel(sweat, 0, 0, 1, 1, 0xFFC5F5FA),
+        } : null;
+        if (sweat != null) {
+            sweat.visible = false;
+            overlay.add(sweat);
+        }
         if (actor.hp() <= 0) {
             deadTime = 1;
             sprite.frame(death.frames[death.frames.length - 1]);
@@ -123,6 +137,13 @@ final class DungeonActorView extends Group {
 
     Group overlay() { return overlay; }
     Group speechOverlay() { return speechOverlay; }
+
+    void waitForEnergy(boolean waiting) {
+        if (sweat != null && sweat.visible != waiting) {
+            sweatTime = 0;
+            sweat.visible = waiting;
+        }
+    }
 
     void speak(String message, long deadline, float boardX, float boardY, float boardWidth) {
         if (!"player".equals(actor.kind())) return;
@@ -242,6 +263,7 @@ final class DungeonActorView extends Group {
         stepTime = Math.min(stepDuration, stepTime + Game.elapsed);
         attackTime = Math.min(ATTACK_DURATION, attackTime + Game.elapsed);
         healthChangeTime = Math.min(DAMAGE_DURATION, healthChangeTime + Game.elapsed);
+        if (sweat != null && sweat.visible) sweatTime = (sweatTime + Game.elapsed) % 0.62f;
         if (actor.hp() > 0) {
             if (attackTime >= ATTACK_DURATION) {
                 sprite.play(strideIdle < STRIDE_GRACE ? walk : idle);
@@ -288,7 +310,24 @@ final class DungeonActorView extends Group {
             healthChange.setPos(center - healthChange.width() / 2, sprite.y - 7 - 13 * healthChangeTime / DAMAGE_DURATION);
             healthChange.alpha(1 - healthChangeTime / DAMAGE_DURATION);
         }
+        if (sweat != null && sweat.visible) layoutSweat(center, base, scale);
         layoutSpeech();
+    }
+
+    private void layoutSweat(float center, float base, float scale) {
+        float phase = sweatTime / 0.62f;
+        float x = center + Math.round(5 + 4 * phase) * scale;
+        float y = base + Math.round(-14.5f + 5 * phase) * scale;
+        placeSweatPixel(sweatPixels[0], x + scale, y, scale, 5 * scale);
+        placeSweatPixel(sweatPixels[1], x, y + 2 * scale, 3 * scale, 2 * scale);
+        placeSweatPixel(sweatPixels[2], x + scale, y + scale, scale, 3 * scale);
+        placeSweatPixel(sweatPixels[3], x + scale, y + scale, scale, scale);
+    }
+
+    private static void placeSweatPixel(ColorBlock pixel, float x, float y, float width, float height) {
+        pixel.x = x;
+        pixel.y = y;
+        pixel.size(width, height);
     }
 
     private void layoutSpeech() {

@@ -855,7 +855,7 @@ public class Hero extends Char {
 	private volatile boolean atbMoving;
 	private float atbMoveAt;
 	private float atbMeleeAt;
-	private HeroAction atbWaiting;
+	private volatile HeroAction atbWaiting;
 	private AtbSpend atbWaitKind;
 
 	public boolean innAtbActive() {
@@ -899,9 +899,15 @@ public class Hero extends Char {
 		return buff(Talent.LethalMomentumTracker.class) != null || InnAtb.canSpend(1);
 	}
 
+	public boolean waitingForInnAtbEnergy() {
+		HeroAction waiting = atbWaiting;
+		return waiting != null && waiting == curAction && innAtbActive()
+				&& (atbWaitKind == AtbSpend.MELEE ? !atbHasMeleeEnergy() : !atbHasMoveEnergy());
+	}
+
 	private void deferInnAtb(AtbSpend kind) {
-		atbWaiting = curAction;
 		atbWaitKind = kind;
+		atbWaiting = curAction;
 		ready = true;
 		next();
 	}
@@ -1938,11 +1944,6 @@ public class Hero extends Char {
 			return false;
 		}
 
-		if (innAtbActive() && (Actor.now() < atbMoveAt || !atbHasMoveEnergy())) {
-			deferInnAtb(AtbSpend.MOVE);
-			return true;
-		}
-		
 		int step = -1;
 		
 		if (Dungeon.level.adjacent( pos, target )) {
@@ -1993,12 +1994,17 @@ public class Hero extends Char {
 				}
 			}
 
-			if (path == null) return false;
-			step = path.removeFirst();
+			if (path == null || path.isEmpty()) return false;
+			step = path.getFirst();
 
 		}
 
 		if (step != -1) {
+			if (innAtbActive() && (Actor.now() < atbMoveAt || !atbHasMoveEnergy())) {
+				deferInnAtb(AtbSpend.MOVE);
+				return true;
+			}
+			if (path != null) path.removeFirst();
 
 			float delay = 1;
 

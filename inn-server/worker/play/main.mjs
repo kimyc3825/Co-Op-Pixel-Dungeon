@@ -110,6 +110,7 @@ let aimCell = null;
 let examining = false;
 let submitted;
 let queuedPreview;
+let waitingAction;
 let lastMoveAt = 0;
 let noticeUntil = 0;
 let localNotice = '';
@@ -1019,12 +1020,14 @@ function moveDungeon(dx, dy, fresh, now) {
   const gameNow = frame.serverTime();
   const readyAt = BattleRules.readyAt(player, 'move', state.now, state.inCombat);
   const ready = readyAt <= gameNow;
+  const occupied = state.actors.some((actor) => actor.hp > 0 && actor.x === player.x + dx && actor.y === player.y + dy);
+  if (!ready && !occupied) waitingAction = 'move';
   const pending = submitted && now - submitted.sent < ACK_WAIT;
   if (!fresh && (pending || readyAt > gameNow + MOVE_QUEUE_LEAD ||
       state.queued && (state.queued.type === 'move' || !ready))) return;
   if (pending && submitted.type !== 'move' && now - submitted.sent < MOVE_RETRY) return;
   if (now - lastMoveAt < MOVE_RETRY) return;
-  if (ready && state.actors.some((actor) => actor.hp > 0 && actor.x === player.x + dx && actor.y === player.y + dy)) return;
+  if (ready && occupied) return;
   if (!requestAction('move', dx, dy, null, now)) return;
   lastMoveAt = now;
   if (ready && state.queued?.type !== 'move') board.predict(dx, dy, visualTime(now));
@@ -1097,6 +1100,7 @@ function followDungeonRoute(now) {
     if (reached(player.x, player.y)) {
       if (BattleRules.readyAt(player, 'attack', state.now, state.inCombat) <= frame.serverTime() &&
           requestAction('attack', 0, 0, target.id, now)) dungeonRoute = null;
+      else waitingAction = 'attack';
       return;
     }
   } else if (route.type === 'loot') {
@@ -1114,10 +1118,21 @@ function followDungeonRoute(now) {
     dungeonRoute = null;
     return;
   }
-  // Send automatic steps only once ready, so stopping does not leave another step queued at the host.
-  if (BattleRules.readyAt(player, 'move', state.now, state.inCombat) > frame.serverTime()) return;
-  const path = findDungeonPath(state, player, reached);
+  const gameNow = frame.serverTime();
+  const ready = BattleRules.readyAt(player, 'move', state.now, state.inCombat) <= gameNow;
+  if (!ready && !BattleRules.lacksEnergy(player, 'move', state.now, gameNow, state.inCombat)) return;
+  // Reuse the same path until the party's positions change in the next snapshot.
+  if (route.pathState !== state) {
+    route.path = findDungeonPath(state, player, reached);
+    route.pathState = state;
+  }
+  const path = route.path;
   if (path) {
+    // Send automatic steps only once ready, so stopping cannot leave a queued move at the host.
+    if (!ready) {
+      waitingAction = 'move';
+      return;
+    }
     if (availableDrops && !route.target) {
       const drop = availableDrops.find(({ x, y }) => x === path.x && y === path.y);
       route.target = drop.id;
@@ -1125,10 +1140,25 @@ function followDungeonRoute(now) {
       route.y = path.y;
     }
     moveDungeon(...path.first, false, now);
-  } else {
+  } else if (ready) {
     stopAndRememberRoute();
     flash('이동할 수 있는 길이 없습니다.');
   }
+}
+
+function waitingForEnergy(now, gameNow) {
+  const state = play.frame?.state;
+  const player = ownActor(state);
+  if (!canAct(state, player)) return false;
+  const pending = submitted && now - submitted.sent < ACK_WAIT ? submitted : null;
+  const action = state.queued ?? pending;
+  if (action?.type === 'shoot' && !state.queued) {
+    const [x, y] = action.target.split(',').map(Number);
+    const range = Math.max(Math.abs(player.x - x), Math.abs(player.y - y));
+    if (range === 0 || range > BattleRules.SHOOT_RANGE) return false;
+  }
+  const type = action?.type ?? waitingAction;
+  return Boolean(type && BattleRules.lacksEnergy(player, type, state.now, gameNow, state.inCombat));
 }
 
 function setExamining(enabled) {
@@ -1616,9 +1646,11 @@ for (const button of document.querySelectorAll('[data-direction]')) {
 
 function render(now) {
   if (!original.active) {
+    waitingAction = null;
     movement(now);
     const marker = dungeonRoute?.x != null ? [dungeonRoute.x, dungeonRoute.y] : destination;
-    board.draw(visualTime(now), selected, marker, aimCell, play.frame?.serverTime());
+    const gameNow = play.frame?.serverTime();
+    board.draw(visualTime(now), selected, marker, aimCell, gameNow, now, waitingForEnergy(now, gameNow));
     if (!play.frame) drawProfile(now);
     updateCombatUi();
     updateNotice(now);

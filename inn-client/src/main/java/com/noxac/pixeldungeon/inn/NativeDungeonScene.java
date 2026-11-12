@@ -144,6 +144,7 @@ public final class NativeDungeonScene extends PixelScene {
     private int columns;
     private int rows;
     private SubmittedAction submitted;
+    private String waitingAction;
     private Step lastMove;
     private Destination destination;
     private Destination resumable;
@@ -322,6 +323,7 @@ public final class NativeDungeonScene extends PixelScene {
         String connectionNotice = NativeClient.dungeonNotice();
         setText(notice, connectionNotice.isEmpty() && System.nanoTime() < noticeUntil ? localNotice : connectionNotice);
         previewQueuedMove(now);
+        waitingAction = null;
         if (!typing()) {
             onHotkey(Input.Keys.F1, Gdx.input.isKeyPressed(Input.Keys.F1));
             onHotkey(Input.Keys.Q, Gdx.input.isKeyPressed(Input.Keys.Q));
@@ -330,6 +332,7 @@ public final class NativeDungeonScene extends PixelScene {
             onHotkey(Input.Keys.P, Gdx.input.isKeyPressed(Input.Keys.P));
             updateInput(now);
         }
+        if (self != null) actorViews.get(self.id()).waitForEnergy(waitingForEnergy(now));
         long receipt = System.nanoTime();
         for (DungeonActorView view : actorViews.values()) view.expireSpeech(receipt);
         super.update();
@@ -738,6 +741,7 @@ public final class NativeDungeonScene extends PixelScene {
         boolean ready = availableAt <= now;
         InnApi.Action queued = state.queued();
         long inputAt = System.nanoTime();
+        if (!ready && mayStep(step, true)) waitingAction = "move";
         if (awaitingAcknowledgement(inputAt) && !"move".equals(submitted.action().type()) &&
             inputAt - submitted.sentAt() < MOVE_RETRY_NS) return;
         if (!fresh && (awaitingAcknowledgement(inputAt) || availableAt > now + MOVE_QUEUE_LEAD_MS ||
@@ -752,6 +756,14 @@ public final class NativeDungeonScene extends PixelScene {
             actorViews.get(self.id()).previewMove(step.dx(), step.dy(), fresh);
         }
         NativeClient.dungeonMove(step.dx(), step.dy());
+    }
+
+    private boolean waitingForEnergy(long now) {
+        if (!canAct()) return false;
+        InnApi.Action action = state.queued();
+        if (action == null && awaitingAcknowledgement(System.nanoTime())) action = submitted.action();
+        String type = action == null ? waitingAction : action.type();
+        return type != null && BattleRules.lacksEnergy(self, type, state.now(), now, state.inCombat());
     }
 
     private void previewQueuedMove(long now) {
@@ -817,6 +829,8 @@ public final class NativeDungeonScene extends PixelScene {
             tell("갈 수 있는 길이 없습니다.");
         } else if (readyAt("move") <= now) {
             move(new Step(step.x(), step.y()), false, now);
+        } else {
+            waitingAction = "move";
         }
     }
 

@@ -38,6 +38,7 @@ import com.shatteredpixel.shatteredpixeldungeon.journal.Catalog;
 import com.shatteredpixel.shatteredpixeldungeon.messages.Languages;
 import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
+import com.shatteredpixel.shatteredpixeldungeon.sprites.HeroSprite;
 import com.shatteredpixel.shatteredpixeldungeon.utils.GLog;
 import com.watabou.noosa.audio.Sample;
 
@@ -69,9 +70,13 @@ public class Food extends Item {
 	
 	@Override
 	public void execute( Hero hero, String action ) {
-		if (action.equals(AC_EAT) && hero.innAtbActive() && !hero.canSpendInnAtb(eatingTime())) {
-			GLog.w(Messages.lang() == Languages.KOREAN ? "행동력이 부족합니다." : "Not enough action points.");
-			return;
+		if (action.equals(AC_EAT) && hero.innAtbActive()) {
+			float cost = eatingTime();
+			if (!hero.canSpendInnAtb(cost)) {
+				if (hero.sprite instanceof HeroSprite) ((HeroSprite) hero.sprite).showInnAtbItemRejection(cost);
+				GLog.w(Messages.lang() == Languages.KOREAN ? "행동력이 부족합니다." : "Not enough action points.");
+				return;
+			}
 		}
 		super.execute( hero, action );
 		if (action.equals( AC_EAT )) {

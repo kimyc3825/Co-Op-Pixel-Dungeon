@@ -1663,6 +1663,10 @@ public class GameScene extends PixelScene {
 		cellSelector.select( cell, PointerEvent.LEFT );
 	}
 	
+	static boolean isDefaultCellListener(CellSelector.Listener listener) {
+		return listener == defaultCellListener;
+	}
+
 	public static void selectCell( CellSelector.Listener listener ) {
 		if (cellSelector.listener != null && cellSelector.listener != defaultCellListener){
 			cellSelector.listener.onSelect(null);

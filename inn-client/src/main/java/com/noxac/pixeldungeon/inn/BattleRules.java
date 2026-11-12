@@ -33,6 +33,10 @@ final class BattleRules {
         return Math.min(ENERGY_CAP, actor.energy() + elapsed / (double) REGEN_POINT_MS);
     }
 
+    static boolean lacksEnergy(InnApi.Combatant actor, String type, long snapshotNow, long displayNow, boolean inCombat) {
+        return energyAt(actor, snapshotNow, displayNow) + 1e-8 < cost(type, inCombat);
+    }
+
     static long readyAt(InnApi.Combatant actor, String type, long snapshotNow, boolean inCombat) {
         long gate = switch (type) {
             case "move" -> actor.moveReadyAt();

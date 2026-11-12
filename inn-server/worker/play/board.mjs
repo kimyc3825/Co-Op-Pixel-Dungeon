@@ -490,7 +490,7 @@ export class Board {
     return image;
   }
 
-  draw(now, selected, destination, aim, gameNow, wallNow = performance.now()) {
+  draw(now, selected, destination, aim, gameNow, wallNow = performance.now(), waitingForEnergy = false) {
     const context = this.context;
     for (const figure of this.figures.values()) figure.advance(now);
     this.updateCamera(now);
@@ -547,6 +547,7 @@ export class Board {
     while (rowIndex < rows.length) this.drawWallRow(rows[rowIndex++]);
     for (const { figure, npc, tool } of objects) {
       if (figure) this.drawFigureLabels(figure, now);
+      if (waitingForEnergy && figure && figure.actor === self) this.drawSweat(figure, now);
       if (npc) this.caption(npc.name, (npc.x + .5) * TILE, Math.max(9, npc.y * TILE - 5), '#f5d9a9');
       const prop = tool && TRAINING_PROPS.get(tool.id);
       if (prop) this.caption(prop[1], (tool.x + .5) * TILE, (tool.y + .97) * TILE, '#d4e7c5');
@@ -787,6 +788,16 @@ export class Board {
       this.caption(change > 0 ? `+${change}` : String(change), x,
         y - 37 - (1 - (figure.hurtUntil - now) / 590) * 14, change > 0 ? '#a4e4b4' : '#ffa68b');
     }
+  }
+
+  drawSweat(figure, now) {
+    const phase = now % 620 / 620;
+    const x = Math.round((figure.x + .5) * TILE + 10 + 8 * phase);
+    const y = Math.round((figure.y + .87) * TILE - 29 + 10 * phase);
+    paint(this.context, '#204c64', x + 2, y, 2, 10);
+    paint(this.context, '#204c64', x, y + 4, 6, 4);
+    paint(this.context, '#69c6e3', x + 2, y + 2, 2, 6);
+    paint(this.context, '#c5f5fa', x + 2, y + 2, 2, 2);
   }
 
   caption(text, x, y, color) {

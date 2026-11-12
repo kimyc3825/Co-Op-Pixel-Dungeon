@@ -44,6 +44,10 @@ function energyAt(actor, snapshotNow, displayNow) {
   return Math.min(ENERGY_CAP, actor.energy + elapsed / REGEN_POINT_MS);
 }
 
+function lacksEnergy(actor, type, snapshotNow, displayNow, inCombat) {
+  return energyAt(actor, snapshotNow, displayNow) + 1e-8 < cost(type, inCombat);
+}
+
 function readyAt(actor, type, snapshotNow, inCombat) {
   const gate = actionGate(actor, type);
   const missing = cost(type, inCombat) - actor.energy;
@@ -56,5 +60,5 @@ function readyAt(actor, type, snapshotNow, inCombat) {
 export const BattleRules = Object.freeze({
   ENERGY_CAP, MOVE_COST, ATTACK_COST, SHOOT_COST, EAT_COST, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS,
   SHOOT_RANGE, SHOOT_DAMAGE, PROJECTILE_STEP_MS,
-  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS, CHAT_LIMIT, cost, energyAt, readyAt,
+  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS, CHAT_LIMIT, cost, energyAt, lacksEnergy, readyAt,
 });
