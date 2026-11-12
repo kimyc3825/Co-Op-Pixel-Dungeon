@@ -1175,8 +1175,8 @@ function changeDirection(now, releasing = false) {
   }
   const cardinalRelease = releasing && direction?.dx && direction?.dy && !(dx && dy);
   const chordWait = !(dx && dy) && (play.frame || !direction) ? 75 : 0;
+  tap = !play.frame && cardinalRelease && direction.fresh ? { ...direction, expires: now + INN_TAP_MS } : null;
   direction = { dx, dy, at: now + (cardinalRelease ? 45 : chordWait), fresh: true, tap: !cardinalRelease };
-  tap = null;
   destination = null;
   dungeonRoute = interruptedRoute = null;
 }

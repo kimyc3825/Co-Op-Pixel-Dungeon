@@ -131,6 +131,10 @@ final class KeyboardMovement {
         }
         if (releasedDirection == next && !opposed) return;
         if (!pressed && !opposed && composed && (direction & next) == next && !diagonal(next)) {
+            if (fresh && tapOnRelease) {
+                tap = direction;
+                fresh = false;
+            }
             releasedDirection = next;
             releaseAt = now + RELEASE_MILLIS;
             return;
