@@ -98,7 +98,7 @@ export class PlaySession {
     this.friendlyFire = false;
     this.history = [];
     this.after = this.generation = this.positionRevision = this.retryAt = this.nextMoveAt = 0;
-    this.online = this.closed = this.moving = this.leftInn = this.renamePending = false;
+    this.online = this.closed = this.moving = this.leftInn = this.renamePending = this.innSuspended = false;
     this.ignoredMatch = null;
     this.status = '';
     this.visibilityChanged = () => {
@@ -117,7 +117,7 @@ export class PlaySession {
   }
 
   async join(name) {
-    if (this.closed || this.battle) return false;
+    if (this.closed || this.battle || this.innSuspended) return false;
     const value = typeof name === 'string' ? name.trim() : '';
     if (!validName(value)) {
       this.#status('닉네임을 1~20자로 입력하세요.');
@@ -137,20 +137,20 @@ export class PlaySession {
   rename(name) { return this.join(name); }
 
   setTheme(theme) {
-    if (this.closed || this.battle || this.inn?.queued || this.inn?.match ||
+    if (this.closed || this.battle || this.innSuspended || this.inn?.queued || this.inn?.match ||
         (theme !== SEWERS && theme !== PRISON)) return false;
     this.theme = theme;
     return true;
   }
 
   setFriendlyFire(enabled) {
-    if (this.closed || this.battle || this.inn?.queued || this.inn?.match || typeof enabled !== 'boolean') return false;
+    if (this.closed || this.battle || this.innSuspended || this.inn?.queued || this.inn?.match || typeof enabled !== 'boolean') return false;
     this.friendlyFire = enabled;
     return true;
   }
 
   moveInn(dx, dy) {
-    if (!this.online || this.battle || this.moving || now() < this.nextMoveAt ||
+    if (!this.online || this.battle || this.innSuspended || this.moving || now() < this.nextMoveAt ||
         !Number.isInteger(dx) || !Number.isInteger(dy) || Math.max(Math.abs(dx), Math.abs(dy)) !== 1) return false;
     const self = this.inn?.people.find(person => person.id === this.inn.selfId);
     if (!self) return false;
@@ -162,12 +162,12 @@ export class PlaySession {
     this.nextMoveAt = now() + MOVE_MS;
     const key = this.key;
     void request(INN + 'move', key, 'POST', { x, y }).then(() => {
-      if (key !== this.key || this.battle || this.closed || this.inn?.selfId !== self.id) return;
+      if (key !== this.key || this.battle || this.closed || this.innSuspended || this.inn?.selfId !== self.id) return;
       this.positionRevision++;
       this.inn = { ...this.inn, people: this.inn.people.map(person => person.id === self.id ? { ...person, x, y } : person) };
       this.onInn(this.inn);
     }, error => {
-      if (key === this.key && !this.closed && !this.battle) this.#innActionError(error);
+      if (key === this.key && !this.closed && !this.battle && !this.innSuspended) this.#innActionError(error);
     }).finally(() => { if (key === this.key) this.moving = false; });
     return true;
   }
@@ -178,7 +178,7 @@ export class PlaySession {
   cancelMatch() { return this.#innAction('match', 'PUT', { queued: false }); }
 
   practice() {
-    if (this.closed || this.battle || !this.name) return false;
+    if (this.closed || this.battle || this.innSuspended || !this.name) return false;
     const player = this.inn?.people.find(person => person.id === this.inn.selfId) ?? { id: crypto.randomUUID(), name: this.name };
     this.#beginBattle(null, player);
     return true;
@@ -188,6 +188,38 @@ export class PlaySession {
     if (type === 'pause' && target === null) target = this.frame?.state?.pausedUntil > 0 ? 'resume' : 'begin';
     const action = normalizeAction(type, dx, dy, target);
     return !!action && !!this.battle?.action(action);
+  }
+
+  async suspendInn() {
+    if (this.closed || this.battle || this.innSuspended || this.inn?.match) return false;
+    this.innSuspended = true;
+    this.generation++;
+    // Wait for an in-flight join before deleting its membership and queue.
+    await this.innSync;
+    if (this.closed) return false;
+    if (!this.key) return true;
+    try {
+      await request(INN + 'session', this.key, 'DELETE');
+    } catch {
+      this.innSuspended = false;
+      return false;
+    }
+    this.leftInn = true;
+    this.online = false;
+    this.inn = null;
+    this.onInn(null);
+    return true;
+  }
+
+  async resumeInn() {
+    if (this.closed || !this.innSuspended) return false;
+    this.innSuspended = false;
+    if (!this.key) return true;
+    this.key = newKey();
+    this.leftInn = this.moving = false;
+    this.ignoredMatch = null;
+    this.retryAt = this.nextMoveAt = 0;
+    return this.#refreshInn('enter');
   }
 
   async returnToInn() {
@@ -219,7 +251,7 @@ export class PlaySession {
   }
 
   async #refreshInn(force) {
-    if (this.closed || this.battle || !this.key || now() < this.retryAt) return false;
+    if (this.closed || this.battle || this.innSuspended || !this.key || now() < this.retryAt) return false;
     if (this.innSync) {
       if (!force) return this.innSync;
       await this.innSync;
@@ -273,17 +305,17 @@ export class PlaySession {
   }
 
   async #innAction(path, method, body) {
-    if (!this.online || this.battle || this.closed) return false;
+    if (!this.online || this.battle || this.closed || this.innSuspended) return false;
     const key = this.key;
     try {
       await request(INN + path, key, method, body);
-      if (this.key === key && !this.closed && !this.battle) {
+      if (this.key === key && !this.closed && !this.battle && !this.innSuspended) {
         this.#status('');
         await this.#refreshInn('sync');
       }
       return true;
     } catch (error) {
-      if (this.key === key && !this.closed && !this.battle) this.#innActionError(error);
+      if (this.key === key && !this.closed && !this.battle && !this.innSuspended) this.#innActionError(error);
       return false;
     }
   }

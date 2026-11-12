@@ -1,0 +1,7 @@
+# Noxac Pixel Dungeon browser original mode
+
+This target builds the same Shattered Pixel Dungeon 4.0.2 core used by the Windows game. Noxac imports that core from upstream commit [57a4e06a4caf162446d1c28caa7983f0493fecf0](https://github.com/00-Evan/shattered-pixel-dungeon/commit/57a4e06a4caf162446d1c28caa7983f0493fecf0).
+
+The browser adapter is based on [wasmga-me/shattered-pixel-dungeon-wasm, commit 1c6b68b6aab743067aec3f44991615b15bdd81e8](https://github.com/wasmga-me/shattered-pixel-dungeon-wasm/tree/1c6b68b6aab743067aec3f44991615b15bdd81e8), which ports the browser module from [goddeaterr/web-pixeldungeon](https://github.com/goddeaterr/web-pixeldungeon). It uses [gdx-teavm](https://github.com/xpenatan/gdx-teavm) 1.6.2, TeaVM 0.15.0, and libGDX 1.14.2 on the web classpath. Native modules retain their existing libGDX version. The browser module and shared game use GPLv3. Apache-licensed compatibility code retains its source notices. See [the project license](../LICENSE.txt).
+
+With JDK 17 or later, run `./gradlew -PwebOnly html:dist` from the repository root. Windows also supports `gradlew.bat -PwebOnly html:dist`. Serve `html/build/dist/web` over HTTP. The web build stores its saves in IndexedDB under a stable Noxac namespace. The surrounding inn page and the game exchange same-origin readiness, error, and return messages. Returning from an active game runs its pause and save path before the iframe detaches.

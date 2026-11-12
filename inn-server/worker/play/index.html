@@ -10,7 +10,7 @@
   <script type="module" src="/play/main.mjs"></script>
 </head>
 <body>
-  <main class="shell">
+  <main id="play-shell" class="shell">
     <header class="masthead">
       <div class="brand">
         <span class="brand-icon" aria-hidden="true"><i></i></span>
@@ -106,9 +106,9 @@
             <ul id="seekers" class="seekers" aria-label="동료를 찾는 모험가" hidden></ul>
             <button id="guide" class="wide" type="button" disabled>연습 모드 · 길잡이</button>
             <div class="original-entry">
-              <h3>원본 녹픽던</h3>
-              <p>Windows EXE를 열고 여관에서 <strong>원본 녹픽던</strong>을 선택하세요.</p>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/latest" target="_blank" rel="noopener">Windows 배포판 보기</a>
+              <button id="original-launch" class="wide" type="button">원본 녹픽던 시작</button>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/inn-v0.9.1-web/html" target="_blank" rel="noopener">웹판 소스 코드</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.9.0" target="_blank" rel="noopener">Windows 배포판 0.9.0</a>
             </div>
           </section>
 
@@ -155,5 +155,19 @@
       </aside>
     </div>
   </main>
+  <section id="original-screen" class="original-screen" aria-labelledby="original-title" hidden>
+    <header class="original-header">
+      <h1 id="original-title">원본 녹픽던</h1>
+      <button id="original-return" type="button">여관으로</button>
+    </header>
+    <div id="original-body" class="original-body">
+      <div id="original-loading" class="loading-overlay">
+        <div id="original-ember" class="loading-ember" aria-hidden="true"></div>
+        <p id="original-phase" role="status"></p>
+        <p id="original-tip" class="original-tip" aria-hidden="true"></p>
+        <button id="original-retry" class="primary" type="button" hidden>다시 시도</button>
+      </div>
+    </div>
+  </section>
 </body>
 </html>

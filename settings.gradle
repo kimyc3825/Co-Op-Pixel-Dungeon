@@ -5,8 +5,12 @@ include ':SPD-classes'
 include ':core'
 
 //platform modules
-include ':android'
-include ':ios'
+if (startParameter.projectProperties.containsKey('webOnly')) {
+    include ':html'
+} else {
+    include ':android'
+    include ':ios'
+}
 include ':desktop'
 
 //service modules

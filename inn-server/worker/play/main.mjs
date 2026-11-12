@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules, PRISON } from './rules.mjs';
 import { Board, canStep, canStrike, nextToward } from './board.mjs';
+import { OriginalGame } from './original.mjs';
 import { PlaySession } from './session.mjs';
 
 const byId = (id) => document.getElementById(id);
@@ -13,6 +14,7 @@ const fields = Object.fromEntries([
   'dungeon-chat-log', 'dungeon-chat-form', 'dungeon-chat-message', 'dungeon-chat-send',
   'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
+  'original-launch',
 ].map((id) => [id, byId(id)]));
 
 const keys = new Map([
@@ -129,6 +131,19 @@ const play = new PlaySession({
   onLoading: updateLoading,
 });
 
+const original = new OriginalGame({
+  suspend: () => play.suspendInn(),
+  resume: () => play.resumeInn(),
+  canLaunch: canLaunchOriginal,
+  onChange(active) {
+    clearMovement();
+    showDialogue();
+    updateScene();
+    if (!active) focusBoard();
+  },
+  tips: LOADING_TIPS,
+});
+
 function text(element, value) {
   if (element.textContent !== value) element.textContent = value;
 }
@@ -196,6 +211,11 @@ function isRuntimeLoading() {
   return loading?.phase === 'checking' || loading?.phase === 'loading';
 }
 
+function canLaunchOriginal() {
+  return !play.frame && !play.battle && !play.inn?.match && !play.inn?.queued && !isRuntimeLoading() &&
+    !busy.has('match') && !busy.has('name') && !busy.has('return');
+}
+
 function updateLoading(state) {
   loading = state.phase === 'ready' || state.cancelled ? null : state;
   const active = isRuntimeLoading();
@@ -236,7 +256,7 @@ function updateScene() {
   board.canvas.dataset.paused = String(isPaused(play.frame?.state));
   text(fields['scene-title'], title);
   text(fields['board-title'], dungeon ? `${title} 던전` : '여관 홀');
-  const tabTitle = `${title} · Noxac Pixel Dungeon`;
+  const tabTitle = `${original.active ? '원본 녹픽던' : title} · Noxac Pixel Dungeon`;
   if (document.title !== tabTitle) document.title = tabTitle;
   board.canvas.setAttribute('aria-label', dungeon
     ? `${title} 지도. 방향키로 이동하고 스페이스로 평타, R로 사격을 조준합니다.` : '여관 지도. 방향키나 WASD로 이동합니다.');
@@ -271,6 +291,7 @@ function updateInn() {
   fields.match.disabled = !ready || busy.has('match');
   fields.drink.disabled = !ready || busy.has('drink');
   fields.guide.disabled = !ready;
+  fields['original-launch'].disabled = original.active || !canLaunchOriginal();
   fields['chat-message'].disabled = !ready;
   fields['chat-send'].disabled = !ready || busy.has('chat');
   fields['battle-overlay'].hidden = isRuntimeLoading() || !entering && !returning;
@@ -933,6 +954,7 @@ board.canvas.addEventListener('wheel', (event) => {
 function typing(target) { return target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable); }
 
 window.addEventListener('keydown', (event) => {
+  if (original.active) return;
   if (event.code === 'F1' && !event.repeat) { event.preventDefault(); toggleHelp(); return; }
   if (event.altKey || event.ctrlKey || event.metaKey || typing(event.target)) return;
   if (!play.frame && !event.repeat) {
@@ -994,10 +1016,12 @@ for (const button of document.querySelectorAll('[data-direction]')) {
 }
 
 function render(now) {
-  movement(now);
-  board.draw(visualTime(now), selected, destination, aimCell, play.frame?.serverTime());
-  updateCombatUi();
-  updateNotice(now);
+  if (!original.active) {
+    movement(now);
+    board.draw(visualTime(now), selected, destination, aimCell, play.frame?.serverTime());
+    updateCombatUi();
+    updateNotice(now);
+  }
   requestAnimationFrame(render);
 }
 

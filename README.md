@@ -31,6 +31,7 @@ Shattered Pixel Dungeon v4.0.2 기반의 Windows·브라우저 협동 플레이 
 ## 빌드와 소스
 
 - [Windows 빌드, 행동력 규칙, 멀티플레이 프로토콜](docs/inn.md)
+- [원본 웹판 빌드와 출처](html/README.md)
 - [Sites Worker 로컬 개발 및 배포](inn-server/README.md)
 - [원본 Android 빌드](docs/getting-started-android.md), [원본 데스크톱 빌드](docs/getting-started-desktop.md), [원본 iOS 빌드](docs/getting-started-ios.md)
 
