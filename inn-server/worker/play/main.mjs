@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules } from './battle.mjs';
-import { Board, canStep, nextToward } from './board.mjs';
+import { Board, canStep, canStrike, nextToward } from './board.mjs';
 import { PlaySession } from './session.mjs';
 
 const byId = (id) => document.getElementById(id);
@@ -328,7 +328,7 @@ function inReach(state, player, target) {
   if (target?.kind !== 'enemy' || target.hp <= 0) return false;
   const dx = target.x - player.x;
   const dy = target.y - player.y;
-  return Math.max(Math.abs(dx), Math.abs(dy)) === 1 && canStep(state.map, player.x, player.y, dx, dy, true);
+  return canStrike(state.map, player.x, player.y, dx, dy);
 }
 
 function sameAction(a, b) {

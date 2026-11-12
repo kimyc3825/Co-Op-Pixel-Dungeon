@@ -120,11 +120,12 @@ function distance(x, y, target) {
 
 function stepAllowed(x, y, dx, dy) {
   return walkable(x + dx, y + dy) &&
-    (dx === 0 || dy === 0 || (walkable(x + dx, y) && walkable(x, y + dy)));
+    (dx === 0 || dy === 0 || walkable(x + dx, y) || walkable(x, y + dy));
 }
 
 function inReach(x, y, target) {
-  return distance(x, y, target) === 1 && stepAllowed(x, y, target.x - x, target.y - y);
+  return distance(x, y, target) === 1 && walkable(target.x, target.y) &&
+    (x === target.x || y === target.y || (walkable(target.x, y) && walkable(x, target.y)));
 }
 
 function opponents(a, b) {

@@ -5,9 +5,19 @@ const INN = ['############', '#BBBBBBBB..#', '#..........#', '#..TT..TT..#', '#.
   '#..TT..TT..#', '#..........#', '#....DD....#', '############'];
 export const DIRECTIONS = [[1, 0], [-1, 0], [0, -1], [0, 1], [1, -1], [-1, -1], [1, 1], [-1, 1]];
 
+function walkable(map, x, y, dungeon) {
+  const tile = map[y]?.[x];
+  return tile === '.' || (!dungeon && tile === 'D');
+}
+
 export function canStep(map, x, y, dx, dy, dungeon = false) {
-  const walkable = (cx, cy) => dungeon ? map[cy]?.[cx] === '.' : ['.', 'D'].includes(map[cy]?.[cx]);
-  return walkable(x + dx, y + dy) && (!dx || !dy || (walkable(x + dx, y) && walkable(x, y + dy)));
+  return Math.max(Math.abs(dx), Math.abs(dy)) === 1 && walkable(map, x + dx, y + dy, dungeon) &&
+    (!dx || !dy || walkable(map, x + dx, y, dungeon) || walkable(map, x, y + dy, dungeon));
+}
+
+export function canStrike(map, x, y, dx, dy) {
+  return canStep(map, x, y, dx, dy, true) &&
+    (!dx || !dy || (walkable(map, x + dx, y, true) && walkable(map, x, y + dy, true)));
 }
 
 export function nextToward(map, x, y, targetX, targetY) {

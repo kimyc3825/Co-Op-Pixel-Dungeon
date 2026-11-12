@@ -120,7 +120,7 @@ export class PlaySession {
     const x = self.x + dx;
     const y = self.y + dy;
     const map = this.inn.map;
-    if (!walkable(map, x, y) || (dx && dy && (!walkable(map, x, self.y) || !walkable(map, self.x, y)))) return false;
+    if (!walkable(map, x, y) || (dx && dy && !walkable(map, x, self.y) && !walkable(map, self.x, y))) return false;
     this.moving = true;
     this.nextMoveAt = now() + MOVE_MS;
     const key = this.key;

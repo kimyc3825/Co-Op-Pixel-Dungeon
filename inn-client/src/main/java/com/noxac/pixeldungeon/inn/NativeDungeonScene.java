@@ -406,7 +406,7 @@ public final class NativeDungeonScene extends PixelScene {
         int x = self.x() + step.dx();
         int y = self.y() + step.dy();
         if (!passable(x, y) || step.dx() != 0 && step.dy() != 0 &&
-            (!passable(x, self.y()) || !passable(self.x(), y))) return false;
+            (!passable(x, self.y()) && !passable(self.x(), y))) return false;
         // The party host checks the destination again when a queued move is executed.
         return !ready || state.actors().stream().noneMatch(actor -> actor.hp() > 0 && actor.x() == x && actor.y() == y);
     }

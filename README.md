@@ -6,13 +6,13 @@ Shattered Pixel Dungeon v4.0.2 기반의 Windows·브라우저 협동 플레이 
 
 [웹 여관에서 플레이](https://noxac-pixel-dungeon-inn.kimyc3825.chatgpt.site/play/)
 
-닉네임을 입력하고 **입장**을 누릅니다. 브라우저와 Windows 0.6.0으로 같은 여관에 들어갈 수 있습니다. 두 클라이언트 모두 파티장과 참가자 역할을 맡을 수 있습니다. 웹에서 혼자 연습하려면 **길잡이와 입장**을 누릅니다.
+닉네임을 입력하고 **입장**을 누릅니다. 브라우저와 Windows 0.6.1으로 같은 여관에 들어갈 수 있습니다. 두 클라이언트 모두 파티장과 참가자 역할을 맡을 수 있습니다. 웹에서 혼자 연습하려면 **길잡이와 입장**을 누릅니다.
 
 ## Windows 테스트
 
-1. [0.6.0 테스트 릴리스](https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.6.0)에서 `NoxacPixelDungeon-Inn-0.6.0-win-x64.zip`을 받습니다.
+1. [0.6.1 테스트 릴리스](https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.6.1)에서 `NoxacPixelDungeon-Inn-0.6.1-win-x64.zip`을 받습니다.
 2. ZIP 전체를 푼 뒤 `NoxacPixelDungeon/NoxacPixelDungeon.exe`를 실행합니다. Windows x64용이며 Java 런타임을 포함합니다.
-3. 두 사람 모두 0.6.0으로 여관에 접속해 **동료 구함**을 누릅니다. 혼자 연습하려면 **테스트 모드 → 길잡이와 입장**을 선택합니다.
+3. 두 사람 모두 0.6.1으로 여관에 접속해 **동료 구함**을 누릅니다. 혼자 연습하려면 **테스트 모드 → 길잡이와 입장**을 선택합니다.
 
 이동은 WASD, 방향키 또는 숫자패드입니다. 두 방향키를 조합해 대각선으로 이동합니다. **Space**는 평타, **E**는 식량, **F1**은 조작 도움말입니다.
 
@@ -31,3 +31,5 @@ Shattered Pixel Dungeon v4.0.2 기반의 Windows·브라우저 협동 플레이 
 [Evan Debenham의 Shattered Pixel Dungeon v4.0.2](https://github.com/00-Evan/shattered-pixel-dungeon/tree/v4.0.2)에서 분기했습니다. Shattered Pixel Dungeon은 [Oleg Dolya의 Pixel Dungeon](https://github.com/watabou/pixel-dungeon)을 바탕으로 합니다.
 
 [GPLv3](LICENSE.txt)와 [서드파티 라이선스 고지](inn-client/THIRD_PARTY_NOTICES.md)가 적용됩니다. Windows 배포본에 대응하는 소스 ZIP은 같은 릴리스에 있습니다.
+
+- [원본 업데이트 검토](docs/upstream-update.md)

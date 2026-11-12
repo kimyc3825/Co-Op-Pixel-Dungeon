@@ -202,11 +202,12 @@ final class HostBattle {
 
     private static boolean stepAllowed(int x, int y, int dx, int dy) {
         return walkable(x + dx, y + dy) &&
-            (dx == 0 || dy == 0 || (walkable(x + dx, y) && walkable(x, y + dy)));
+            (dx == 0 || dy == 0 || walkable(x + dx, y) || walkable(x, y + dy));
     }
 
     private static boolean inReach(int x, int y, Actor target) {
-        return distance(x, y, target) == 1 && stepAllowed(x, y, target.x - x, target.y - y);
+        return distance(x, y, target) == 1 && walkable(target.x, target.y) &&
+            (x == target.x || y == target.y || (walkable(target.x, y) && walkable(x, target.y)));
     }
 
     private boolean canMove(int x, int y, int dx, int dy) {

@@ -54,7 +54,7 @@ final class InnApi {
             int dx = Math.abs(nextX - x);
             int dy = Math.abs(nextY - y);
             return Math.max(dx, dy) == 1 && walkable(nextX, nextY) &&
-                (dx == 0 || dy == 0 || walkable(nextX, y) && walkable(x, nextY));
+                (dx == 0 || dy == 0 || walkable(nextX, y) || walkable(x, nextY));
         }
     }
 
