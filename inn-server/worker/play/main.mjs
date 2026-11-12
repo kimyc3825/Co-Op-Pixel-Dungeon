@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules, PRISON } from './rules.mjs';
-import { Board, canStep, canStrike, nextToward } from './board.mjs';
+import { Board, DIRECTIONS, canStep, canStrike, nextToward } from './board.mjs';
 import { OriginalGame } from './original.mjs';
 import { PlaySession } from './session.mjs';
 import { AvatarCatalog, normalizeAppearance } from './avatar-catalog.mjs';
@@ -19,7 +19,7 @@ const fields = Object.fromEntries([
   'dungeon-chat-log', 'dungeon-chat-message', 'dungeon-chat-send',
   'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
-  'original-launch',
+  'original-launch', 'expedition-window', 'expedition-toggle', 'backpack-window', 'backpack-toggle', 'chat-toggle', 'hud-scrim',
 ].map((id) => [id, byId(id)]));
 
 const trainingHint = document.createElement('p');
@@ -83,11 +83,16 @@ const profileFields = [
 ];
 const profileCard = fields['name-form'].closest('.profile-card');
 const layout = profileCard.closest('.layout');
+const gameWindows = [
+  [fields['expedition-window'], fields['expedition-toggle']],
+  [fields['backpack-window'], fields['backpack-toggle']],
+];
 const preview = fields['profile-preview'];
 const previewContext = preview.getContext('2d');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
-let profileOpen = true;
 let savedProfile = loadProfile();
+let profileOpen = !savedProfile.name.trim();
+let hudDungeon = false;
 let previewAvatar;
 let lastPreviewAvatar;
 let lastPreviewFrame = -1;
@@ -97,8 +102,11 @@ const slotViews = [];
 let direction;
 let tap;
 let destination;
+let dungeonRoute = null;
+let interruptedRoute = null;
 let selected;
 let aimCell = null;
+let examining = false;
 let submitted;
 let queuedPreview;
 let lastMoveAt = 0;
@@ -114,6 +122,10 @@ let pauseRequest = null;
 let selectedSlot = -1;
 let wheelTotal = 0;
 let lastWheelAt = 0;
+const boardTouches = new Map();
+let boardDrag = null;
+let pinchDistance = 0;
+let ignoreBoardClickUntil = 0;
 let loading = null;
 let loadingTipIndex = Math.floor(Math.random() * LOADING_TIPS.length);
 let loadingTipTimer = null;
@@ -128,6 +140,8 @@ const play = new PlaySession({
     if (!frame) {
       clearMovement();
       setAim(null);
+      setExamining(false);
+      interruptedRoute = null;
       clearAttackLog();
       lastBattle = selected = submitted = queuedPreview = null;
       resetVisualClock();
@@ -142,6 +156,8 @@ const play = new PlaySession({
       resetVisualClock();
       clearAttackLog();
       setAim(null);
+      setExamining(false);
+      interruptedRoute = null;
       showDialogue();
       selected = submitted = queuedPreview = null;
       selectedSlot = -1;
@@ -168,6 +184,13 @@ const play = new PlaySession({
     }
     showDrops(state, prior);
     showTrainingUse(state, prior);
+    if (prior?.id === state.id && dungeonRoute) {
+      const previous = ownActor(prior);
+      const player = ownActor(state);
+      if (player?.hp < previous?.hp || dungeonRoute.type !== 'attack' && !prior.inCombat && state.inCombat) {
+        stopAndRememberRoute();
+      }
+    }
     lastBattle = state;
     updateScene();
   },
@@ -186,6 +209,7 @@ const original = new OriginalGame({
   getProfile: ownProfile,
   onChange(active) {
     clearMovement();
+    setExamining(false);
     showDialogue();
     updateScene();
     if (!active) focusBoard();
@@ -224,7 +248,7 @@ function resetVisualClock() {
 function syncVisualClock(paused, now) {
   if (paused && frozenAt === null) {
     frozenAt = now;
-    clearMovement();
+    stopAndRememberRoute();
     selectedSlot = -1;
   } else if (!paused && frozenAt !== null) {
     frozenDuration += now - frozenAt;
@@ -296,10 +320,8 @@ function writeProfile(profile) {
 }
 
 function updateProfile(state, online, locked) {
-  profileCard.dataset.editing = String(profileOpen);
   layout.dataset.profileEntry = String(!online && profileOpen);
-  fields['name-form'].hidden = !profileOpen;
-  fields['profile-summary'].hidden = profileOpen;
+  fields['profile-summary'].hidden = !online || profileOpen;
   fields['profile-cancel'].hidden = !online;
   fields.drink.hidden = !online || profileOpen;
   fields['profile-change'].disabled = !online || locked;
@@ -307,8 +329,10 @@ function updateProfile(state, online, locked) {
   fields['name-button'].disabled = locked;
   fields['player-name'].disabled = locked;
   for (const { input } of profileFields) input.disabled = locked;
-  text(fields['name-heading'], online ? profileOpen ? '프로필 변경' : '모험가' : '여관 입장');
+  text(fields['name-heading'], online ? '프로필 변경' : '캐릭터 생성');
   text(fields['name-button'], online ? '저장' : '여관에 입장');
+  if (profileOpen && !profileCard.open) profileCard.showModal();
+  else if (!profileOpen && profileCard.open) profileCard.close();
   if (profileOpen) return;
   const profile = ownProfile(state);
   text(fields['profile-name'], profile.name);
@@ -329,6 +353,52 @@ function drawProfile(now) {
 }
 
 function focusBoard() { board.canvas.focus({ preventScroll: true }); }
+
+function closePartyDetails() {
+  for (const slot of party.values()) {
+    slot.details.hidden = true;
+    slot.inspect.setAttribute('aria-expanded', 'false');
+    text(slot.inspectLabel, '상태');
+  }
+}
+
+function closeGameWindows() {
+  for (const [panel, button] of gameWindows) {
+    panel.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  }
+  fields['hud-scrim'].hidden = true;
+  closePartyDetails();
+}
+
+function toggleGameWindow(index) {
+  const [panel, button] = gameWindows[index];
+  const open = panel.hidden;
+  closeGameWindows();
+  if (open) {
+    clearMovement();
+    panel.hidden = false;
+    fields['hud-scrim'].hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    panel.querySelector('button').focus({ preventScroll: true });
+  } else {
+    button.focus({ preventScroll: true });
+  }
+}
+
+function toggleBackpack() {
+  if (play.frame) toggleGameWindow(1);
+}
+
+function toggleHeroStatus() {
+  const slot = party.get(ownActor()?.id);
+  if (slot) slot.inspect.click();
+}
+
+function gameUiBlocksMovement() {
+  return profileCard.open || gameWindows.some(([panel]) => !panel.hidden) ||
+    [...party.values()].some(({ details }) => !details.hidden);
+}
 
 function chatFocused() { return chatInputs.has(document.activeElement); }
 
@@ -356,6 +426,7 @@ function updateLoading(state) {
   if (active) {
     text(fields['loading-phase'], state.phase === 'checking' ? '게임 버전 확인 중' : '던전 불러오는 중');
     if (loadingTipTimer === null) {
+      closeGameWindows();
       clearMovement();
       text(fields['loading-tip'], LOADING_TIPS[loadingTipIndex]);
       loadingTipTimer = setInterval(() => {
@@ -377,6 +448,10 @@ function updateLoading(state) {
 
 function updateScene() {
   const dungeon = Boolean(play.frame);
+  if (dungeon !== hudDungeon) {
+    hudDungeon = dungeon;
+    closeGameWindows();
+  }
   const title = dungeon ? (play.frame.state.theme === PRISON ? '버려진 감옥' : '하수도') : '여관';
   fields['inn-panel'].hidden = dungeon;
   fields['dungeon-panel'].hidden = !dungeon;
@@ -388,7 +463,7 @@ function updateScene() {
   const tabTitle = `${original.active ? '원본 녹픽던' : title} · Noxac Pixel Dungeon`;
   if (document.title !== tabTitle) document.title = tabTitle;
   board.canvas.setAttribute('aria-label', dungeon
-    ? `${title} 지도. 방향키로 이동하고 스페이스로 평타, R로 사격을 조준합니다.` : '여관 지도. 방향키나 WASD로 이동합니다.');
+    ? `${title} 지도. 클릭이나 방향키로 이동하고 Q로 평타, 1로 활을 조준합니다.` : '여관 지도. 클릭이나 방향키, WASD로 이동합니다.');
   if (dungeon) updateBattle();
   else updateInn();
 }
@@ -414,6 +489,8 @@ function updateInn() {
   fields['friendly-fire'].disabled = rulesLocked;
   text(fields.match, queued ? '동료 찾는 중 · 취소' : '동료 찾기');
   fields.match.dataset.waiting = String(queued);
+  fields['expedition-toggle'].dataset.waiting = String(queued);
+  text(fields['expedition-toggle'], queued ? '동료 찾는 중' : '원정');
   fields.match.disabled = !ready || busy.has('match');
   fields.drink.disabled = !ready || busy.has('drink');
   fields.guide.disabled = !ready || rulesLocked || profileOpen;
@@ -421,6 +498,7 @@ function updateInn() {
   fields['original-launch'].disabled = original.active || !canLaunchOriginal();
   fields['chat-message'].disabled = !ready;
   fields['chat-send'].disabled = !ready || busy.has('chat');
+  fields['chat-toggle'].disabled = !ready;
   fields['battle-overlay'].hidden = isRuntimeLoading() || !entering && !returning;
   if (entering || returning) text(fields['battle-overlay'], returning ? '여관으로 돌아가는 중…' : '던전에 들어가는 중…');
   if (!ready) showDialogue();
@@ -532,6 +610,7 @@ function updateBattle() {
   fields['party-rules'].dataset.enabled = String(state.friendlyFire === true);
   fields.return.disabled = busy.has('return');
   fields['dungeon-chat-message'].disabled = fields['dungeon-chat-send'].disabled = !canChat(state);
+  fields['chat-toggle'].disabled = !canChat(state);
   updateChat(fields['dungeon-chat-log'], state.messages ?? []);
   updateParty(state);
   updateBackpack();
@@ -584,16 +663,21 @@ function updateParty(state) {
         details.append(label, value);
       }
       inspect.addEventListener('click', () => {
-        details.hidden = !details.hidden;
-        inspect.setAttribute('aria-expanded', String(!details.hidden));
-        text(inspectLabel, details.hidden ? '상태' : '닫기');
+        const open = details.hidden;
+        closeGameWindows();
+        if (open) {
+          clearMovement();
+          details.hidden = false;
+          inspect.setAttribute('aria-expanded', 'true');
+          text(inspectLabel, '닫기');
+        } else focusBoard();
         updateCombatUi();
       });
       inspect.append(name, inspectLabel);
       stats.append(health, energy);
       root.append(inspect, stats, hpMeter, energyMeter, details);
       fields.party.append(root);
-      slot = { root, name, health, energy, hpMeter, energyMeter, details, detailValues };
+      slot = { root, name, health, energy, hpMeter, energyMeter, details, detailValues, inspect, inspectLabel };
       party.set(actor.id, slot);
     }
     text(slot.name, `${actor.name}${own ? ' (나)' : ''}`);
@@ -833,8 +917,12 @@ function isAttackTarget(actor) {
   return actor?.kind === 'enemy' || actor?.kind === 'dummy';
 }
 
+function selectableTarget(state, actor) {
+  return actor?.hp > 0 && actor.id !== state.selfId && (isAttackTarget(actor) || state.friendlyFire);
+}
+
 function inReach(state, player, target) {
-  if (!isAttackTarget(target) || target.hp <= 0) return false;
+  if (!selectableTarget(state, target)) return false;
   const dx = target.x - player.x;
   const dy = target.y - player.y;
   return canStrike(state.map, player.x, player.y, dx, dy);
@@ -857,11 +945,13 @@ function attack(targetId) {
   const state = play.frame?.state;
   const player = ownActor(state);
   if (!canAttack(state, player)) return;
+  clearMovement();
+  setExamining(false);
   setAim(null);
   const selectedTarget = state.actors.find((actor) => actor.id === (targetId ?? selected));
   const target = targetId ? selectedTarget : inReach(state, player, selectedTarget) ? selectedTarget :
-    state.actors.find((actor) => inReach(state, player, actor));
-  if (!target || target.id === player.id || !isAttackTarget(target) && !state.friendlyFire) {
+    state.actors.find((actor) => isAttackTarget(actor) && inReach(state, player, actor));
+  if (!selectableTarget(state, target)) {
     flash(state.trainingTools?.length ? '가까운 허수아비나 적에게 평타를 쓸 수 있습니다.' : '가까운 적에게 평타를 쓸 수 있습니다.');
     return;
   }
@@ -887,6 +977,7 @@ function toggleAim() {
     return;
   }
   clearMovement();
+  setExamining(false);
   const target = state.actors.find((actor) => actor.id === selected && isAttackTarget(actor) && actor.hp > 0) ?? player;
   setAim([target.x, target.y]);
 }
@@ -907,6 +998,9 @@ function eat() {
   const state = play.frame?.state;
   const player = ownActor(state);
   if (!canAct(state, player)) return;
+  clearMovement();
+  setAim(null);
+  setExamining(false);
   if (!player.rations) flash('보유한 식량이 없습니다.');
   else if (player.hp >= player.maxHp) flash('체력이 이미 가득 찼습니다.');
   else requestAction('eat', 0, 0, null, performance.now());
@@ -938,7 +1032,134 @@ function moveInn(dx, dy, now) {
 function clearMovement() {
   held.clear();
   direction = tap = destination = null;
+  dungeonRoute = null;
   lastMoveAt = 0;
+}
+
+function stopAndRememberRoute() {
+  const route = dungeonRoute;
+  clearMovement();
+  if (route) interruptedRoute = route;
+}
+
+function beginDungeonRoute(route) {
+  clearMovement();
+  dungeonRoute = route;
+  interruptedRoute = null;
+  if (route.type === 'attack') selected = route.target;
+  followDungeonRoute(performance.now());
+}
+
+function findDungeonPath(state, player, reached) {
+  const { map } = state;
+  const width = map[0].length;
+  const occupied = new Uint8Array(width * map.length);
+  for (const actor of state.actors) {
+    if (actor.hp > 0 && actor.id !== player.id) occupied[actor.y * width + actor.x] = 1;
+  }
+  const seen = new Uint8Array(occupied.length);
+  const queue = [{ x: player.x, y: player.y, first: null }];
+  seen[player.y * width + player.x] = 1;
+  for (let index = 0; index < queue.length; index++) {
+    const { x, y, first } = queue[index];
+    if (first && reached(x, y)) return { x, y, first };
+    for (const step of DIRECTIONS) {
+      const [dx, dy] = step;
+      if (!canStep(map, x, y, dx, dy, true)) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      const key = ny * width + nx;
+      if (occupied[key] || seen[key]) continue;
+      seen[key] = 1;
+      queue.push({ x: nx, y: ny, first: first ?? step });
+    }
+  }
+  return null;
+}
+
+function followDungeonRoute(now) {
+  const frame = play.frame;
+  const state = frame?.state;
+  const player = ownActor(state);
+  const route = dungeonRoute;
+  if (!route || !canAct(state, player) || state.queued || submitted && now - submitted.sent < ACK_WAIT) return;
+
+  let reached;
+  let availableDrops;
+  if (route.type === 'attack') {
+    const target = state.actors.find(({ id }) => id === route.target);
+    if (!canAttack(state, player) || !selectableTarget(state, target)) {
+      dungeonRoute = null;
+      return;
+    }
+    reached = (x, y) => canStrike(state.map, x, y, target.x - x, target.y - y);
+    if (reached(player.x, player.y)) {
+      if (BattleRules.readyAt(player, 'attack', state.now, state.inCombat) <= frame.serverTime() &&
+          requestAction('attack', 0, 0, target.id, now)) dungeonRoute = null;
+      return;
+    }
+  } else if (route.type === 'loot') {
+    availableDrops = state.drops.filter(({ id, pickedBy }) => pickedBy == null && (!route.target || id === route.target));
+    if (!availableDrops.length) {
+      dungeonRoute = null;
+      return;
+    }
+    reached = (x, y) => availableDrops.some((drop) => drop.x === x && drop.y === y);
+  } else {
+    reached = (x, y) => x === route.x && y === route.y;
+  }
+
+  if (reached(player.x, player.y)) {
+    dungeonRoute = null;
+    return;
+  }
+  // Send automatic steps only once ready, so stopping does not leave another step queued at the host.
+  if (BattleRules.readyAt(player, 'move', state.now, state.inCombat) > frame.serverTime()) return;
+  const path = findDungeonPath(state, player, reached);
+  if (path) {
+    if (availableDrops && !route.target) {
+      const drop = availableDrops.find(({ x, y }) => x === path.x && y === path.y);
+      route.target = drop.id;
+      route.x = path.x;
+      route.y = path.y;
+    }
+    moveDungeon(...path.first, false, now);
+  } else {
+    stopAndRememberRoute();
+    flash('이동할 수 있는 길이 없습니다.');
+  }
+}
+
+function setExamining(enabled) {
+  examining = enabled;
+  board.canvas.dataset.examining = String(enabled);
+}
+
+function toggleExamine() {
+  if (examining) {
+    setExamining(false);
+    return;
+  }
+  clearMovement();
+  setAim(null);
+  setExamining(true);
+  flash('살펴볼 칸이나 대상을 선택하세요.');
+}
+
+function examineCell(x, y) {
+  const state = play.frame?.state ?? play.inn;
+  const tile = state?.map[y]?.[x];
+  if (tile == null) return;
+  const actor = (state.actors ?? state.people)?.find((person) => person.x === x && person.y === y && person.hp !== 0);
+  const npc = state.npcs?.find((person) => person.x === x && person.y === y);
+  const tool = state.trainingTools?.find((item) => item.x === x && item.y === y);
+  const drop = state.drops?.find((item) => item.x === x && item.y === y && item.pickedBy == null);
+  if (actor) flash(actor.hp == null ? actor.name : `${actor.name} · HP ${actor.hp}/${actor.maxHp}`);
+  else if (npc) flash(`${npc.name} · ${npc.dialogue}`);
+  else if (tool) flash(tool.id === 'ration-rack' ? '식량 상자 · 식량을 3개까지 채웁니다.' : '회복 도구 · 체력과 행동력이 찹니다.');
+  else if (drop) flash(`${itemNames[drop.item] ?? drop.item} · ${drop.amount}개`);
+  else flash(tile === '#' ? '벽' : tile === 'D' ? '문' : '통로');
+  setExamining(false);
 }
 
 function changeDirection(now, releasing = false) {
@@ -955,17 +1176,22 @@ function changeDirection(now, releasing = false) {
   direction = { dx, dy, at: now + (cardinalRelease ? 45 : dx && dy ? 0 : 75), fresh: true, tap: !cardinalRelease };
   tap = null;
   destination = null;
+  dungeonRoute = interruptedRoute = null;
 }
 
 function movement(now) {
-  if (aimCell || isRuntimeLoading() || isPaused(play.frame?.state) || typing(document.activeElement)) return;
+  if (aimCell || examining || gameUiBlocksMovement() || isRuntimeLoading() ||
+      isPaused(play.frame?.state) || typing(document.activeElement)) return;
   const command = tap ?? (direction?.at <= now ? direction : null);
   if (command) {
+    if (play.frame && tap && now - lastMoveAt < MOVE_RETRY) return;
     if (play.frame) moveDungeon(command.dx, command.dy, command.fresh, now);
     else moveInn(command.dx, command.dy, now);
     command.fresh = false;
     tap = null;
-  } else if (!play.frame && !held.size && destination && play.inn) {
+  } else if (play.frame && !held.size) {
+    followDungeonRoute(now);
+  } else if (!held.size && destination && play.inn) {
     const state = play.inn;
     const player = state.people.find((person) => person.id === state.selfId);
     const step = player && nextToward(state.map, player.x, player.y, ...destination);
@@ -1001,6 +1227,7 @@ for (const { input, options } of profileFields) {
 }
 writeProfile(savedProfile);
 fields['profile-change'].addEventListener('click', () => {
+  closeGameWindows();
   clearMovement();
   writeProfile(ownProfile());
   profileOpen = true;
@@ -1012,6 +1239,29 @@ fields['profile-cancel'].addEventListener('click', () => {
   updateInn();
   if (fields['profile-change'].disabled) focusBoard();
   else fields['profile-change'].focus();
+});
+profileCard.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  if (!fields['profile-cancel'].hidden && !fields['profile-cancel'].disabled) fields['profile-cancel'].click();
+});
+fields['expedition-toggle'].addEventListener('click', () => toggleGameWindow(0));
+fields['backpack-toggle'].addEventListener('click', toggleBackpack);
+for (const close of document.querySelectorAll('[data-close-window]')) {
+  close.addEventListener('click', () => toggleGameWindow(close.dataset.closeWindow === 'expedition' ? 0 : 1));
+}
+fields['hud-scrim'].addEventListener('click', () => { closeGameWindows(); focusBoard(); });
+document.addEventListener('keydown', (event) => {
+  const close = event.key === 'Escape' || event.key === 'Backspace' && !typing(event.target);
+  if (!close || profileCard.open || !gameUiBlocksMovement()) return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeGameWindows();
+  focusBoard();
+}, { capture: true });
+fields['chat-toggle'].addEventListener('click', () => {
+  closeGameWindows();
+  clearMovement();
+  fields[play.frame ? 'dungeon-chat-message' : 'chat-message'].focus({ preventScroll: true });
 });
 fields['dungeon-theme'].addEventListener('change', () => {
   play.setTheme(fields['dungeon-theme'].value);
@@ -1034,10 +1284,13 @@ fields['name-form'].addEventListener('submit', (event) => {
     }
     saveProfile(ownProfile());
     profileOpen = false;
+    updateInn();
     focusBoard();
   });
 });
 for (const input of chatInputs) {
+  input.addEventListener('focus', () => fields['chat-toggle'].setAttribute('aria-expanded', 'true'));
+  input.addEventListener('blur', () => fields['chat-toggle'].setAttribute('aria-expanded', 'false'));
   input.addEventListener('compositionstart', () => composingChat.add(input));
   input.addEventListener('compositionend', () => composingChat.delete(input));
   input.addEventListener('blur', () => composingChat.delete(input));
@@ -1093,12 +1346,31 @@ fields['loading-retry'].addEventListener('click', () => {
   focusBoard();
 });
 fields['loading-close'].addEventListener('click', () => { updateLoading({ phase: 'ready' }); focusBoard(); });
-board.canvas.addEventListener('pointerdown', preserveChatFocus);
+board.canvas.addEventListener('pointerdown', (event) => {
+  preserveChatFocus(event);
+  if (gameUiBlocksMovement() || chatFocused()) return;
+  if (event.pointerType === 'touch') {
+    boardTouches.set(event.pointerId, [event.clientX, event.clientY]);
+    if (boardTouches.size >= 2) {
+      boardDrag = null;
+      pinchDistance = touchSeparation();
+      ignoreBoardClickUntil = performance.now() + 350;
+      return;
+    }
+  }
+  if (event.button === 0 && !aimCell && !examining) {
+    const { clientX, clientY, pointerId } = event;
+    boardDrag = { pointerId, startX: clientX, startY: clientY, clientX, clientY, moved: false };
+    if (event.isTrusted && !board.canvas.hasPointerCapture(pointerId)) board.canvas.setPointerCapture(pointerId);
+  }
+});
 board.canvas.addEventListener('click', (event) => {
+  if (performance.now() < ignoreBoardClickUntil || gameUiBlocksMovement()) return;
   if (chatFocused()) { focusBoard(); return; }
   const [px, py] = board.point(event);
   const [x, y] = board.cellAt(px, py);
   focusBoard();
+  if (examining) { examineCell(x, y); return; }
   if (!play.frame) {
     const id = board.signAt(px, py);
     const npc = board.npcAt(px, py);
@@ -1114,20 +1386,59 @@ board.canvas.addEventListener('click', (event) => {
     shoot(x, y);
     return;
   }
-  const target = state.actors.find((actor) => actor.id !== state.selfId && actor.hp > 0 &&
-    (isAttackTarget(actor) || state.friendlyFire) && actor.x === x && actor.y === y);
-  if (target) {
-    selected = target.id;
-    attack(target.id);
-  } else if (Math.max(Math.abs(x - player.x), Math.abs(y - player.y)) === 1) {
-    moveDungeon(x - player.x, y - player.y, true, performance.now());
-  }
+  const target = canAttack(state, player) &&
+    state.actors.find((actor) => selectableTarget(state, actor) && actor.x === x && actor.y === y);
+  if (target) beginDungeonRoute({ type: 'attack', target: target.id });
+  else if (x === player.x && y === player.y) stopAndRememberRoute();
+  else if (state.map[y]?.[x] === '.') beginDungeonRoute({ type: 'move', x, y });
+  else clearMovement();
 });
+
+function touchSeparation() {
+  const [a, b] = boardTouches.values();
+  return b ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0;
+}
+
 board.canvas.addEventListener('pointermove', (event) => {
+  if (boardTouches.has(event.pointerId)) {
+    boardTouches.set(event.pointerId, [event.clientX, event.clientY]);
+    if (boardTouches.size >= 2) {
+      const distance = touchSeparation();
+      if (pinchDistance > 0 && (distance > pinchDistance * 1.18 || distance < pinchDistance / 1.18)) {
+        board.zoomView(distance > pinchDistance ? 1 : -1, performance.now());
+        pinchDistance = distance;
+      }
+      ignoreBoardClickUntil = performance.now() + 350;
+    }
+  }
+  if (boardDrag?.pointerId === event.pointerId) {
+    const { clientX, clientY } = event;
+    if (boardDrag.moved || Math.hypot(clientX - boardDrag.startX, clientY - boardDrag.startY) >= 8) {
+      if (!boardDrag.moved) stopAndRememberRoute();
+      const [x, y] = board.point(event);
+      const [previousX, previousY] = board.point(boardDrag);
+      const now = performance.now();
+      board.panView(x - previousX, y - previousY, now);
+      Object.assign(boardDrag, { clientX, clientY, moved: true });
+      ignoreBoardClickUntil = now + 350;
+    }
+  }
   if (aimCell && event.pointerType !== 'touch') aimAt(...board.cellAt(...board.point(event)));
 });
+for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+  board.canvas.addEventListener(type, (event) => {
+    if (boardDrag?.pointerId === event.pointerId) {
+      if (boardDrag.moved) ignoreBoardClickUntil = performance.now() + 350;
+      boardDrag = null;
+    }
+    if (!boardTouches.has(event.pointerId)) return;
+    if (boardTouches.size >= 2) ignoreBoardClickUntil = performance.now() + 350;
+    boardTouches.delete(event.pointerId);
+    pinchDistance = touchSeparation();
+  });
+}
 board.canvas.addEventListener('wheel', (event) => {
-  if (event.ctrlKey || event.metaKey || !event.deltaY || !board.hasInnCamera()) return;
+  if (event.ctrlKey || event.metaKey || !event.deltaY || gameUiBlocksMovement()) return;
   event.preventDefault();
   const now = performance.now();
   const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 80 : 1);
@@ -1135,7 +1446,7 @@ board.canvas.addEventListener('wheel', (event) => {
   lastWheelAt = now;
   wheelTotal += delta;
   if (Math.abs(wheelTotal) >= 32) {
-    board.zoomInn(-Math.sign(wheelTotal), now);
+    board.zoomView(-Math.sign(wheelTotal), now);
     wheelTotal = 0;
   }
 }, { passive: false });
@@ -1145,7 +1456,7 @@ function typing(target) { return target instanceof HTMLElement && (target.matche
 window.addEventListener('keydown', (event) => {
   if (original.active || event.defaultPrevented) return;
   const enter = event.key === 'Enter' || event.code === 'Enter' || event.code === 'NumpadEnter';
-  const escape = event.key === 'Escape' || event.code === 'Escape';
+  const escape = event.key === 'Escape' || event.code === 'Escape' || event.code === 'Backspace' && !typing(event.target);
   const chatInput = chatInputs.has(event.target) ? event.target : null;
   if (event.isComposing || event.keyCode === 229 || composingChat.has(chatInput)) {
     if (chatInput && enter) {
@@ -1167,11 +1478,43 @@ window.addEventListener('keydown', (event) => {
     }
     return;
   }
-  if (typing(event.target)) return;
+  if (typing(event.target) || profileCard.open) return;
   if (event.code === 'F1' && !event.repeat) { event.preventDefault(); toggleHelp(); return; }
+  if (play.frame && !event.repeat) {
+    if (event.code === 'KeyF' || event.code === 'KeyI' || event.code === 'KeyH') {
+      event.preventDefault();
+      setAim(null);
+      setExamining(false);
+      if (event.code === 'KeyH') toggleHeroStatus();
+      else toggleBackpack();
+      return;
+    }
+    if (event.code === 'KeyP') {
+      event.preventDefault();
+      togglePause();
+      return;
+    }
+  }
+  if (gameUiBlocksMovement()) return;
+  if (!event.repeat && (event.code === 'Equal' || event.code === 'NumpadAdd' ||
+      event.code === 'Minus' || event.code === 'NumpadSubtract')) {
+    event.preventDefault();
+    board.zoomView(event.code === 'Equal' || event.code === 'NumpadAdd' ? 1 : -1, performance.now());
+    return;
+  }
   if (!play.frame && !event.repeat) {
     if (event.code === 'KeyF' && event.target === board.canvas) { event.preventDefault(); talkNearby(); return; }
     if (escape && !fields['inn-dialogue'].hidden) { event.preventDefault(); showDialogue(); focusBoard(); return; }
+  }
+  if (event.code === 'KeyE' && !event.repeat && !isRuntimeLoading()) {
+    event.preventDefault();
+    toggleExamine();
+    return;
+  }
+  if (escape && examining) {
+    event.preventDefault();
+    setExamining(false);
+    return;
   }
   const step = keys.get(event.code);
   if (aimCell) {
@@ -1187,6 +1530,11 @@ window.addEventListener('keydown', (event) => {
       return;
     }
   }
+  if (escape && dungeonRoute) {
+    event.preventDefault();
+    stopAndRememberRoute();
+    return;
+  }
   if (enter && !aimCell && !loading && fields['inn-dialogue'].hidden &&
       !event.target?.closest?.('button, a, summary, [role="button"]')) {
     const input = fields[play.frame ? 'dungeon-chat-message' : 'chat-message'];
@@ -1198,21 +1546,45 @@ window.addEventListener('keydown', (event) => {
   }
   if (step) {
     event.preventDefault();
+    setExamining(false);
     if (!isPaused(play.frame?.state) && !event.repeat && !held.has(event.code)) {
       held.set(event.code, step);
       changeDirection(performance.now());
     }
   } else if (play.frame && !event.repeat) {
-    if (event.code === 'Space' && !event.target?.closest?.('button')) { event.preventDefault(); attack(); }
-    if (event.code === 'KeyR') { event.preventDefault(); toggleAim(); focusBoard(); }
-    if (event.code === 'KeyE') { event.preventDefault(); eat(); }
-    if (event.code === 'KeyP') { event.preventDefault(); togglePause(); }
+    if (event.code === 'KeyQ') { event.preventDefault(); attack(); }
+    if (event.code === 'KeyZ' || event.code === 'Numpad5' ||
+        event.code === 'Space' && !event.target?.closest?.('button')) {
+      event.preventDefault();
+      setAim(null);
+      setExamining(false);
+      stopAndRememberRoute();
+    }
+    if (event.code === 'KeyR' && interruptedRoute && canAct(play.frame.state, ownActor())) {
+      event.preventDefault();
+      setAim(null);
+      setExamining(false);
+      beginDungeonRoute(interruptedRoute);
+    }
+    if (event.code === 'KeyC' && canAct(play.frame.state, ownActor())) {
+      event.preventDefault();
+      setAim(null);
+      setExamining(false);
+      beginDungeonRoute({ type: 'loot' });
+    }
+    if (event.code === 'Digit1') { event.preventDefault(); toggleAim(); focusBoard(); }
+    if (event.code === 'Digit2') { event.preventDefault(); eat(); }
   }
 });
 window.addEventListener('keyup', (event) => {
   if (held.delete(event.code)) { event.preventDefault(); changeDirection(performance.now(), true); }
 });
-window.addEventListener('blur', clearMovement);
+window.addEventListener('blur', () => {
+  clearMovement();
+  boardTouches.clear();
+  boardDrag = null;
+  pinchDistance = 0;
+});
 document.addEventListener('focusin', (event) => { if (typing(event.target)) clearMovement(); });
 
 for (const button of document.querySelectorAll('[data-direction]')) {
@@ -1240,7 +1612,8 @@ for (const button of document.querySelectorAll('[data-direction]')) {
 function render(now) {
   if (!original.active) {
     movement(now);
-    board.draw(visualTime(now), selected, destination, aimCell, play.frame?.serverTime());
+    const marker = dungeonRoute?.x != null ? [dungeonRoute.x, dungeonRoute.y] : destination;
+    board.draw(visualTime(now), selected, marker, aimCell, play.frame?.serverTime());
     if (!play.frame) drawProfile(now);
     updateCombatUi();
     updateNotice(now);
@@ -1250,6 +1623,17 @@ function render(now) {
 
 buildBackpack();
 updateScene();
+if (!profileOpen) {
+  void run('name', async () => {
+    if (await play.join(savedProfile.name, savedProfile.appearance)) {
+      saveProfile(ownProfile());
+      focusBoard();
+    } else {
+      profileOpen = true;
+      profileNotice(connectionNotice || '접속하지 못했습니다. 다시 시도해 주세요.');
+    }
+  });
+}
 requestAnimationFrame(render);
 
 function warmExpeditionAssets() {

@@ -53,7 +53,7 @@ final class NativeInnBoard extends Group {
     private long lastEvent;
     private int mapWidth;
     private int mapHeight;
-    private int zoomStep;
+    private int zoomStep = 1;
     private float fitZoom;
     private float wheelDelta;
 
@@ -86,11 +86,7 @@ final class NativeInnBoard extends Group {
                 wheelDelta += event.amount;
                 int steps = (int) wheelDelta;
                 wheelDelta -= steps;
-                int step = Math.max(0, Math.min(MAX_ZOOM_STEPS, zoomStep - steps));
-                if (step == zoomStep) return;
-                zoomStep = step;
-                applyZoom();
-                followPlayer();
+                zoom(-steps);
             }
 
             @Override
@@ -117,6 +113,14 @@ final class NativeInnBoard extends Group {
                 if (state.walkable(column, row)) goTo.accept(new InnMotion.Cell(column, row));
             }
         });
+    }
+
+    void zoom(int steps) {
+        int step = Math.clamp(zoomStep + steps, 0, MAX_ZOOM_STEPS);
+        if (state == null || step == zoomStep) return;
+        zoomStep = step;
+        applyZoom();
+        followPlayer();
     }
 
     void showState(InnApi.State next, List<InnApi.Event> history, boolean testMode, InnMotion.Cell predictedSelf) {

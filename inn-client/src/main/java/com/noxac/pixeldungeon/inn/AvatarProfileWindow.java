@@ -51,7 +51,7 @@ final class AvatarProfileWindow extends Window {
         InnApi.Appearance selected = AvatarProfile.normalize(initial);
         job = AvatarSprites.indexOf(catalog.jobs(), selected.job());
 
-        text("모험가 프로필", 10, GOLD, 5, 4, 155);
+        text(required ? "모험가 생성" : "모험가 프로필", 11, GOLD, 5, 4, 155);
         block(PREVIEW_X, 24, PREVIEW_WIDTH, 100, 0xff221b1a);
         block(PREVIEW_X + 2, 88, PREVIEW_WIDTH - 4, 12, 0xff43312c);
         block(PREVIEW_X + 2, 88, PREVIEW_WIDTH - 4, 1, 0xff6e5040);
@@ -93,7 +93,7 @@ final class AvatarProfileWindow extends Window {
         accessory = new Picker("장식", catalog.accessories(), selected.accessory(), secondX, 103, pickerWidth);
 
         if (!required) button("취소", this::hide).setRect(WIDTH - 87, 128, 39, 15);
-        button(required ? "입장" : "저장", this::apply).setRect(WIDTH - 46, 128, 41, 15);
+        button(required ? "여관 입장" : "저장", this::apply).setRect(WIDTH - 46, 128, 41, 15);
         refreshPreview();
     }
 

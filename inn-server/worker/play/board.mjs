@@ -232,8 +232,17 @@ export class Board {
     this.impacts = [];
     this.zoom = DEFAULT_ZOOM;
     this.viewX = this.viewY = 0;
+    this.panX = this.panY = 0;
+    this.gameViewport = canvas.classList?.contains('game-board') === true;
     this.images = Object.fromEntries(INN_ASSETS.map((name) => [name, this.loadImage(name)]));
     this.set(null, false);
+    if (this.gameViewport) {
+      const observer = new ResizeObserver(() => {
+        this.resizeViewport();
+        this.cameraAt = null;
+      });
+      observer.observe(canvas);
+    }
   }
 
   loadImage(name, version) {
@@ -257,6 +266,7 @@ export class Board {
       this.terrain = null;
       this.scene = scene;
       this.zoom = DEFAULT_ZOOM;
+      this.panX = this.panY = 0;
       this.cameraAt = null;
     }
     this.textureName = textureName;
@@ -284,6 +294,9 @@ export class Board {
       this.resizeViewport();
     }
     const actors = (dungeon ? snapshot?.actors : snapshot?.people) ?? [];
+    const previousSelf = this.figures.get(snapshot?.selfId)?.actor;
+    const self = actors.find(({ id }) => id === snapshot?.selfId);
+    if (previousSelf && self && (previousSelf.x !== self.x || previousSelf.y !== self.y)) this.panX = this.panY = 0;
     const present = new Set(actors.map((actor) => actor.id));
     for (const id of this.figures.keys()) if (!present.has(id)) this.figures.delete(id);
     for (const actor of actors) {
@@ -328,19 +341,35 @@ export class Board {
   }
 
   hasInnCamera() {
-    return !this.dungeon && (this.worldWidth > INN_VIEW_WIDTH || this.worldHeight > INN_VIEW_HEIGHT);
+    return !this.dungeon && (this.gameViewport || this.worldWidth > INN_VIEW_WIDTH || this.worldHeight > INN_VIEW_HEIGHT);
   }
 
   resizeViewport() {
     const zoom = INN_ZOOM[this.zoom];
-    const width = this.hasInnCamera() ? Math.round(INN_VIEW_WIDTH / zoom) : this.worldWidth;
-    const height = this.hasInnCamera() ? Math.round(INN_VIEW_HEIGHT / zoom) : this.worldHeight;
+    let width = this.hasInnCamera() ? Math.round(INN_VIEW_WIDTH / zoom) : this.worldWidth;
+    let height = this.hasInnCamera() ? Math.round(INN_VIEW_HEIGHT / zoom) : this.worldHeight;
+    if (this.gameViewport) {
+      const rect = this.canvas.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) return;
+      let scale = Math.max(.75, Math.min(rect.width / (10 * TILE), rect.height / (10 * TILE), 3));
+      if (this.dungeon && rect.height > rect.width) {
+        // Keep a small dungeon close enough to read on a tall viewport. Pan and zoom can reveal the rest.
+        scale = Math.max(scale, Math.min(rect.height * .78 / this.worldHeight, rect.width / (5 * TILE), 3));
+      }
+      scale *= zoom;
+      width = Math.max(1, Math.round(rect.width / scale));
+      height = Math.max(1, Math.round(rect.height / scale));
+    }
     if (this.canvas.width !== width) this.canvas.width = width;
     if (this.canvas.height !== height) this.canvas.height = height;
   }
 
   zoomInn(direction, now) {
-    if (!this.hasInnCamera()) return false;
+    return this.hasInnCamera() && this.zoomView(direction, now);
+  }
+
+  zoomView(direction, now) {
+    if (!this.gameViewport && !this.hasInnCamera()) return false;
     const index = Math.max(0, Math.min(INN_ZOOM.length - 1, this.zoom + direction));
     if (index !== this.zoom) {
       this.zoom = index;
@@ -351,16 +380,34 @@ export class Board {
     return true;
   }
 
-  updateCamera(now) {
-    if (!this.hasInnCamera()) {
-      this.viewX = this.viewY = 0;
-      return;
-    }
+  cameraTarget() {
     const self = this.figures.get(this.snapshot?.selfId);
     const focusX = self ? (self.x + .5) * TILE : this.worldWidth / 2;
     const focusY = self ? (self.y + .5) * TILE : this.worldHeight / 2;
-    const x = cameraOffset(focusX, this.worldWidth, this.canvas.width);
-    const y = cameraOffset(focusY, this.worldHeight, this.canvas.height);
+    return [
+      cameraOffset(focusX, this.worldWidth, this.canvas.width),
+      cameraOffset(focusY, this.worldHeight, this.canvas.height),
+    ];
+  }
+
+  panView(dx, dy, now) {
+    if (!this.gameViewport) return false;
+    const [x, y] = this.cameraTarget();
+    this.panX = cameraOffset(this.viewX + this.canvas.width / 2 - dx, this.worldWidth, this.canvas.width) - x;
+    this.panY = cameraOffset(this.viewY + this.canvas.height / 2 - dy, this.worldHeight, this.canvas.height) - y;
+    this.cameraAt = null;
+    this.updateCamera(now);
+    return true;
+  }
+
+  updateCamera(now) {
+    if (!this.gameViewport && !this.hasInnCamera()) {
+      this.viewX = this.viewY = 0;
+      return;
+    }
+    const [baseX, baseY] = this.cameraTarget();
+    const x = cameraOffset(baseX + this.canvas.width / 2 + this.panX, this.worldWidth, this.canvas.width);
+    const y = cameraOffset(baseY + this.canvas.height / 2 + this.panY, this.worldHeight, this.canvas.height);
     const fraction = this.cameraAt == null ? 1 : 1 - Math.exp(-Math.min(100, now - this.cameraAt) / 65);
     this.cameraAt = now;
     this.cameraX = fraction === 1 ? x : this.cameraX + (x - this.cameraX) * fraction;
@@ -383,6 +430,7 @@ export class Board {
   }
 
   predict(dx, dy, now) {
+    this.panX = this.panY = 0;
     this.figures.get(this.snapshot?.selfId)?.predict(dx, dy, now, this.dungeon ? 180 : 145, now + 550);
   }
 
@@ -454,7 +502,7 @@ export class Board {
       const [x, y] = queued.target.split(',').map(Number);
       this.marker(x, y, '#f0c979');
     }
-    if (!this.dungeon && destination) this.marker(destination[0], destination[1], '#edb776');
+    if (destination) this.marker(destination[0], destination[1], '#edb776');
     const objects = [];
     for (const figure of this.figures.values()) {
       objects.push({ depth: (figure.y + .87) * TILE, figure });

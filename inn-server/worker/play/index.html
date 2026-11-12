@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#151713">
   <meta name="description" content="여관에서 동료를 만나 함께 하수도 던전에 들어가세요.">
   <title>여관 · Noxac Pixel Dungeon</title>
@@ -13,30 +13,31 @@
   <main id="play-shell" class="shell">
     <header class="masthead">
       <div class="brand">
-        <span class="brand-icon" aria-hidden="true"><i></i></span>
-        <div><p class="brand-name">Noxac Pixel Dungeon</p><h1 id="scene-title">여관</h1></div>
+        <div><h1 id="scene-title">여관</h1><span class="status" id="connection" data-tone="idle">입장 대기</span></div>
       </div>
       <div class="top-actions">
-        <span class="status" id="connection" data-tone="idle">입장 대기</span>
-        <button type="button" id="pause" hidden>일시정지 <kbd>P</kbd></button>
-        <button type="button" id="help-toggle" aria-controls="help" aria-expanded="false">조작법 <kbd>F1</kbd></button>
+        <button type="button" id="pause" class="hud-button" hidden>일시정지 <kbd>P</kbd></button>
+        <button type="button" id="help-toggle" class="hud-button" aria-controls="help" aria-expanded="false">조작법 <kbd>F1</kbd></button>
       </div>
     </header>
 
     <div class="layout" data-profile-entry="true">
       <section class="stage" aria-labelledby="board-title">
-        <header class="stage-heading"><h2 id="board-title">여관 홀</h2><span id="board-status">모험가 대기 중</span></header>
+        <header class="stage-heading"><h2 id="board-title" class="sr-only">여관 홀</h2><span id="board-status">모험가 대기 중</span></header>
         <div class="canvas-wrap">
-          <canvas id="board" width="384" height="288" tabindex="0" aria-label="여관 지도. 방향키나 WASD로 이동합니다."></canvas>
+          <canvas id="board" class="game-board" width="384" height="288" tabindex="0" aria-label="여관 지도. 칸을 누르거나 방향키로 이동합니다."></canvas>
           <aside id="help" class="help" hidden aria-label="조작법">
             <dl>
-              <div><dt>이동</dt><dd>WASD · 방향키 · 칸 클릭</dd></div>
+              <div><dt>이동</dt><dd>칸 클릭·터치 · WASD · 방향키</dd></div>
               <div><dt>대각선</dt><dd>방향 조합 · 숫자패드</dd></div>
-              <div><dt>여관</dt><dd>휠로 확대 · 주민 클릭 또는 근처에서 F</dd></div>
+              <div><dt>확대</dt><dd>휠 · + / − · 두 손가락</dd></div>
+              <div><dt>여관</dt><dd>주민 클릭 또는 근처에서 F</dd></div>
               <div><dt>대화</dt><dd>Enter로 열기·전송 · Esc로 닫기</dd></div>
-              <div><dt>평타</dt><dd>Space · 적 클릭</dd></div>
-              <div><dt>사격</dt><dd>R · 칸 선택 · 행동력 2</dd></div>
-              <div><dt>식량</dt><dd>E · 행동력 3</dd></div>
+              <div><dt>평타</dt><dd>적 클릭 · Q</dd></div>
+              <div><dt>사격</dt><dd>1 · 칸 선택 · 행동력 2</dd></div>
+              <div><dt>식량</dt><dd>2 · 행동력 3</dd></div>
+              <div><dt>확인</dt><dd>E 살펴보기 · F / I 배낭 · H 상태</dd></div>
+              <div><dt>기타</dt><dd>Space / Z / 숫자패드 5 대기 · C 줍기 · R 이어가기</dd></div>
               <div><dt>일시정지</dt><dd>P · 파티 공유</dd></div>
             </dl>
           </aside>
@@ -80,11 +81,14 @@
         </footer>
       </section>
 
-      <aside class="sidebar" aria-label="게임 조작과 상태">
+      <aside class="game-interface" aria-label="게임 조작과 상태">
+        <div id="hud-scrim" class="hud-scrim" hidden></div>
         <div id="inn-panel">
-          <section class="card profile-card" aria-labelledby="name-heading" data-editing="true">
-            <h2 id="name-heading">여관 입장</h2>
-            <canvas id="profile-preview" class="profile-preview" width="20" height="20" role="img" aria-label="아바타 미리보기"></canvas>
+          <dialog class="profile-card game-window" aria-labelledby="name-heading">
+            <h2 id="name-heading" tabindex="-1" autofocus>캐릭터 생성</h2>
+            <div class="profile-art">
+              <canvas id="profile-preview" class="profile-preview" width="20" height="20" role="img" aria-label="아바타 미리보기"></canvas>
+            </div>
             <form id="name-form" class="profile-form">
               <label class="profile-field profile-name-field">닉네임
                 <input id="player-name" name="name" maxlength="40" placeholder="닉네임" autocomplete="nickname" required>
@@ -110,15 +114,18 @@
               </div>
               <p id="profile-notice" class="profile-notice" role="status" hidden></p>
             </form>
-            <div id="profile-summary" class="profile-summary" hidden>
+          </dialog>
+          <div id="profile-summary" class="profile-summary" hidden>
               <div><strong id="profile-name"></strong><p id="profile-job-label"></p></div>
               <button id="profile-change" type="button" aria-controls="name-form" aria-expanded="false">프로필 변경</button>
-            </div>
-            <button id="drink" type="button" disabled hidden>술 한 잔</button>
-          </section>
+          </div>
 
-          <section class="card" aria-labelledby="expedition-heading">
-            <h2 id="expedition-heading">던전 입장</h2>
+          <nav class="hud-toolbar" aria-label="여관 기능">
+            <button id="expedition-toggle" class="hud-button" type="button" aria-controls="expedition-window" aria-expanded="false">원정</button>
+            <button id="drink" class="hud-button" type="button" disabled hidden>술 한 잔</button>
+          </nav>
+          <section id="expedition-window" class="game-window expedition-window" aria-labelledby="expedition-heading" hidden>
+            <header class="window-title"><h2 id="expedition-heading">던전 입장</h2><button type="button" data-close-window="expedition" aria-label="닫기">×</button></header>
             <div class="theme-choice">
               <label for="dungeon-theme">ATB 던전 테마</label>
               <select id="dungeon-theme" aria-describedby="party-rules-hint">
@@ -135,12 +142,12 @@
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 1인 저장</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.13.0/NoxacPixelDungeon-Inn-0.13.0-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.13.0</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.14.0/NoxacPixelDungeon-Inn-0.14.0-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.14.0</a>
             </div>
           </section>
 
-          <section class="card chat-card" aria-labelledby="chat-heading">
-            <h2 id="chat-heading">여관 대화</h2>
+          <section class="chat-hud" aria-labelledby="chat-heading">
+            <h2 id="chat-heading" class="sr-only">여관 대화</h2>
             <ol id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></ol>
             <form id="chat-form" class="inline-form">
               <label class="sr-only" for="chat-message">보낼 메시지</label>
@@ -151,26 +158,26 @@
         </div>
 
         <div id="dungeon-panel" hidden>
-          <section class="card" aria-labelledby="party-heading">
-            <h2 id="party-heading">파티</h2>
+          <section class="party-hud" aria-labelledby="party-heading">
+            <h2 id="party-heading" class="sr-only">파티</h2>
             <p id="party-rules" class="party-rules"></p>
             <div id="party" class="party"></div>
             <p id="queued" class="queue" hidden></p>
           </section>
-          <section class="card actions-card" aria-labelledby="actions-heading">
-            <h2 id="actions-heading">행동</h2>
-            <button class="primary wide" id="attack" type="button">평타 <kbd>Space</kbd></button>
-            <button class="wide" id="shoot" type="button" aria-pressed="false">사격 <kbd>R</kbd></button>
-            <button class="wide" id="eat" type="button">식량 <kbd>E</kbd></button>
-            <button class="wide return" id="return" type="button">여관으로</button>
-          </section>
-          <section class="card" aria-labelledby="backpack-heading">
-            <h2 id="backpack-heading">배낭</h2>
+          <nav class="hud-toolbar actions-card" aria-label="던전 행동">
+            <button class="hud-button" id="attack" type="button">평타 <kbd>Q</kbd></button>
+            <button class="hud-button" id="shoot" type="button" aria-pressed="false">사격 <kbd>1</kbd></button>
+            <button class="hud-button" id="eat" type="button">식량 <kbd>2</kbd></button>
+            <button class="hud-button" id="backpack-toggle" type="button" aria-controls="backpack-window" aria-expanded="false">배낭</button>
+            <button class="hud-button return" id="return" type="button">여관</button>
+          </nav>
+          <section id="backpack-window" class="game-window backpack-window" aria-labelledby="backpack-heading" hidden>
+            <header class="window-title"><h2 id="backpack-heading">배낭</h2><button type="button" data-close-window="backpack" aria-label="닫기">×</button></header>
             <div id="backpack" class="backpack" role="group" aria-label="배낭 칸"></div>
             <p id="backpack-hint" class="backpack-hint">아이템 칸을 누른 뒤 옮길 칸을 선택하세요.</p>
           </section>
-          <section class="card chat-card dungeon-chat" aria-labelledby="dungeon-chat-heading">
-            <h2 id="dungeon-chat-heading">파티 대화</h2>
+          <section class="chat-hud dungeon-chat" aria-labelledby="dungeon-chat-heading">
+            <h2 id="dungeon-chat-heading" class="sr-only">파티 대화</h2>
             <ol id="dungeon-chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></ol>
             <form id="dungeon-chat-form" class="inline-form">
               <label class="sr-only" for="dungeon-chat-message">파티 메시지</label>
@@ -179,6 +186,7 @@
             </form>
           </section>
         </div>
+        <button id="chat-toggle" class="hud-button chat-toggle" type="button" aria-keyshortcuts="Enter" aria-expanded="false" aria-controls="chat-form dungeon-chat-form">대화 <kbd>Enter</kbd></button>
       </aside>
     </div>
   </main>

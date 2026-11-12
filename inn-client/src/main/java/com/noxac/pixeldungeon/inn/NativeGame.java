@@ -22,6 +22,7 @@ final class NativeGame extends ShatteredPixelDungeon {
     public void create() {
         super.create();
         NativeClient.start(api);
+        if (!NativeClient.profileConfirmed()) switchNoFade(NativeAvatarScene.class);
     }
 
     @Override

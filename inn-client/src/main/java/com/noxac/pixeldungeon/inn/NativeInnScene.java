@@ -5,10 +5,10 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
-import com.shatteredpixel.shatteredpixeldungeon.ui.Button;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
+import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndTitledMessage;
 import com.watabou.input.KeyEvent;
@@ -18,8 +18,10 @@ import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.Game;
 import com.watabou.noosa.Gizmo;
 import com.watabou.noosa.Group;
+import com.watabou.noosa.PointerArea;
 import com.watabou.noosa.TextInput;
 import com.watabou.noosa.ui.Component;
+import com.watabou.utils.RectF;
 import com.watabou.utils.Signal;
 
 import java.util.List;
@@ -27,14 +29,12 @@ import java.util.List;
 public final class NativeInnScene extends PixelScene {
     private static final int BACKGROUND = 0xff1b1515;
     private static final int BORDER = 0xff6b4b3d;
-    private static final int CARD = 0xff302320;
-    private static final int FIELD = 0xff221a19;
+    private static final int FIELD = 0xe6221a19;
     private static final int GOLD = 0xefbb77;
     private static final int CREAM = 0xf9e5c8;
     private static final int MUTED = 0xcab29d;
     private static final int GREEN = 0xb1d496;
     private static final float EDGE = 8;
-    private static final float GAP = 6;
 
     private record PredictedStep(String playerId, InnMotion.Cell origin, InnMotion.Cell target) {
         boolean awaiting(InnApi.State state) {
@@ -49,14 +49,10 @@ public final class NativeInnScene extends PixelScene {
     private NativeInnBoard board;
     private ChatRows chatRows;
     private ScrollPane chat;
+    private Group chatHud;
     private Group help;
-    private FlatButton mode;
     private FlatButton profile;
-    private FlatButton match;
-    private FlatButton solo;
-    private FlatButton original;
-    private FlatButton theme;
-    private FlatButton friendlyFire;
+    private FlatButton expeditions;
     private FlatButton drink;
     private FlatButton compose;
     private FlatButton send;
@@ -69,6 +65,7 @@ public final class NativeInnScene extends PixelScene {
     private PredictedStep predictedStep;
     private boolean displayedTestMode;
     private boolean hasDisplayed;
+    private boolean chatPinned;
     private boolean modalOpen;
     private boolean submitPending;
     private boolean openingEnterHeld;
@@ -81,64 +78,58 @@ public final class NativeInnScene extends PixelScene {
         KeyEvent.addKeyListener(movementKeys);
         float w = Camera.main.width;
         float h = Camera.main.height;
+        RectF insets = getCommonInsets();
+        float left = insets.left + EDGE;
+        float top = insets.top + EDGE;
+        float right = w - insets.right - EDGE;
+        float bottom = h - insets.bottom - EDGE;
         add(block(0, 0, w, h, BACKGROUND));
-
-        add(label("NOXAC PIXEL DUNGEON", 6, GOLD, EDGE, 7));
-        add(label("여관", 13, CREAM, EDGE, 14));
-        presence = label("서버 연결 중", 6, MUTED, EDGE + 31, 21);
-        add(presence);
-        FlatButton keys = button("F1 도움말", w - 44, 10, 36, 14, false, this::toggleHelp);
-        profile = button("프로필", w - 112, 10, 64, 14, false, this::editProfile);
-        mode = button("여관 길잡이", w - 165, 10, 49, 14, false, this::toggleTestMode);
-        keys.enabled(true);
-
-        float top = 34;
-        float bottom = h - 14;
-        float sidebar = Math.max(93, Math.min(154, w * .36f));
-        float sideX = w - EDGE - sidebar;
-        float boardWidth = sideX - EDGE - GAP;
-        float panelHeight = bottom - top;
-        panel(EDGE, top, boardWidth, panelHeight);
-        board = new NativeInnBoard(EDGE + 1, top + 1, boardWidth - 2, panelHeight - 18,
+        board = new NativeInnBoard(0, 0, w, h,
             cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc);
         add(board);
-        drink = button("술 한 잔", EDGE + boardWidth - 40, bottom - 15, 36, 12, false, () -> {
+
+        add(block(left, top, 76, 26, FIELD));
+        add(block(left, top, 76, 1, BORDER));
+        add(label("여관", 11, GOLD, left + 5, top + 3));
+        presence = label("서버 연결 중", 6, MUTED, left + 5, top + 16);
+        add(presence);
+        profile = button("모험가", right - 89, top, 47, 17, false, this::editProfile);
+        button("F1 도움말", right - 40, top, 40, 17, false, this::toggleHelp);
+
+        float toolbarY = bottom - 18;
+        expeditions = button("원정", right - 52, toolbarY, 52, 18, true, this::openExpeditions);
+        drink = button("술 한 잔", right - 94, toolbarY, 40, 18, false, () -> {
             LobbySession session = NativeClient.inn();
             if (session != null) session.drink();
         });
-        add(label("이동 · 휠 확대/축소 · F1", 6, MUTED, EDGE + 4, bottom - 12));
+        button("대화", right - 130, toolbarY, 34, 18, false, this::toggleChat);
 
-        panel(sideX, top, sidebar, panelHeight);
-        float panelX = sideX + 5;
-        float panelWidth = sidebar - 10;
-        float half = panelWidth / 2 - 1;
-        float rightColumn = panelX + half + 2;
-        match = button("동료 구함", panelX, top + 5, panelWidth, 14, true, this::match);
-        solo = button("1인 원정", panelX, top + 22, half, 14, false, NativeClient::enterSoloAtb);
-        button("길잡이 연습", rightColumn, top + 22, half, 14, false, NativeClient::enterPractice);
-        theme = button(themeCaption(), panelX, top + 39, panelWidth, 14, false, this::chooseTheme);
-        friendlyFire = button(friendlyFireCaption(), panelX, top + 55, half, 14, false, this::toggleFriendlyFire);
-        original = button("원본 1인", rightColumn, top + 55, half, 14, false, NativeClient::enterSolo);
-        add(label("여관 대화", 7, GOLD, panelX, top + 73));
-
-        float chatY = top + 83;
-        float chatHeight = Math.max(13, bottom - chatY - 20);
-        add(block(panelX, chatY, panelWidth, chatHeight, FIELD));
-        chatRows = new ChatRows(panelWidth - 5);
+        chatHud = new Group();
+        add(chatHud);
+        float chatWidth = Math.min(165, right - left);
+        float chatHeight = Math.min(50, (bottom - top) * .28f);
+        float chatY = toolbarY - chatHeight - 28;
+        ColorBlock chatBackdrop = block(left, chatY, chatWidth, chatHeight + 26, FIELD);
+        chatHud.add(chatBackdrop);
+        chatHud.add(new PointerArea(chatBackdrop));
+        chatHud.add(block(left, chatY, chatWidth, 1, BORDER));
+        chatHud.add(label("여관 대화", 7, GOLD, left + 4, chatY + 3));
+        chatRows = new ChatRows(chatWidth - 10);
         chat = new ScrollPane(chatRows);
-        add(chat);
-        chat.setRect(panelX + 2, chatY + 1, panelWidth - 4, chatHeight - 2);
-        compose = button("대화 입력 · Enter", panelX, bottom - 16, panelWidth, 12, false, this::openComposer);
-        send = button("보내기", panelX + panelWidth - 25, bottom - 16, 25, 12, true, () -> submitPending = true);
+        chatHud.add(chat);
+        chat.setRect(left + 4, chatY + 12, chatWidth - 8, chatHeight);
+        compose = button(chatHud, "대화 입력 · Enter", left + 3, toolbarY - 15, chatWidth - 6, 12, false, this::openComposer);
+        send = button(chatHud, "보내기", left + chatWidth - 28, toolbarY - 15, 25, 12, true, () -> submitPending = true);
         send.visible = false;
+        updateChatVisibility();
 
-        notice = label("", 6, MUTED, EDGE, h - 10);
+        notice = label("", 7, CREAM, left, toolbarY + 2);
+        notice.maxWidth((int) Math.max(65, right - left - 140));
         add(notice);
-        help = buildHelp(EDGE + 4, top + 6, Math.min(124, boardWidth - 8));
+        help = buildHelp(left, top + 30, Math.min(124, right - left));
         add(help);
-        help.visible = false;
+        help.visible = help.active = false;
         showSnapshot();
-        if (!NativeClient.profileConfirmed()) editProfile();
         fadeIn();
     }
 
@@ -163,7 +154,8 @@ public final class NativeInnScene extends PixelScene {
     @Override
     protected void onBackPressed() {
         if (editor != null) closeComposer();
-        else help.visible = false;
+        else if (help.visible) toggleHelp();
+        else if (chatPinned) toggleChat();
     }
 
     @Override
@@ -186,10 +178,7 @@ public final class NativeInnScene extends PixelScene {
         boolean testMode = NativeClient.isTestMode();
         boolean profileConfirmed = NativeClient.profileConfirmed();
         profile.enabled(!profileConfirmed || NativeClient.canChooseExpeditionTheme());
-        solo.enabled(NativeClient.canEnterSolo());
-        original.enabled(NativeClient.canEnterSolo());
-        theme.enabled(NativeClient.canChooseExpeditionTheme());
-        friendlyFire.enabled(NativeClient.canChooseExpeditionTheme());
+        expeditions.enabled(profileConfirmed);
         if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode) {
             boolean online = snapshot != null && snapshot.online() && snapshot.state() != null;
             InnApi.State state = snapshot == null ? null : snapshot.state();
@@ -208,10 +197,8 @@ public final class NativeInnScene extends PixelScene {
             board.showState(state, history, testMode, predictedStep == null ? null : predictedStep.target(), NativeClient.appearance());
             replace(presence, online ? "접속 " + state.people().size() + "명" : profileConfirmed ? "서버 연결 중" : "프로필 설정");
             presence.hardlight(online ? GREEN : MUTED);
-            mode.caption(testMode ? "길잡이 켜짐" : "여관 길잡이");
-            match.enabled(online);
-            match.caption(state != null && state.match() != null ? "던전 연결 중" :
-                state != null && state.queued() ? "구함 취소" : "동료 구함");
+            expeditions.caption(state != null && state.match() != null ? "연결 중" :
+                state != null && state.queued() ? "동료 찾는 중" : "원정");
             drink.enabled(online);
             compose.enabled(online);
             send.enabled(online);
@@ -271,7 +258,16 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private boolean onMovementKey(KeyEvent event) {
-        return editor == null && !modalOpen && keyboard.onKey(event.code, event.pressed);
+        if (editor != null || modalOpen) return false;
+        if (event.pressed && (event.code == Input.Keys.PLUS || event.code == Input.Keys.EQUALS)) {
+            board.zoom(1);
+            return true;
+        }
+        if (event.pressed && event.code == Input.Keys.MINUS) {
+            board.zoom(-1);
+            return true;
+        }
+        return keyboard.onKey(event.code, event.pressed);
     }
 
     private void finishMove(PredictedStep step, boolean accepted) {
@@ -296,7 +292,59 @@ public final class NativeInnScene extends PixelScene {
 
     private void joinSeeking(String id) {
         LobbySession session = NativeClient.inn();
-        if (session != null && displayed != null && displayed.online()) session.joinSeeking(id);
+        if (!modalOpen && editor == null && session != null && displayed != null && displayed.online()) {
+            session.joinSeeking(id);
+        }
+    }
+
+    private void openExpeditions() {
+        if (modalOpen || !NativeClient.profileConfirmed()) return;
+        closeComposer();
+        destination = null;
+        keyboard.reset();
+        boolean online = displayed != null && displayed.online();
+        InnApi.State current = online ? displayed.state() : null;
+        boolean canQueue = current != null && current.match() == null;
+        boolean canChoose = NativeClient.canChooseExpeditionTheme();
+        boolean canEnter = NativeClient.canEnterSolo();
+        modalOpen = true;
+        add(new WndOptions(Icons.STAIRS.get(), "원정", "지역  " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme()),
+            current != null && current.queued() ? "동료 찾기 취소" : "동료 찾기 · 2인 원정",
+            "1인 원정", "길잡이 연습", "지역 변경", friendlyFireCaption(),
+            NativeClient.isTestMode() ? "여관 길잡이 숨기기" : "여관 길잡이 부르기", "원본 1인 저장") {
+            @Override
+            protected boolean enabled(int index) {
+                return switch (index) {
+                    case 0 -> canQueue;
+                    case 1, 2, 6 -> canEnter;
+                    case 3, 4 -> canChoose;
+                    default -> true;
+                };
+            }
+
+            @Override
+            protected void onSelect(int index) {
+                switch (index) {
+                    case 0 -> match();
+                    case 1 -> NativeClient.enterSoloAtb();
+                    case 2 -> NativeClient.enterPractice();
+                    case 3 -> chooseTheme();
+                    case 4 -> {
+                        NativeClient.toggleFriendlyFire();
+                        openExpeditions();
+                    }
+                    case 5 -> toggleTestMode();
+                    case 6 -> NativeClient.enterSolo();
+                    default -> { }
+                }
+            }
+
+            @Override
+            public void destroy() {
+                modalOpen = false;
+                super.destroy();
+            }
+        });
     }
 
     private void editProfile() {
@@ -312,17 +360,8 @@ public final class NativeInnScene extends PixelScene {
         }));
     }
 
-    private static String themeCaption() {
-        return "ATB 지역 · " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme());
-    }
-
     private static String friendlyFireCaption() {
-        return NativeClient.friendlyFire() ? "아군 피해 켬" : "아군 피해 끔";
-    }
-
-    private void toggleFriendlyFire() {
-        NativeClient.toggleFriendlyFire();
-        friendlyFire.caption(friendlyFireCaption());
+        return NativeClient.friendlyFire() ? "아군 피해 · 켜짐" : "아군 피해 · 꺼짐";
     }
 
     private void speakToNpc(InnApi.Npc npc) {
@@ -352,7 +391,7 @@ public final class NativeInnScene extends PixelScene {
             @Override
             protected void onSelect(int index) {
                 NativeClient.chooseExpeditionTheme(index == 1 ? DungeonLayout.PRISON : DungeonLayout.SEWERS);
-                theme.caption(themeCaption());
+                openExpeditions();
             }
 
             @Override
@@ -364,7 +403,22 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private void toggleHelp() {
-        help.visible = !help.visible;
+        help.visible = help.active = !help.visible;
+    }
+
+    private void toggleChat() {
+        if (modalOpen) return;
+        if (editor != null) {
+            chatPinned = false;
+            closeComposer();
+        } else {
+            chatPinned = !chatPinned;
+            updateChatVisibility();
+        }
+    }
+
+    private void updateChatVisibility() {
+        chatHud.visible = chatHud.active = chatPinned || editor != null;
     }
 
     private void toggleTestMode() {
@@ -374,13 +428,15 @@ public final class NativeInnScene extends PixelScene {
 
     private Group buildHelp(float x, float y, float w) {
         Group overlay = new Group();
-        overlay.add(block(x, y, w, 61, 0xe96b4b3d));
+        ColorBlock back = block(x, y, w, 61, 0xe96b4b3d);
+        overlay.add(back);
+        overlay.add(new PointerArea(back));
         overlay.add(block(x + 1, y + 1, w - 2, 59, 0xe6211918));
         overlay.add(label("조작 방법", 8, GOLD, x + 5, y + 4));
         overlay.add(label("이동  WASD / 방향키 / 숫자패드", 6, CREAM, x + 5, y + 16));
         overlay.add(label("대화  Enter · Esc 취소", 6, CREAM, x + 5, y + 26));
         overlay.add(label("동료 찾기  동료 구함 표지 클릭", 6, CREAM, x + 5, y + 36));
-        overlay.add(label("확대/축소  휠 · NPC 대화  클릭", 6, CREAM, x + 5, y + 46));
+        overlay.add(label("확대/축소  휠 · +/- · NPC 대화  클릭", 6, CREAM, x + 5, y + 46));
         return overlay;
     }
 
@@ -403,13 +459,14 @@ public final class NativeInnScene extends PixelScene {
         }
         compose.visible = false;
         send.visible = true;
-        addToFront(editor);
+        chatHud.add(editor);
         editor.setRect(compose.left(), compose.top(), compose.width() - send.width() - 3, compose.height());
+        updateChatVisibility();
     }
 
     private void closeComposer() {
         if (editor == null) return;
-        erase(editor);
+        chatHud.erase(editor);
         editor.destroy();
         editor = null;
         submitPending = false;
@@ -418,6 +475,7 @@ public final class NativeInnScene extends PixelScene {
         keyboard.reset();
         compose.visible = true;
         send.visible = false;
+        updateChatVisibility();
     }
 
     private void submitChat() {
@@ -438,14 +496,13 @@ public final class NativeInnScene extends PixelScene {
         return Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT);
     }
 
-    private void panel(float x, float y, float w, float h) {
-        add(block(x, y, w, h, BORDER));
-        add(block(x + 1, y + 1, w - 2, h - 2, CARD));
+    private FlatButton button(String text, float x, float y, float w, float h, boolean primary, Runnable click) {
+        return button(this, text, x, y, w, h, primary, click);
     }
 
-    private FlatButton button(String text, float x, float y, float w, float h, boolean primary, Runnable click) {
+    private FlatButton button(Group parent, String text, float x, float y, float w, float h, boolean primary, Runnable click) {
         FlatButton button = new FlatButton(text, primary, click);
-        add(button);
+        parent.add(button);
         button.setRect(x, y, w, h);
         return button;
     }
@@ -496,55 +553,26 @@ public final class NativeInnScene extends PixelScene {
         }
     }
 
-    private static final class FlatButton extends Button {
-        private final ColorBlock rim;
-        private final ColorBlock fill;
-        private final RenderedTextBlock label;
+    private static final class FlatButton extends StyledButton {
         private final Runnable click;
 
         FlatButton(String title, boolean primary, Runnable click) {
+            super(primary ? Chrome.Type.RED_BUTTON : Chrome.Type.GREY_BUTTON_TR, title, 7);
             this.click = click;
-            rim = block(0, 0, 1, 1, primary ? 0xffd49653 : BORDER);
-            fill = block(0, 0, 1, 1, primary ? 0xffedb56f : 0xff382925);
-            label = label(title, 6, CREAM, 0, 0);
-            addToBack(fill);
-            addToBack(rim);
-            add(label);
         }
 
-        void caption(String text) {
-            if (!text.equals(label.text())) {
-                label.text(text);
-                layout();
-            }
+        void caption(String value) {
+            if (!value.equals(text())) text(value);
         }
 
         void enabled(boolean enabled) {
-            active = enabled;
-            label.alpha(enabled ? 1 : .55f);
-        }
-
-        @Override
-        protected void layout() {
-            super.layout();
-            rim.x = x;
-            rim.y = y;
-            rim.size(width, height);
-            fill.x = x + 1;
-            fill.y = y + 1;
-            fill.size(width - 2, height - 2);
-            label.setPos(align(x + (width - label.width()) / 2), align(y + (height - label.height()) / 2));
+            enable(enabled);
         }
 
         @Override
         protected void onPointerDown() {
             PointerEvent.clearKeyboardThisPress = false;
-            fill.brightness(1.25f);
-        }
-
-        @Override
-        protected void onPointerUp() {
-            fill.resetColor();
+            super.onPointerDown();
         }
 
         @Override

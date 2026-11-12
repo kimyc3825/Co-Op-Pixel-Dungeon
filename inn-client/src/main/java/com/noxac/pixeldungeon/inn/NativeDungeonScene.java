@@ -8,18 +8,21 @@ import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTileSheet;
+import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Window;
 import com.watabou.input.KeyEvent;
 import com.watabou.input.PointerEvent;
+import com.watabou.input.ScrollEvent;
 import com.watabou.noosa.Camera;
 import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.Gizmo;
 import com.watabou.noosa.Group;
 import com.watabou.noosa.Image;
 import com.watabou.noosa.PointerArea;
+import com.watabou.noosa.ScrollArea;
 import com.watabou.noosa.TextInput;
 import com.watabou.noosa.TextureFilm;
 import com.watabou.noosa.Tilemap;
@@ -38,8 +41,8 @@ import java.util.function.Supplier;
 public final class NativeDungeonScene extends PixelScene {
     private static final int BACK = 0xFF151918;
     private static final int BOARD = 0xFF202824;
-    private static final int PANEL = 0xFF252C27;
     private static final int EDGE = 0xFF454F43;
+    private static final int HUD = 0xE9222924;
     static final int TEXT = 0xF4E5C9;
     static final int MUTED = 0xC0B7A0;
     static final int SELF = 0xD7BD78;
@@ -58,12 +61,15 @@ public final class NativeDungeonScene extends PixelScene {
     private record Step(int dx, int dy) {}
     private record SubmittedAction(InnApi.Action action, long acknowledgement, long sentAt) {}
     private record ImpactLabel(RenderedTextBlock text, InnApi.BattleEvent event) {}
+    private record Destination(int x, int y, String targetId) {}
 
     private static final class WallLip extends Image {
+        final int column;
         final int row;
 
-        WallLip(String texture, RectF overhang, int row) {
+        WallLip(String texture, RectF overhang, int column, int row) {
             super(texture);
+            this.column = column;
             this.row = row;
             float top = overhang.top + overhang.height() / 2;
             float bottom = top + overhang.height() * WALL_LIP_HEIGHT / TILE;
@@ -92,6 +98,7 @@ public final class NativeDungeonScene extends PixelScene {
     private Group projectiles;
     private Group impacts;
     private Group loot;
+    private Group hud;
     private Group help;
     private Group chatLog;
     private ChatRows chatRows;
@@ -126,8 +133,10 @@ public final class NativeDungeonScene extends PixelScene {
     private float mapX;
     private float mapY;
     private float tile = TILE;
-    private float sideX;
-    private float sideWidth;
+    private float mapTop;
+    private float mapBottom;
+    private int zoomStep;
+    private float zoomWheel;
     private float boardX;
     private float boardY;
     private float boardWidth;
@@ -136,6 +145,8 @@ public final class NativeDungeonScene extends PixelScene {
     private int rows;
     private SubmittedAction submitted;
     private Step lastMove;
+    private Destination destination;
+    private Destination resumable;
     private long lastMoveAt;
     private String localNotice = "";
     private long noticeUntil;
@@ -147,6 +158,7 @@ public final class NativeDungeonScene extends PixelScene {
     private boolean rationHeld;
     private boolean helpHeld;
     private boolean pauseHeld;
+    private boolean examine;
     private boolean chatPinned;
     private boolean chatDirty = true;
     private boolean chatOpenPending;
@@ -161,60 +173,19 @@ public final class NativeDungeonScene extends PixelScene {
     public void create() {
         super.create();
         RectF insets = getCommonInsets();
-        float left = insets.left + 8;
-        float top = insets.top + 5;
-        float width = Camera.main.width - insets.left - insets.right - 16;
-        float height = Camera.main.height - insets.top - insets.bottom - 10;
-        ColorBlock background = panel(this, 0, 0, Camera.main.width, Camera.main.height, BACK);
-        background.camera = Camera.main;
-        floorTitle = label(this, NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS), 13, TEXT, left, top + 2, 95);
-        boolean compactHeader = width < 295;
-        float leaveWidth = compactHeader ? 43 : 58;
-        float helpWidth = compactHeader ? 37 : 58;
-        float pauseWidth = compactHeader ? 57 : 73;
-        float right = left + width;
-        float pauseX = right - leaveWidth - helpWidth - pauseWidth - 10;
-        floorStatus = label(this, " ", 7, MUTED, left, top + 18, Math.min(145, pauseX - left - 3));
-        StyledButton leave = button(this, "여관으로", this::leave);
-        leave.setRect(right - leaveWidth, top + 3, leaveWidth, 19);
-        helpButton = button(this, compactHeader ? "F1 도움" : "F1 조작법", this::toggleHelp);
-        helpButton.setRect(right - leaveWidth - helpWidth - 5, top + 3, helpWidth, 19);
-        pauseButton = button(this, "전술 정지 · P", this::togglePause);
-        pauseButton.setRect(pauseX, top + 3, pauseWidth, 19);
-
-        sideWidth = Math.max(77, Math.min(116, width * 0.31f));
-        sideX = left + width - sideWidth;
-        boardX = left;
-        boardY = top + 31;
-        boardWidth = width - sideWidth - 6;
-        boardHeight = height - 31;
-        panel(this, boardX, boardY, boardWidth, boardHeight, EDGE);
-        floorPanel = panel(this, boardX + 1, boardY + 1, boardWidth - 2, boardHeight - 2, BOARD);
-        panel(this, sideX, boardY, sideWidth, boardHeight, EDGE);
-        panel(this, sideX + 1, boardY + 1, sideWidth - 2, boardHeight - 2, PANEL);
-        float toolsWidth = (sideWidth - 16) / 3;
-        button(this, "가방", () -> showPanel(BackpackWindow::new)).setRect(sideX + 6, boardY + 4, toolsWidth, 13);
-        button(this, "상태", () -> showPanel(StatusWindow::new)).setRect(sideX + 8 + toolsWidth, boardY + 4, toolsWidth, 13);
-        button(this, "대화", this::toggleChatLog).setRect(sideX + 10 + toolsWidth * 2, boardY + 4, toolsWidth, 13);
-
-        float partyTop = boardY + 21;
-        float spacing = boardHeight < 125 ? 26 : 31;
-        for (int i = 0; i < party.length; i++) {
-            party[i] = new PartySlot(sideX + 6, partyTop + i * spacing, sideWidth - 12);
-        }
-        queueLabel = label(this, "예약 없음", 7, ALLY, sideX + 6, partyTop + 2 * spacing + 3, sideWidth - 12);
-        float attackWidth = (sideWidth - 15) / 2;
-        hitButton = button(this, "평타 · Space", this::attack);
-        hitButton.setRect(sideX + 6, boardY + boardHeight - 24, attackWidth, 18);
-        hitButton.enable(false);
-        shootButton = button(this, "활 · R", this::toggleAim);
-        shootButton.setRect(sideX + 9 + attackWidth, boardY + boardHeight - 24, attackWidth, 18);
-        shootButton.enable(false);
-        rationButton = button(this, "식량 0 · E", this::eat);
-        rationButton.setRect(sideX + 6, boardY + boardHeight - 44, sideWidth - 12, 18);
-        rationButton.enable(false);
-        notice = label(this, " ", 7, ENEMY, boardX + 5, boardY + boardHeight - 14, boardWidth - 10);
-
+        boardX = 0;
+        boardY = 0;
+        boardWidth = Camera.main.width;
+        boardHeight = Camera.main.height;
+        float left = insets.left + 7;
+        float top = insets.top + 6;
+        float right = boardWidth - insets.right - 7;
+        float bottom = boardHeight - insets.bottom - 6;
+        float toolbarY = bottom - 21;
+        mapTop = top + 43;
+        mapBottom = toolbarY - 6;
+        panel(this, 0, 0, boardWidth, boardHeight, BACK);
+        floorPanel = panel(this, boardX, boardY, boardWidth, boardHeight, BOARD);
         selectedTile = panel(this, 0, 0, 1, 1, 0x66D5664E);
         queuedTile = panel(this, 0, 0, 1, 1, 0x6594C9C0);
         aimTile = panel(this, 0, 0, 1, 1, 0x88E9C474);
@@ -225,18 +196,17 @@ public final class NativeDungeonScene extends PixelScene {
         add(world);
         projectiles = new Group();
         add(projectiles);
-        pauseShade = panel(this, boardX + 1, boardY + 1, boardWidth - 2, boardHeight - 2, 0x8A757575);
+        pauseShade = panel(this, boardX, boardY, boardWidth, boardHeight, 0x8A757575);
         pauseShade.visible = false;
         actorOverlays = new Group();
         add(actorOverlays);
         impacts = new Group();
         add(impacts);
-        fireLabel = label(this, " ", 6, MUTED, boardX + boardWidth - 56, boardY + 5, 53);
         pauseCard = new Group();
         add(pauseCard);
         float pauseCardWidth = Math.min(boardWidth - 14, 118);
-        float pauseCardX = boardX + boardWidth - pauseCardWidth - 6;
-        float pauseCardY = boardY + 16;
+        float pauseCardX = right - pauseCardWidth;
+        float pauseCardY = mapTop;
         panel(pauseCard, pauseCardX, pauseCardY, pauseCardWidth, 30, 0xE9262C29);
         RenderedTextBlock pauseTitle = label(pauseCard, "전술 정지", 9, TEXT, pauseCardX + 5, pauseCardY + 4, pauseCardWidth - 10);
         pauseTitle.align(RenderedTextBlock.CENTER_ALIGN);
@@ -255,30 +225,75 @@ public final class NativeDungeonScene extends PixelScene {
         waitingLabel = label(waitingCard, " ", 8, TEXT, waitingX + 4, waitingY + 7, waitingWidth - 8);
         waitingLabel.align(RenderedTextBlock.CENTER_ALIGN);
 
-        add(new PointerArea(floorPanel) {
+        add(new ScrollArea(floorPanel) {
             @Override
             protected void onClick(PointerEvent event) {
                 PointF point = camera().screenToCamera((int) event.current.x, (int) event.current.y);
-                onTile((int) Math.floor((point.x - mapX) / tile), (int) Math.floor((point.y - mapY) / tile));
+                int x = (int) Math.floor((point.x - mapX) / tile);
+                int y = (int) Math.floor((point.y - mapY) / tile);
+                if (event.button == PointerEvent.RIGHT) examineTile(x, y);
+                else if (event.button == PointerEvent.LEFT) onTile(x, y);
+            }
+
+            @Override
+            protected void onScroll(ScrollEvent event) {
+                zoomWheel += event.amount;
+                int steps = (int) zoomWheel;
+                zoomWheel -= steps;
+                if (steps != 0) zoom(-steps);
             }
         });
 
+        hud = new Group();
+        add(hud);
+        float partyWidth = Math.min(87, (right - left - 120) / 2);
+        for (int i = 0; i < party.length; i++) {
+            party[i] = new PartySlot(left + i * (partyWidth + 3), top, partyWidth);
+        }
+        button(hud, "메뉴", this::openGameMenu).setRect(right - 29, top, 29, 17);
+        helpButton = button(hud, "F1 도움", this::toggleHelp);
+        helpButton.setRect(right - 65, top, 34, 17);
+        pauseButton = button(hud, "정지 · P", this::togglePause);
+        pauseButton.setRect(right - 117, top, 50, 17);
+        floorTitle = label(hud, NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS), 7, SELF, left, top + 30, 56);
+        floorStatus = label(hud, " ", 6, TEXT, left + 58, top + 31, right - left - 114);
+        fireLabel = label(hud, " ", 6, MUTED, right - 54, top + 31, 54);
+
+        StyledButton bag = button(hud, "가방", () -> showPanel(BackpackWindow::new));
+        bag.icon(Icons.BACKPACK.get());
+        bag.setRect(left, toolbarY, 43, 21);
+        button(hud, "대화", this::toggleChatLog).setRect(left + 45, toolbarY, 31, 21);
+        float quickWidth = Math.min(51, (right - left - 84) / 3);
+        float quickX = right - 3 * quickWidth - 4;
+        hitButton = button(hud, "평타 · Q", this::attack);
+        hitButton.setRect(quickX, toolbarY, quickWidth, 21);
+        hitButton.enable(false);
+        shootButton = button(hud, "1 · 활", this::toggleAim);
+        shootButton.setRect(quickX + quickWidth + 2, toolbarY, quickWidth, 21);
+        shootButton.enable(false);
+        rationButton = button(hud, "2 · 식량 0", this::eat);
+        rationButton.setRect(right - quickWidth, toolbarY, quickWidth, 21);
+        rationButton.enable(false);
+        queueLabel = label(hud, "", 6, ALLY, left + 80, toolbarY + 7, Math.max(1, quickX - left - 83));
+        notice = label(hud, " ", 7, ENEMY, left, toolbarY - 12, right - left);
+
         help = new Group();
         add(help);
-        float helpCardWidth = Math.min(boardWidth - 12, 131);
-        float helpX = boardX + 6;
-        float helpY = boardY + 6;
-        panel(help, helpX, helpY, helpCardWidth, 96, 0xC01A201D);
+        float helpCardWidth = Math.min(boardWidth - 12, 165);
+        float helpX = left;
+        float helpY = mapTop;
+        ColorBlock helpBackdrop = panel(help, helpX, helpY, helpCardWidth, 94, 0xE01A201D);
+        help.add(new PointerArea(helpBackdrop));
         panel(help, helpX, helpY, helpCardWidth, 1, 0xAF9DB4A6);
-        label(help, "이동  WASD · 방향키", 7, TEXT, helpX + 5, helpY + 4, helpCardWidth - 10);
-        label(help, "대각선  방향 조합 · 숫자패드", 7, TEXT, helpX + 5, helpY + 15, helpCardWidth - 10);
-        label(help, "평타  Space · 대상 클릭", 7, TEXT, helpX + 5, helpY + 26, helpCardWidth - 10);
-        label(help, "인접 칸 클릭  한 칸 이동", 7, TEXT, helpX + 5, helpY + 37, helpCardWidth - 10);
-        label(help, "식량 사용  E · 행동력 3", 7, TEXT, helpX + 5, helpY + 48, helpCardWidth - 10);
+        label(help, "이동  클릭 · WASD · 방향키 · 숫자패드", 7, TEXT, helpX + 5, helpY + 4, helpCardWidth - 10);
+        label(help, "평타  Q · 대상 클릭", 7, TEXT, helpX + 5, helpY + 15, helpCardWidth - 10);
+        label(help, "대기 Space · 줍기 C · 재개 R", 7, TEXT, helpX + 5, helpY + 26, helpCardWidth - 10);
+        label(help, "1 활 · 2 식량 · E 살펴보기", 7, TEXT, helpX + 5, helpY + 37, helpCardWidth - 10);
+        label(help, "F/I 가방 · H 상태 · +/- 확대", 7, TEXT, helpX + 5, helpY + 48, helpCardWidth - 10);
         label(help, "전술 정지 / 재개  P", 7, TEXT, helpX + 5, helpY + 59, helpCardWidth - 10);
-        label(help, "활 조준  R → 칸 클릭", 7, TEXT, helpX + 5, helpY + 70, helpCardWidth - 10);
-        label(help, "대화  Enter · 취소 Esc", 7, TEXT, helpX + 5, helpY + 81, helpCardWidth - 10);
-        help.visible = false;
+        label(help, "대화 Enter · 취소 Esc · 도움말 F1", 7, TEXT, helpX + 5, helpY + 70, helpCardWidth - 10);
+        label(help, "연습 도구는 해당 칸에 서서 사용", 7, ALLY, helpX + 5, helpY + 81, helpCardWidth - 10);
+        help.visible = help.active = false;
 
         createChatLog();
         keys = this::onKey;
@@ -309,9 +324,9 @@ public final class NativeDungeonScene extends PixelScene {
         previewQueuedMove(now);
         if (!typing()) {
             onHotkey(Input.Keys.F1, Gdx.input.isKeyPressed(Input.Keys.F1));
-            onHotkey(Input.Keys.SPACE, Gdx.input.isKeyPressed(Input.Keys.SPACE));
-            onHotkey(Input.Keys.R, Gdx.input.isKeyPressed(Input.Keys.R));
-            onHotkey(Input.Keys.E, Gdx.input.isKeyPressed(Input.Keys.E));
+            onHotkey(Input.Keys.Q, Gdx.input.isKeyPressed(Input.Keys.Q));
+            onHotkey(Input.Keys.NUM_1, Gdx.input.isKeyPressed(Input.Keys.NUM_1));
+            onHotkey(Input.Keys.NUM_2, Gdx.input.isKeyPressed(Input.Keys.NUM_2));
             onHotkey(Input.Keys.P, Gdx.input.isKeyPressed(Input.Keys.P));
             updateInput(now);
         }
@@ -337,7 +352,10 @@ public final class NativeDungeonScene extends PixelScene {
             submitted = null;
             aiming = false;
             lastMove = null;
-            if (paused) actorViews.values().forEach(DungeonActorView::cancelPreviewMove);
+            if (paused) {
+                interruptRoute();
+                actorViews.values().forEach(DungeonActorView::cancelPreviewMove);
+            }
         }
         if (next == null) {
             self = null;
@@ -364,8 +382,13 @@ public final class NativeDungeonScene extends PixelScene {
             selected = null;
             submitted = null;
             lastMove = null;
+            destination = resumable = null;
         }
         self = find(next.selfId());
+        if (destination != null && (self == null || self.hp() == 0 || priorSelf != null && self.hp() < priorSelf.hp()
+            || destination.targetId() == null && prior != null && !prior.inCombat() && next.inCombat())) {
+            interruptRoute();
+        }
         long now = NativeClient.dungeonNow();
         String hostId = next.actors().getFirst().id();
         for (InnApi.Combatant actor : next.actors()) {
@@ -387,6 +410,7 @@ public final class NativeDungeonScene extends PixelScene {
             entry.getValue().destroy();
             return true;
         });
+        placeMap();
         acceptChat(next);
         if (submitted != null && next.commandAck() > submitted.acknowledgement()) {
             if (self != null && priorSelf != null && "move".equals(submitted.action().type()) &&
@@ -403,7 +427,7 @@ public final class NativeDungeonScene extends PixelScene {
             showAttackResult(event, now);
         }
         boolean training = !next.trainingTools().isEmpty();
-        setText(fireLabel, training ? "도구 칸 밟기" : next.friendlyFire() ? "아군 피해 켜짐" : "아군 피해 꺼짐");
+        setText(fireLabel, training ? "도구 칸 밟기" : !isSoloAtb() && next.friendlyFire() ? "아군 피해 켜짐" : "");
         fireLabel.hardlight(training ? ALLY : next.friendlyFire() ? ENEMY : MUTED);
 
         int index = 0;
@@ -436,7 +460,7 @@ public final class NativeDungeonScene extends PixelScene {
             showWaiting("");
         }
         InnApi.Action queued = activePlayer() ? next.queued() : null;
-        setText(queueLabel, queued == null ? "예약 없음" : switch (queued.type()) {
+        setText(queueLabel, queued == null ? "" : switch (queued.type()) {
             case "move" -> "예약  " + directionName(queued.dx(), queued.dy()) + " 이동";
             case "eat" -> "예약  식량";
             case "shoot" -> "예약  화살";
@@ -489,6 +513,7 @@ public final class NativeDungeonScene extends PixelScene {
                     loot.add(sprite);
                     return sprite;
                 });
+                image.scale.set(tile / TILE);
                 image.x = align(mapX + (drop.x() + 0.5f) * tile - image.width() / 2);
                 image.y = align(mapY + (drop.y() + 0.75f) * tile - image.height() / 2);
             } else {
@@ -512,9 +537,6 @@ public final class NativeDungeonScene extends PixelScene {
     private void buildMap(List<String> map, String theme) {
         rows = map.size();
         columns = map.getFirst().length();
-        tile = Math.min(36, Math.min((boardWidth - 8) / columns, (boardHeight - 8) / rows));
-        mapX = align(boardX + (boardWidth - columns * tile) / 2);
-        mapY = align(boardY + (boardHeight - rows * tile) / 2);
         if (tiles != null) {
             tiles.remove();
             tiles.destroy();
@@ -540,20 +562,15 @@ public final class NativeDungeonScene extends PixelScene {
                     int overhang = DungeonTileSheet.WALL_OVERHANG;
                     if (x + 1 < columns && row.charAt(x + 1) != '#') overhang++;
                     if (x > 0 && row.charAt(x - 1) != '#') overhang += 2;
-                    WallLip lip = new WallLip(texture, atlas.get(overhang), y);
-                    lip.scale.set(tile / TILE);
-                    lip.x = mapX + x * tile;
-                    lip.y = mapY + y * tile - lip.height();
+                    WallLip lip = new WallLip(texture, atlas.get(overhang), x, y);
                     wallLips.add(lip);
                     world.add(lip);
                 }
             }
         }
         tiles.map(indices, columns);
-        tiles.scale.set(tile / TILE);
-        tiles.x = mapX;
-        tiles.y = mapY;
         add(tiles);
+        placeMap();
         // Re-append the overlay layers so tile rebuilds do not cover actors or input feedback.
         moveLayerUp(selectedTile);
         moveLayerUp(queuedTile);
@@ -566,11 +583,51 @@ public final class NativeDungeonScene extends PixelScene {
         moveLayerUp(impacts);
         moveLayerUp(pauseCard);
         moveLayerUp(speechOverlays);
-        moveLayerUp(fireLabel);
-        moveLayerUp(notice);
         moveLayerUp(waitingCard);
+        moveLayerUp(hud);
         moveLayerUp(help);
         moveLayerUp(chatLog);
+    }
+
+    private void placeMap() {
+        if (tiles == null) return;
+        float fit = Math.max(TILE, Math.min((boardWidth - 12) / columns, (mapBottom - mapTop) / rows));
+        float scale = (float) Math.pow(1.25, zoomStep);
+        float size = Math.min(48, fit * scale);
+        float focusX = self == null ? columns / 2f : self.x() + .5f;
+        float focusY = self == null ? rows / 2f : self.y() + .5f;
+        float x = align(mapOrigin(6, boardWidth - 6, columns * size, focusX * size));
+        float y = align(mapOrigin(mapTop, mapBottom, rows * size, focusY * size));
+        mapX = x;
+        mapY = y;
+        tile = size;
+        tiles.scale.set(tile / TILE);
+        tiles.x = mapX;
+        tiles.y = mapY;
+        for (WallLip lip : wallLips) {
+            lip.scale.set(tile / TILE);
+            lip.x = mapX + lip.column * tile;
+            lip.y = mapY + lip.row * tile - lip.height();
+        }
+        for (DungeonActorView view : actorViews.values()) view.place(mapX, mapY, tile);
+    }
+
+    private static float mapOrigin(float start, float end, float extent, float focus) {
+        float center = (start + end) / 2;
+        if (extent <= end - start) return center - extent / 2;
+        return Math.clamp(center - focus, end - extent, start);
+    }
+
+    private void zoom(int steps) {
+        int next = Math.clamp(zoomStep + steps, -2, 3);
+        if (panelWindow != null || chatEditor != null || next == zoomStep) return;
+        zoomStep = next;
+        placeMap();
+        if (state != null && self != null) {
+            showTrainingTools(state, self);
+            showLoot(state, state);
+        }
+        updateMarkers();
     }
 
     private void moveLayerUp(Gizmo layer) {
@@ -636,7 +693,7 @@ public final class NativeDungeonScene extends PixelScene {
         boolean attackEnabled = canAttack();
         if (!attackEnabled) aiming = false;
         long attackWait = attackEnabled ? Math.max(0, self.attackReadyAt() - now) : 0;
-        String attackLabel = hitButton.width() < 43 ? "평타" : "평타 · Space";
+        String attackLabel = "평타 · Q";
         if (attackWait > 0) {
             long tenths = (attackWait + 99) / 100;
             attackLabel = "평타 " + tenths / 10 + "." + tenths % 10 + "초";
@@ -647,13 +704,13 @@ public final class NativeDungeonScene extends PixelScene {
         hitButton.enable(attackEnabled);
         hitButton.textColor(attackEnabled && readyAt("attack") <= now ? TEXT : MUTED);
 
-        String shootLabel = aiming ? "조준 해제" : "활 · R";
+        String shootLabel = aiming ? "조준 해제" : "1 · 활";
         if (!shootLabel.equals(shootButton.text())) shootButton.text(shootLabel);
         shootButton.enable(attackEnabled);
         shootButton.textColor(attackEnabled && readyAt("shoot") <= now ? TEXT : MUTED);
 
         int rations = self == null ? 0 : self.rations();
-        String rationLabel = "식량 " + rations + " · E";
+        String rationLabel = "2 · 식량 " + rations;
         if (!rationLabel.equals(rationButton.text())) rationButton.text(rationLabel);
         boolean rationEnabled = able && rations > 0 && self.hp() < self.maxHp();
         rationButton.enable(rationEnabled);
@@ -685,7 +742,7 @@ public final class NativeDungeonScene extends PixelScene {
             inputAt - submitted.sentAt() < MOVE_RETRY_NS) return;
         if (!fresh && (awaitingAcknowledgement(inputAt) || availableAt > now + MOVE_QUEUE_LEAD_MS ||
             queued != null && ("move".equals(queued.type()) || !ready))) return;
-        if (step.equals(lastMove) && inputAt - lastMoveAt < MOVE_RETRY_NS) return;
+        if (!fresh && step.equals(lastMove) && inputAt - lastMoveAt < MOVE_RETRY_NS) return;
         if (!mayStep(step, ready)) return;
         InnApi.Action action = new InnApi.Action("move", step.dx(), step.dy(), null);
         if (!beginRequest(action, inputAt)) return;
@@ -704,7 +761,12 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private void onTile(int x, int y) {
-        if (!canAct() || !mapCell(x, y)) return;
+        if (!mapCell(x, y)) return;
+        if (examine) {
+            examineTile(x, y);
+            return;
+        }
+        if (!canAct()) return;
         if (aiming) {
             shoot(x, y);
             return;
@@ -713,25 +775,117 @@ public final class NativeDungeonScene extends PixelScene {
         for (InnApi.Combatant actor : state.actors()) {
             if (canAttack() && actor.hp() > 0 && actor.x() == x && actor.y() == y &&
                 !self.id().equals(actor.id()) && (isCombatTarget(actor) || state.friendlyFire())) {
-                selected = actor.id();
-                attackTarget(actor);
-                updateMarkers();
+                navigateTo(new Destination(x, y, actor.id()));
                 return;
             }
         }
-        int dx = x - self.x();
-        int dy = y - self.y();
-        if ((dx != 0 || dy != 0) && Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
-            move(new Step(dx, dy), true, NativeClient.dungeonNow());
+        if (x == self.x() && y == self.y()) interruptRoute();
+        else navigateTo(new Destination(x, y, null));
+    }
+
+    private void navigateTo(Destination next) {
+        destination = next;
+        resumable = null;
+        selected = next.targetId();
+        updateMarkers();
+        advanceRoute(NativeClient.dungeonNow());
+    }
+
+    private void advanceRoute(long now) {
+        if (destination == null || !canAct() || awaitingAcknowledgement(System.nanoTime())) return;
+        InnApi.Combatant target = find(destination.targetId());
+        if (destination.targetId() != null) {
+            if (target == null || target.hp() <= 0 || !canAttack()) {
+                destination = null;
+                return;
+            }
+            if (inReach(target)) {
+                destination = null;
+                attackTarget(target);
+                return;
+            }
         }
+        int x = target == null ? destination.x() : target.x();
+        int y = target == null ? destination.y() : target.y();
+        if (target == null && self.x() == x && self.y() == y) {
+            destination = null;
+            return;
+        }
+        DungeonLayout.Cell step = DungeonNavigation.next(state, self, x, y, target != null);
+        if (step == null) {
+            interruptRoute();
+            tell("갈 수 있는 길이 없습니다.");
+        } else if (readyAt("move") <= now) {
+            move(new Step(step.x(), step.y()), false, now);
+        }
+    }
+
+    private void interruptRoute() {
+        if (destination != null) resumable = destination;
+        destination = null;
+    }
+
+    private void resumeRoute() {
+        if (!canAct() || resumable == null) return;
+        navigateTo(resumable);
+    }
+
+    private void goToLoot() {
+        if (!canAct()) return;
+        DungeonLayout.Cell drop = DungeonNavigation.nearestLoot(state, self);
+        if (drop == null) tell("주울 전리품이 없습니다.");
+        else navigateTo(new Destination(drop.x(), drop.y(), null));
+    }
+
+    private void toggleExamine() {
+        if (panelWindow != null || chatEditor != null) return;
+        interruptRoute();
+        aiming = false;
+        examine = !examine;
+        if (examine) tell("살펴볼 칸을 선택하세요.");
+    }
+
+    private void examineTile(int x, int y) {
+        if (state == null || !mapCell(x, y)) return;
+        examine = false;
+        InnApi.Combatant actor = state.actors().stream()
+            .filter(value -> value.hp() > 0 && value.x() == x && value.y() == y).findFirst().orElse(null);
+        if (actor != null && actor.id().equals(state.selfId())) {
+            showPanel(StatusWindow::new);
+            return;
+        }
+        String description = actor == null ? describeGround(x, y)
+            : actor.name() + " · 체력 " + actor.hp() + "/" + actor.maxHp();
+        showPanel(() -> {
+            DungeonWindow window = new DungeonWindow("살펴보기", 130, 52);
+            label(window, description, 8, TEXT, 5, 22, 120);
+            return window;
+        });
+    }
+
+    private String describeGround(int x, int y) {
+        for (InnApi.TrainingTool tool : state.trainingTools()) {
+            if (tool.x() == x && tool.y() == y) {
+                return "ration-rack".equals(tool.id()) ? "식량 상자 · 식량을 3개까지 보급"
+                    : "회복 도구 · 체력과 행동력 회복";
+            }
+        }
+        for (InnApi.Drop drop : state.drops()) {
+            if (drop.pickedBy() == null && drop.x() == x && drop.y() == y) {
+                return ("gold".equals(drop.item()) ? "금화 " : "식량 ") + drop.amount();
+            }
+        }
+        return passable(x, y) ? "던전 바닥" : "던전 벽";
     }
 
     private void attack() {
         if (!canAttack()) return;
+        interruptRoute();
         aiming = false;
         InnApi.Combatant target = find(selected);
-        if (!inReach(target)) {
-            target = state.actors().stream().filter(this::inReach).findFirst().orElse(null);
+        if (target == null || !isCombatTarget(target) || !inReach(target)) {
+            target = state.actors().stream().filter(NativeDungeonScene::isCombatTarget).filter(this::inReach)
+                .findFirst().orElse(null);
         }
         if (target != null) {
             selected = target.id();
@@ -750,6 +904,8 @@ public final class NativeDungeonScene extends PixelScene {
 
     private void toggleAim() {
         if (!canAttack()) return;
+        interruptRoute();
+        examine = false;
         aiming = !aiming;
         if (aiming) tell("활 조준 · 쏠 칸을 선택하세요. 사거리 5칸 · 행동력 2");
     }
@@ -839,6 +995,7 @@ public final class NativeDungeonScene extends PixelScene {
 
     private void eat() {
         if (!canAct()) return;
+        interruptRoute();
         if (self.rations() == 0) {
             tell("보유한 식량이 없습니다.");
         } else if (self.hp() == self.maxHp()) {
@@ -859,7 +1016,7 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private boolean inReach(InnApi.Combatant actor) {
-        if (actor == null || !isCombatTarget(actor) || actor.hp() == 0) return false;
+        if (actor == null || actor.hp() == 0) return false;
         int dx = actor.x() - self.x();
         int dy = actor.y() - self.y();
         if (Math.max(Math.abs(dx), Math.abs(dy)) != 1) return false;
@@ -907,7 +1064,13 @@ public final class NativeDungeonScene extends PixelScene {
         }
         movement.sample(Gdx.input::isKeyPressed);
         KeyboardMovement.Input input = movement.next(16);
-        if (input != null) move(new Step(input.dx(), input.dy()), input.fresh(), now);
+        if (input != null) {
+            interruptRoute();
+            aiming = examine = false;
+            move(new Step(input.dx(), input.dy()), input.fresh(), now);
+        } else if (!movement.active() && !aiming && !examine) {
+            advanceRoute(now);
+        }
     }
 
     private boolean onKey(KeyEvent event) {
@@ -919,7 +1082,13 @@ public final class NativeDungeonScene extends PixelScene {
             chatOpenPending = true;
             return true;
         }
-        return panelWindow == null && (onHotkey(event.code, event.pressed) || !paused() && movement.onKey(event.code, event.pressed));
+        if (panelWindow != null) return false;
+        if (onHotkey(event.code, event.pressed)) return true;
+        if (!paused() && movement.onKey(event.code, event.pressed)) {
+            if (event.pressed) interruptRoute();
+            return true;
+        }
+        return false;
     }
 
     private boolean onHotkey(int key, boolean pressed) {
@@ -928,17 +1097,17 @@ public final class NativeDungeonScene extends PixelScene {
             helpHeld = pressed;
             return true;
         }
-        if (key == Input.Keys.SPACE) {
+        if (key == Input.Keys.Q) {
             if (pressed && !attackHeld) attack();
             attackHeld = pressed;
             return true;
         }
-        if (key == Input.Keys.R) {
+        if (key == Input.Keys.NUM_1) {
             if (pressed && !shootHeld) toggleAim();
             shootHeld = pressed;
             return true;
         }
-        if (key == Input.Keys.E) {
+        if (key == Input.Keys.NUM_2) {
             if (pressed && !rationHeld) eat();
             rationHeld = pressed;
             return true;
@@ -948,7 +1117,24 @@ public final class NativeDungeonScene extends PixelScene {
             pauseHeld = pressed;
             return true;
         }
-        return false;
+        if (!pressed) return false;
+        switch (key) {
+            case Input.Keys.SPACE, Input.Keys.NUMPAD_5, Input.Keys.Z -> {
+                if (canAct()) {
+                    aiming = examine = false;
+                    interruptRoute();
+                }
+            }
+            case Input.Keys.C -> goToLoot();
+            case Input.Keys.R -> resumeRoute();
+            case Input.Keys.E -> toggleExamine();
+            case Input.Keys.F, Input.Keys.I -> showPanel(BackpackWindow::new);
+            case Input.Keys.H -> showPanel(StatusWindow::new);
+            case Input.Keys.PLUS, Input.Keys.EQUALS -> zoom(1);
+            case Input.Keys.MINUS -> zoom(-1);
+            default -> { return false; }
+        }
+        return true;
     }
 
     private void tell(String text) {
@@ -959,21 +1145,33 @@ public final class NativeDungeonScene extends PixelScene {
     @Override
     public void onPause() {
         closeComposer();
+        interruptRoute();
         movement.reset();
-        helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = false;
+        helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = examine = false;
         super.onPause();
     }
 
     private void toggleHelp() {
-        help.visible = !help.visible;
-        helpButton.text(help.visible ? "F1 접기" : helpButton.width() < 40 ? "F1 도움" : "F1 조작법");
+        help.visible = help.active = !help.visible;
+        helpButton.text(help.visible ? "F1 접기" : "F1 도움");
     }
 
     private void showPanel(Supplier<? extends Window> open) {
         if (state == null || leaving || panelWindow != null || chatEditor != null) return;
+        interruptRoute();
         movement.reset();
+        aiming = examine = false;
         panelWindow = open.get();
         add(panelWindow);
+    }
+
+    private void openGameMenu() {
+        showPanel(() -> {
+            DungeonWindow menu = new DungeonWindow("원정 메뉴", 112, 67);
+            button(menu, "계속하기", menu::hide).setRect(4, 22, 104, 18);
+            button(menu, "여관으로", this::leave).setRect(4, 44, 104, 18);
+            return menu;
+        });
     }
 
     private void leave() {
@@ -988,7 +1186,9 @@ public final class NativeDungeonScene extends PixelScene {
         else if (panelWindow != null) panelWindow.hide();
         else if (chatPinned) toggleChatLog();
         else if (aiming) aiming = false;
-        else leave();
+        else if (examine) examine = false;
+        else if (help.visible) toggleHelp();
+        else openGameMenu();
     }
 
     @Override
@@ -1177,7 +1377,7 @@ public final class NativeDungeonScene extends PixelScene {
         float x = boardX + 5;
         float width = Math.min(174, boardWidth - 10);
         float historyHeight = Math.min(54, Math.max(30, boardHeight / 3));
-        float composerY = boardY + boardHeight - 31;
+        float composerY = boardY + boardHeight - 46;
         float y = composerY - historyHeight - 14;
         ColorBlock backdrop = panel(chatLog, x, y, width, historyHeight + 28, 0xDB202622);
         chatLog.add(new PointerArea(backdrop));
@@ -1217,8 +1417,9 @@ public final class NativeDungeonScene extends PixelScene {
 
     private void openComposer() {
         if (!canChat() || chatEditor != null || panelWindow != null) return;
+        interruptRoute();
         movement.reset();
-        helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = false;
+        helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = examine = false;
         composerEnterReleased = !Gdx.input.isKeyPressed(Input.Keys.ENTER);
         chatEditor = new TextInput(Chrome.get(Chrome.Type.TOAST_WHITE), false, defaultZoom * 7) {
             @Override
@@ -1356,10 +1557,18 @@ public final class NativeDungeonScene extends PixelScene {
 
         private PartySlot(float x, float y, float width) {
             this.width = width;
-            add(group);
-            name = label(group, " ", 8, TEXT, x, y, width);
-            health = label(group, " ", 7, MUTED, x, y + 9, width);
-            energyLabel = label(group, " ", 7, ALLY, x + width / 2 - 2, y + 9, width / 2 + 2);
+            hud.add(group);
+            ColorBlock plate = panel(group, x - 1, y - 1, width + 2, 28, HUD);
+            panel(group, x - 1, y - 1, width + 2, 1, EDGE);
+            group.add(new PointerArea(plate) {
+                @Override
+                protected void onClick(PointerEvent event) {
+                    showPanel(StatusWindow::new);
+                }
+            });
+            name = label(group, " ", 8, TEXT, x + 2, y + 1, width - 3);
+            health = label(group, " ", 6, MUTED, x + 2, y + 10, width);
+            energyLabel = label(group, " ", 6, ALLY, x + width / 2 - 2, y + 10, width / 2 + 2);
             panel(group, x, y + 19, width, 3, 0xFF414B41);
             hpBar = panel(group, x, y + 19, width, 3, 0xFFA67F66);
             panel(group, x, y + 23, width, 2, 0xFF414B41);
@@ -1369,7 +1578,7 @@ public final class NativeDungeonScene extends PixelScene {
 
         private void set(InnApi.Combatant actor, boolean own) {
             this.actor = actor;
-            group.visible = actor != null;
+            group.visible = group.active = actor != null;
             if (actor == null) return;
             name.hardlight(own ? SELF : TEXT);
             setText(name, partyName(actor, own));
