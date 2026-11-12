@@ -26,6 +26,7 @@ import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Bones;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
@@ -109,6 +110,7 @@ import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.MasterThievesArm
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.SkeletonKey;
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TalismanOfForesight;
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TimekeepersHourglass;
+import com.shatteredpixel.shatteredpixeldungeon.plants.Swiftthistle;
 import com.shatteredpixel.shatteredpixeldungeon.items.bags.MagicalHolster;
 import com.shatteredpixel.shatteredpixeldungeon.items.journal.Guidebook;
 import com.shatteredpixel.shatteredpixeldungeon.items.keys.CrystalKey;
@@ -821,7 +823,98 @@ public class Hero extends Char {
 
 	@Override
 	public void spendConstant(float time) {
+		boolean atb = innAtbActive();
 		super.spendConstant(time);
+		if (!atb) return;
+		switch (atbSpend) {
+			case MOVE:
+				atbIndependent = true;
+				atbMoving = true;
+				atbMoveAt = Actor.now() + 0.225f * time;
+				if (time > 0 && visibleEnemies() > 0) InnAtb.spend(1);
+				break;
+			case MELEE:
+				atbIndependent = true;
+				atbMeleeAt = Actor.now() + time;
+				if (time > 0) InnAtb.spend(1);
+				break;
+			case WAIT:
+				if (time > 0) atbIndependent = false;
+				break;
+			default:
+				if (time > 0) atbIndependent = false;
+				if (time != 0) InnAtb.spend(time);
+				break;
+		}
+	}
+
+	private enum AtbSpend { NORMAL, MOVE, MELEE, WAIT }
+	private AtbSpend atbSpend = AtbSpend.NORMAL;
+	// Only movement and melee replace the original hero-wide cooldown.
+	private boolean atbIndependent;
+	private volatile boolean atbMoving;
+	private float atbMoveAt;
+	private float atbMeleeAt;
+	private HeroAction atbWaiting;
+	private AtbSpend atbWaitKind;
+
+	public boolean innAtbActive() {
+		return InnAdventure.atb() && Dungeon.hero == this
+				&& buff(TimekeepersHourglass.timeFreeze.class) == null
+				&& buff(Swiftthistle.TimeBubble.class) == null;
+	}
+
+	public boolean canSpendInnAtb(float cost) {
+		return !innAtbActive() || InnAtb.canSpend(cost);
+	}
+
+	public boolean atbCanSkipIdle() {
+		return innAtbActive() && ready && curAction == null && !resting && paralysed == 0;
+	}
+
+	public float atbNextActionAt(float scheduled, float now) {
+		if (!innAtbActive() || paralysed > 0) return scheduled;
+		if (atbCanSkipIdle()) return Float.POSITIVE_INFINITY;
+		if (atbWaiting != null && curAction == atbWaiting) {
+			if (atbWaitKind == AtbSpend.MELEE) {
+				return atbHasMeleeEnergy() ? Math.max(now, atbMeleeAt) : Float.POSITIVE_INFINITY;
+			}
+			return atbHasMoveEnergy() ? Math.max(now, atbMoveAt) : Float.POSITIVE_INFINITY;
+		}
+		return atbIndependent ? Math.max(now, atbMoveAt) : scheduled;
+	}
+
+	@Override
+	public void fixTime(float decrement) {
+		super.fixTime(decrement);
+		atbMoveAt = Math.max(0, atbMoveAt - decrement);
+		atbMeleeAt = Math.max(0, atbMeleeAt - decrement);
+	}
+
+	private boolean atbHasMoveEnergy() {
+		return visibleEnemies() == 0 || buff(GreaterHaste.class) != null || InnAtb.canSpend(1);
+	}
+
+	private boolean atbHasMeleeEnergy() {
+		return buff(Talent.LethalMomentumTracker.class) != null || InnAtb.canSpend(1);
+	}
+
+	private void deferInnAtb(AtbSpend kind) {
+		atbWaiting = curAction;
+		atbWaitKind = kind;
+		ready = true;
+		next();
+	}
+
+	private void spendInnAtb(float time, AtbSpend kind, boolean constant) {
+		AtbSpend previous = atbSpend;
+		atbSpend = kind;
+		try {
+			if (constant) spendConstant(time);
+			else spend(time);
+		} finally {
+			atbSpend = previous;
+		}
 	}
 
 	public void spendAndNextConstant(float time ) {
@@ -838,6 +931,7 @@ public class Hero extends Char {
 	
 	@Override
 	public boolean act() {
+		atbWaiting = null;
 		
 		//calls to dungeon.observe will also update hero's local FOV.
 		fieldOfView = Dungeon.level.heroFOV;
@@ -864,7 +958,9 @@ public class Hero extends Char {
 			
 			curAction = null;
 			
-			spendAndNext( TICK );
+			busy();
+			spendInnAtb(TICK, AtbSpend.WAIT, false);
+			next();
 			return false;
 		}
 		
@@ -872,7 +968,7 @@ public class Hero extends Char {
 		if (curAction == null) {
 			
 			if (resting) {
-				spendConstant( TIME_TO_REST );
+				spendInnAtb(TIME_TO_REST, AtbSpend.WAIT, true);
 				next();
 			} else {
 				ready();
@@ -1469,6 +1565,11 @@ public class Hero extends Char {
 		}
 
 		if (attackTarget.isAlive() && canAttack(attackTarget) && attackTarget.invisible == 0) {
+			if (innAtbActive() && (Actor.now() < atbMeleeAt || !atbHasMeleeEnergy())) {
+				attackTarget = null;
+				deferInnAtb(AtbSpend.MELEE);
+				return true;
+			}
 
 			if (heroClass != HeroClass.DUELIST
 					&& hasTalent(Talent.AGGRESSIVE_BARRIER)
@@ -1506,7 +1607,9 @@ public class Hero extends Char {
 	}
 	
 	public void rest( boolean fullRest ) {
-		spendAndNextConstant( TIME_TO_REST );
+		busy();
+		spendInnAtb(TIME_TO_REST, AtbSpend.WAIT, true);
+		next();
 		if (hasTalent(Talent.HOLD_FAST)){
 			if (heroClass != HeroClass.WARRIOR || buff(BrokenSeal.WarriorShield.class) != null) {
 				Buff.affect(this, HoldFast.class).pos = pos;
@@ -1817,6 +1920,11 @@ public class Hero extends Char {
 			PixelScene.shake( 1, 1f );
 			return false;
 		}
+
+		if (innAtbActive() && (Actor.now() < atbMoveAt || !atbHasMoveEnergy())) {
+			deferInnAtb(AtbSpend.MOVE);
+			return true;
+		}
 		
 		int step = -1;
 		
@@ -1906,7 +2014,7 @@ public class Hero extends Char {
 			sprite.move(pos, step);
 			move(step);
 
-			spend( delay / speed() );
+			spendInnAtb(delay / speed(), AtbSpend.MOVE, false);
 			
 			search(false);
 
@@ -2369,7 +2477,7 @@ public class Hero extends Char {
 		boolean hit = attack(attackTarget);
 		
 		Invisibility.dispel();
-		spend( attackDelay() );
+		spendInnAtb(attackDelay(), AtbSpend.MELEE, false);
 
 		if (hit && subClass == HeroSubClass.GLADIATOR && wasEnemy){
 			Buff.affect( this, Combo.class ).hit(attackTarget);
@@ -2387,6 +2495,10 @@ public class Hero extends Char {
 	
 	@Override
 	public void onMotionComplete() {
+		if (atbMoving) {
+			atbMoving = false;
+			if (innAtbActive() && atbIndependent && isAlive() && paralysed == 0) ready = true;
+		}
 		GameScene.checkKeyHold();
 	}
 	

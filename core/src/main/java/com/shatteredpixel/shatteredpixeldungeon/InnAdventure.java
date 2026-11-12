@@ -32,11 +32,17 @@ public final class InnAdventure {
     }
 
     private static Profile profile;
+    private static volatile boolean atb;
 
     private InnAdventure() {}
 
     public static void configure(String name, String job, String hairColor, String outfitColor,
                                  String hairStyle, String accessory) {
+        configure(name, job, hairColor, outfitColor, hairStyle, accessory, false);
+    }
+
+    public static void configure(String name, String job, String hairColor, String outfitColor,
+                                 String hairStyle, String accessory, boolean realTime) {
         HeroClass selected = HeroClass.WARRIOR;
         for (HeroClass heroClass : HeroClass.values()) {
             if (heroClass.name().equalsIgnoreCase(job)) {
@@ -45,13 +51,20 @@ public final class InnAdventure {
             }
         }
         profile = new Profile(name, selected, hairColor, outfitColor, hairStyle, accessory);
+        InnAtb.reset();
+        atb = realTime;
     }
 
     public static Profile profile() {
         return profile;
     }
 
+    public static boolean atb() {
+        return atb;
+    }
+
     public static void clear() {
+        atb = false;
         profile = null;
     }
 }

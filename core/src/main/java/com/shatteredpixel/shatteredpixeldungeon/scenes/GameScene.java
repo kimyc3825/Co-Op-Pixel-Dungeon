@@ -27,6 +27,8 @@ import com.shatteredpixel.shatteredpixeldungeon.Challenges;
 import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.Rankings;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
@@ -99,6 +101,7 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.BossHealthBar;
 import com.shatteredpixel.shatteredpixeldungeon.ui.CharHealthIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.GameLog;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
+import com.shatteredpixel.shatteredpixeldungeon.ui.InnAtbMeter;
 import com.shatteredpixel.shatteredpixeldungeon.ui.InventoryPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.LootIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.MenuPane;
@@ -510,6 +513,13 @@ public class GameScene extends PixelScene {
 		}
 		add(boss);
 
+		if (InnAdventure.atb()) {
+			InnAtbMeter meter = new InnAtbMeter();
+			meter.camera = uiCamera;
+			meter.setRect((uiCamera.width - 68) / 2f, Math.max(screentop + 26, boss.bottom() + 2), 68, 14);
+			add(meter);
+		}
+
 		resume = new ResumeIndicator();
 		resume.camera = uiCamera;
 		add( resume );
@@ -839,7 +849,12 @@ public class GameScene extends PixelScene {
 	@Override
 	public synchronized void onPause() {
 		try {
-			if (!Dungeon.hero.ready) waitForActorThread(500, false);
+			if (InnAdventure.atb()) {
+				Actor.updateAtb(0, true);
+				if (Actor.processing()) waitForActorThread(500, false);
+			} else if (!Dungeon.hero.ready) {
+				waitForActorThread(500, false);
+			}
 			Dungeon.saveAll();
 			Badges.saveGlobal();
 			Journal.saveGlobal();
@@ -885,6 +900,14 @@ public class GameScene extends PixelScene {
 
 		super.update();
 
+		boolean atbBlocked = InnAdventure.atb() && interfaceBlockingHero();
+		if (InnAdventure.atb()) {
+			// UI windows hold the world and energy. Clamp delayed frames rather than fast-forwarding.
+			float elapsed = Math.min(0.1f, Game.elapsed);
+			if (!atbBlocked) InnAtb.advance(elapsed);
+			Actor.updateAtb(elapsed, atbBlocked);
+		}
+
 		if (notifyDelay > 0) notifyDelay -= Game.elapsed;
 
 		if (!Emitter.freezeEmitters) {
@@ -893,7 +916,7 @@ public class GameScene extends PixelScene {
 			waterOfs = water.offsetY(); //re-assign to account for auto adjust
 		}
 
-		if (!Actor.processing() && Dungeon.hero.isAlive()) {
+		if (!atbBlocked && !Actor.processing() && Dungeon.hero.isAlive()) {
 			if (actorThread == null || !actorThread.isAlive()) {
 				
 				actorThread = new Thread() {

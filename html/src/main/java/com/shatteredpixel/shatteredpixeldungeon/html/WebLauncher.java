@@ -111,7 +111,8 @@ public class WebLauncher {
 		boolean fromInn = innName != null && !innName.isBlank();
 		if (fromInn) {
 			InnAdventure.configure(innName, WebJS.innProfileField("job"), WebJS.innProfileField("hairColor"),
-					WebJS.innProfileField("outfitColor"), WebJS.innProfileField("hairStyle"), WebJS.innProfileField("accessory"));
+					WebJS.innProfileField("outfitColor"), WebJS.innProfileField("hairStyle"), WebJS.innProfileField("accessory"),
+					"1".equals(WebJS.innProfileField("atb")));
 		}
 		GameThread game = new GameThread(new WebInnGame(fromInn));
 		new SPDWebApplication(game, new WebPreloader(), config);

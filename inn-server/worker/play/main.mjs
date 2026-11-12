@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules, PRISON } from './rules.mjs';
 import { Board, DIRECTIONS, canStep, canStrike, nextToward } from './board.mjs';
-import { OriginalGame } from './original.mjs';
+import { OriginalGame, warmOriginalRuntime } from './original.mjs';
 import { PlaySession } from './session.mjs';
 import { AvatarCatalog, normalizeAppearance } from './avatar-catalog.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
@@ -494,7 +494,7 @@ function updateInn() {
   fields.match.disabled = !ready || busy.has('match');
   fields.drink.disabled = !ready || busy.has('drink');
   fields.guide.disabled = !ready || rulesLocked || profileOpen;
-  if (fields.solo) fields.solo.disabled = fields.guide.disabled;
+  fields.solo.disabled = original.active || !canLaunchOriginal();
   fields['original-launch'].disabled = original.active || !canLaunchOriginal();
   fields['chat-message'].disabled = !ready;
   fields['chat-send'].disabled = !ready || busy.has('chat');
@@ -1320,7 +1320,7 @@ for (const input of chatInputs) {
 }
 fields.match.addEventListener('click', () => void match());
 fields.guide.addEventListener('click', () => { if (play.practice()) focusBoard(); });
-fields.solo?.addEventListener('click', () => { if (play.solo()) focusBoard(); });
+fields.solo.addEventListener('click', () => original.start(true));
 for (const [id, action, returnFocus] of [
   ['drink', () => void run('drink', () => play.drink()), true],
   ['attack', attack, true], ['shoot', toggleAim, true], ['eat', eat, true], ['pause', togglePause, true],
@@ -1640,6 +1640,9 @@ function warmExpeditionAssets() {
   for (const { id: job } of AvatarCatalog.jobs) getAvatar({ job });
   void loadBattleRuntime({ simulate: true }).catch(() => {
     // Dungeon entry checks the current version again and handles an unavailable runtime.
+  });
+  void warmOriginalRuntime().catch(() => {
+    // The original game verifies the current build again at launch.
   });
 }
 

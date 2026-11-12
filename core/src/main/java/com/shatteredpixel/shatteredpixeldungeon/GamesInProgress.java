@@ -55,7 +55,16 @@ public class GamesInProgress {
 	}
 	
 	public static String gameFolder( int slot ){
+		if (isAtbSlot(slot)) return Messages.format("inn-atb-game%d", slot - MAX_SLOTS);
 		return Messages.format(GAME_FOLDER, slot);
+	}
+
+	static boolean isAtbSlot(int slot) {
+		return slot > MAX_SLOTS && slot <= 2 * MAX_SLOTS;
+	}
+
+	public static int firstSlot() {
+		return InnAdventure.atb() ? MAX_SLOTS + 1 : 1;
 	}
 	
 	public static String gameFile( int slot ){
@@ -71,7 +80,7 @@ public class GamesInProgress {
 	}
 	
 	public static int firstEmpty(){
-		for (int i = 1; i <= MAX_SLOTS; i++){
+		for (int i = firstSlot(), end = i + MAX_SLOTS; i < end; i++){
 			if (check(i) == null) return i;
 		}
 		return -1;
@@ -79,7 +88,7 @@ public class GamesInProgress {
 	
 	public static ArrayList<Info> checkAll(){
 		ArrayList<Info> result = new ArrayList<>();
-		for (int i = 1; i <= MAX_SLOTS; i++){
+		for (int i = firstSlot(), end = i + MAX_SLOTS; i < end; i++){
 			Info curr = check(i);
 			if (curr != null) result.add(curr);
 		}

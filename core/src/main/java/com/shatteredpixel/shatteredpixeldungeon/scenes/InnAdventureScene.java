@@ -35,7 +35,7 @@ public final class InnAdventureScene extends PixelScene {
                 return;
             }
         }
-        for (int slot = 1; slot <= GamesInProgress.MAX_SLOTS; slot++) {
+        for (int slot = GamesInProgress.firstSlot(), end = slot + GamesInProgress.MAX_SLOTS; slot < end; slot++) {
             if (!GamesInProgress.gameExists(slot)) {
                 enter(slot, false);
                 return;

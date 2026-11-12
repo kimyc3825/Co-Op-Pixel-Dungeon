@@ -22,11 +22,15 @@
 package com.shatteredpixel.shatteredpixeldungeon.actors;
 
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.Statistics;
 import com.shatteredpixel.shatteredpixeldungeon.actors.blobs.Blob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Buff;
+import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.effects.TargetedCell;
+import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TimekeepersHourglass;
+import com.shatteredpixel.shatteredpixeldungeon.plants.Swiftthistle;
 import com.watabou.noosa.Game;
 import com.watabou.utils.Bundlable;
 import com.watabou.utils.Bundle;
@@ -156,15 +160,39 @@ public abstract class Actor implements Bundlable {
 	private static SparseArray<Actor> ids = new SparseArray<>();
 	private static int nextID = 1;
 
-	private static float now = 0;
+	private static volatile float now = 0;
+	private static final float SECONDS_PER_TURN = 0.8f;
+	private static final float MAX_ATB_LEAD = 1.5f;
+	private static float atbDeadline;
+	private static volatile boolean atbPaused;
+	private static volatile boolean atbActing;
 	
 	public static float now(){
 		return now;
+	}
+
+	private static boolean freezesWorld(Hero hero) {
+		return hero != null && (hero.buff(TimekeepersHourglass.timeFreeze.class) != null
+				|| hero.buff(Swiftthistle.TimeBubble.class) != null);
+	}
+
+	/** Feed the original actor scheduler from rendered game time. */
+	public static void updateAtb(float elapsed, boolean paused) {
+		boolean frozen = !paused && freezesWorld(Dungeon.hero);
+		synchronized (Actor.class) {
+			atbPaused = paused;
+			if (!paused && !frozen) {
+				atbDeadline = Math.min(now + MAX_ATB_LEAD,
+						Math.max(now, atbDeadline) + Math.max(0, elapsed) / SECONDS_PER_TURN);
+			}
+		}
 	}
 	
 	public static synchronized void clear() {
 		
 		now = 0;
+		atbDeadline = 0;
+		atbPaused = false;
 
 		all.clear();
 		chars.clear();
@@ -195,6 +223,7 @@ public abstract class Actor implements Bundlable {
 			Statistics.duration += min;
 		}
 		now -= min;
+		atbDeadline -= min;
 	}
 	
 	public static void init() {
@@ -238,7 +267,7 @@ public abstract class Actor implements Bundlable {
 	}
 
 	public static boolean processing(){
-		return current != null;
+		return current != null || atbActing;
 	}
 
 	public static int curActorPriority() {
@@ -246,6 +275,46 @@ public abstract class Actor implements Bundlable {
 	}
 	
 	public static boolean keepActorThreadAlive = true;
+
+	private static Actor selectTimedActor(Hero hero, boolean frozen) {
+		if (atbPaused) return null;
+		Actor heroActor = hero;
+		boolean idle = hero != null && !frozen && hero.atbCanSkipIdle();
+		float heroAt = Float.POSITIVE_INFINITY;
+		if (hero != null && !idle) {
+			if (frozen) {
+				heroAt = now;
+			} else if (hero.sprite == null || !hero.sprite.isMoving) {
+				heroAt = hero.atbNextActionAt(heroActor.time, now);
+			}
+		}
+
+		synchronized (Actor.class) {
+			if (atbPaused) return null;
+			Actor chosen = null;
+			float earliest = Float.MAX_VALUE;
+			for (Actor actor : all) {
+				if (frozen && actor != hero) continue;
+				float eligibleAt = actor == hero ? heroAt : actor.time;
+				if (!frozen && eligibleAt > atbDeadline) continue;
+				if (eligibleAt < earliest ||
+						eligibleAt == earliest && (chosen == null || actor.actPriority > chosen.actPriority)) {
+					earliest = eligibleAt;
+					chosen = actor;
+				}
+			}
+			if (chosen != null) {
+				now = Math.max(now, earliest);
+				if (chosen == hero) chosen.time = now;
+			} else if (!frozen) {
+				// The real-time clock must still reach actors due after a long delay.
+				now = Math.max(now, atbDeadline);
+			}
+			// Item windows can spend time directly while the hero is awaiting input.
+			if (idle && heroActor.time < now) heroActor.time = now;
+			return chosen;
+		}
+	}
 	
 	public static void process() {
 		
@@ -255,7 +324,12 @@ public abstract class Actor implements Bundlable {
 		do {
 			
 			current = null;
-			if (!interrupted && !Game.switchingScene()) {
+			Hero hero = Dungeon.hero;
+			boolean timed = InnAdventure.atb();
+			boolean frozen = timed && !atbPaused && freezesWorld(hero);
+			if (!interrupted && !Game.switchingScene() && timed) {
+				current = selectTimedActor(hero, frozen);
+			} else if (!interrupted && !Game.switchingScene()) {
 				float earliest = Float.MAX_VALUE;
 
 				synchronized (Actor.class) {
@@ -274,7 +348,7 @@ public abstract class Actor implements Bundlable {
 
 			if  (current != null) {
 
-				now = current.time;
+				if (!timed) now = current.time;
 				Actor acting = current;
 
 				if (acting instanceof Char && ((Char) acting).sprite != null) {
@@ -293,14 +367,27 @@ public abstract class Actor implements Bundlable {
 				
 				interrupted = interrupted || Thread.interrupted();
 				
-				if (interrupted){
+				if (interrupted || timed && atbPaused){
 					doNext = false;
 					current = null;
 				} else {
-					doNext = acting.act();
+					if (timed) atbActing = true;
+					try {
+						doNext = acting.act();
+					} finally {
+						if (timed) atbActing = false;
+					}
+					if (timed && !frozen && acting == hero && hero.atbCanSkipIdle()) {
+						// An idle hero no longer holds up the rest of the actor queue.
+						current = null;
+						doNext = true;
+					}
 					if (doNext && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
 						doNext = false;
 						current = null;
+					} else if (timed && doNext && acting instanceof Mob && hero != null
+							&& hero.atbCanSkipIdle() && hero.fieldOfView != null && !Game.switchingScene()) {
+						hero.checkVisibleMobs();
 					}
 				}
 			} else {

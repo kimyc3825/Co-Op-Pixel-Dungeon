@@ -3,6 +3,37 @@ const MANIFEST = '/play/original/manifest.json';
 const BOOT_TIMEOUT = 120_000;
 const SAVE_TIMEOUT = 8_000;
 
+async function runtimeEntry(signal) {
+  const timeout = AbortSignal.timeout(6000);
+  const response = await fetch(MANIFEST, {
+    cache: 'no-store',
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  });
+  if (!response.ok) throw new Error('Original game manifest unavailable');
+  const { version, entry } = await response.json();
+  if (!/^[0-9a-f]{64}$/.test(version) || entry !== `/play/original/runtime/${version}/index.html`) {
+    throw new Error('Invalid original game manifest');
+  }
+  return entry;
+}
+
+export async function warmOriginalRuntime() {
+  if (navigator.connection?.saveData) return;
+  const entry = await runtimeEntry();
+  const response = await fetch(entry, { priority: 'low', signal: AbortSignal.timeout(6000) });
+  if (!response.ok) return;
+  const build = /data-build-base="(b\/[0-9a-f]{12}\/)"\s*/.exec(await response.text())?.[1];
+  if (!build) return;
+  const directory = entry.slice(0, -'index.html'.length);
+  for (const path of ['boot.js', build + 'spd.js', build + 'scripts/freetype.js']) {
+    const hint = document.createElement('link');
+    hint.rel = 'prefetch';
+    hint.as = 'script';
+    hint.href = directory + path;
+    document.head.append(hint);
+  }
+}
+
 export class OriginalGame {
   constructor({ suspend, resume, canLaunch, getProfile, onChange, tips }) {
     this.suspend = suspend;
@@ -13,6 +44,7 @@ export class OriginalGame {
     this.tips = tips;
     this.shell = document.getElementById('play-shell');
     this.screen = document.getElementById('original-screen');
+    this.title = document.getElementById('original-title');
     this.body = document.getElementById('original-body');
     this.loading = document.getElementById('original-loading');
     this.ember = document.getElementById('original-ember');
@@ -39,10 +71,12 @@ export class OriginalGame {
 
   get active() { return !this.screen.hidden; }
 
-  start() {
+  start(atb = false) {
     if (this.active || !this.canLaunch()) return;
     const { name, appearance: { job, hairColor, outfitColor, hairStyle, accessory } } = this.getProfile();
     this.launchProfile = new URLSearchParams({ name, job, hairColor, outfitColor, hairStyle, accessory });
+    if (atb) this.launchProfile.set('atb', '1');
+    this.title.textContent = atb ? '원본 던전 · ATB' : '원본 1인 저장';
     this.shell.hidden = true;
     this.screen.hidden = false;
     this.onChange(true);
@@ -63,19 +97,11 @@ export class OriginalGame {
         this.fail('여관을 나가지 못했습니다');
         return;
       }
-      const response = await fetch(MANIFEST, {
-        cache: 'no-store',
-        signal: AbortSignal.any([attempt.signal, AbortSignal.timeout(6000)]),
-      });
-      if (!response.ok) throw new Error('Original game manifest unavailable');
-      const { version, entry } = await response.json();
-      if (!/^[0-9a-f]{64}$/.test(version) || entry !== `/play/original/runtime/${version}/index.html`) {
-        throw new Error('Invalid original game manifest');
-      }
+      const entry = await runtimeEntry(attempt.signal);
       if (attempt.signal.aborted) return;
       this.setPhase('loading', '원본 게임 불러오는 중');
       const frame = document.createElement('iframe');
-      frame.title = '원본 녹픽던 게임';
+      frame.title = this.title.textContent;
       frame.allow = 'fullscreen; autoplay';
       frame.referrerPolicy = 'no-referrer';
       frame.tabIndex = -1;

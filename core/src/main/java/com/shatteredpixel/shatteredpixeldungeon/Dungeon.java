@@ -626,6 +626,7 @@ public class Dungeon {
 	public static void saveGame( int save ) {
 		try {
 			Bundle bundle = new Bundle();
+			if (GamesInProgress.isAtbSlot(save)) InnAtb.store(bundle);
 
 			bundle.put( INIT_VER, initialVersion );
 			bundle.put( VERSION, version = Game.versionCode );
@@ -725,6 +726,7 @@ public class Dungeon {
 	public static void loadGame( int save, boolean fullLoad ) throws IOException {
 		
 		Bundle bundle = FileUtils.bundleFromFile( GamesInProgress.gameFile( save ) );
+		if (fullLoad && GamesInProgress.isAtbSlot(save)) InnAtb.restore(bundle);
 
 		initialVersion = bundle.getInt( INIT_VER );
 		version = bundle.getInt( VERSION );

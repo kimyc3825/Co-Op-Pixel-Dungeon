@@ -310,7 +310,7 @@ public final class NativeInnScene extends PixelScene {
         modalOpen = true;
         add(new WndOptions(Icons.STAIRS.get(), "원정", "지역  " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme()),
             current != null && current.queued() ? "동료 찾기 취소" : "동료 찾기 · 2인 원정",
-            "1인 원정", "길잡이 연습", "지역 변경", friendlyFireCaption(),
+            "1인 원정 · 원본 ATB", "길잡이 연습", "지역 변경", friendlyFireCaption(),
             NativeClient.isTestMode() ? "여관 길잡이 숨기기" : "여관 길잡이 부르기", "원본 1인 저장") {
             @Override
             protected boolean enabled(int index) {
@@ -385,7 +385,7 @@ public final class NativeInnScene extends PixelScene {
         destination = null;
         keyboard.reset();
         modalOpen = true;
-        add(new WndOptions("ATB 원정 지역", "1인 원정과 길잡이 연습에 적용됩니다. 2인 원정은 파티장의 선택을 따릅니다.",
+        add(new WndOptions("원정 지역", "길잡이 연습에 적용됩니다. 2인 원정은 파티장의 선택을 따릅니다.",
                 NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS),
                 NativeClient.expeditionThemeTitle(DungeonLayout.PRISON)) {
             @Override

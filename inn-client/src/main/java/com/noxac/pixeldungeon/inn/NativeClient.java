@@ -55,7 +55,7 @@ final class NativeClient {
         innSnapshot = snapshot;
         if (view != View.INN || !snapshot.online() || snapshot.state().match() == null) return;
         String matchId = snapshot.state().match().id();
-        if (!matchId.equals(ignoredMatch)) enterDungeon(matchId, null, false);
+        if (!matchId.equals(ignoredMatch)) enterDungeon(matchId, null);
     }
 
     static LobbySession.Snapshot innSnapshot() { return innSnapshot; }
@@ -113,28 +113,18 @@ final class NativeClient {
 
     static void enterPractice() {
         if (view != View.INN || !profileConfirmed) return;
-        enterLocalDungeon(false);
-    }
-
-    static void enterSoloAtb() {
-        if (!canEnterSolo()) return;
-        enterLocalDungeon(true);
-    }
-
-    private static void enterLocalDungeon(boolean solo) {
         String id = innSnapshot != null && innSnapshot.online()
             ? innSnapshot.state().selfId() : UUID.randomUUID().toString();
         InnApi.Person player = new InnApi.Person(id, nickname, 0, 0, false, appearance);
-        enterDungeon(null, player, solo);
+        enterDungeon(null, player);
     }
 
-    private static void enterDungeon(String matchId, InnApi.Person localPlayer, boolean solo) {
+    private static void enterDungeon(String matchId, InnApi.Person localPlayer) {
         ignoredMatch = matchId;
         view = View.ENTERING;
         leftInn = false;
-        innNotice = solo ? "혼자 던전에 들어가는 중…" :
-            matchId == null ? "길잡이와 던전에 들어가는 중…" : "파티 던전에 들어가는 중…";
-        dungeon = new DungeonSession(api, inn.sessionKey(), matchId, localPlayer, expeditionTheme, !solo && friendlyFire, solo,
+        innNotice = matchId == null ? "길잡이와 던전에 들어가는 중…" : "파티 던전에 들어가는 중…";
+        dungeon = new DungeonSession(api, inn.sessionKey(), matchId, localPlayer, expeditionTheme, friendlyFire,
             (source, frame) -> {
                 if (!shuttingDown) Gdx.app.postRunnable(() -> onDungeon(source, frame));
             });
@@ -201,9 +191,17 @@ final class NativeClient {
     }
 
     static void enterSolo() {
+        enterOriginal(false);
+    }
+
+    static void enterSoloAtb() {
+        enterOriginal(true);
+    }
+
+    private static void enterOriginal(boolean atb) {
         if (!canEnterSolo()) return;
         InnAdventure.configure(nickname, appearance.job(), appearance.hairColor(), appearance.outfitColor(),
-            appearance.hairStyle(), appearance.accessory());
+            appearance.hairStyle(), appearance.accessory(), atb);
         view = View.SOLO;
         leftInn = true;
         inn.enterDungeon();

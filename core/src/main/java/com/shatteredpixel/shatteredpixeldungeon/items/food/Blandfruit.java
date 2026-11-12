@@ -111,11 +111,13 @@ public class Blandfruit extends Food {
 		}
 
 		super.execute(hero, action);
+	}
 
-		if (action.equals( AC_EAT ) && potionAttrib != null){
-
+	@Override
+	protected void eat(Hero hero) {
+		super.eat(hero);
+		if (potionAttrib != null) {
 			potionAttrib.apply(hero);
-
 		}
 	}
 
