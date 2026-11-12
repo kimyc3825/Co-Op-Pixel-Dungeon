@@ -117,6 +117,11 @@ final class NativeInnBoard extends Group {
     }
 
     void showState(InnApi.State next, List<InnApi.Event> history, boolean testMode, InnMotion.Cell predictedSelf) {
+        showState(next, history, testMode, predictedSelf, null);
+    }
+
+    void showState(InnApi.State next, List<InnApi.Event> history, boolean testMode, InnMotion.Cell predictedSelf,
+                   InnApi.Appearance ownAppearance) {
         if (next == null || state == null || !next.selfId().equals(state.selfId()) ||
                 !next.map().equals(map)) {
             for (Figure guest : guests.values()) removeFigure(guest);
@@ -160,6 +165,7 @@ final class NativeInnBoard extends Group {
             Figure guest = guests.computeIfAbsent(person.id(),
                 id -> addFigure(cell, id.hashCode(), person.name(), own, false));
             guest.rename(person.name());
+            guest.appearance(own && ownAppearance != null ? ownAppearance : person.appearance());
             guest.seeking(person.queued());
             guest.motion.moveTo(own && predictedSelf != null ? predictedSelf : cell, state, now);
         }
@@ -348,6 +354,7 @@ final class NativeInnBoard extends Group {
         private final boolean companion;
         private final int npcColumn;
         private final Image sprite;
+        private final String baseSprite;
         private final ColorBlock marker;
         private final ColorBlock nameplate = new ColorBlock(1, 1, 0xe1231817);
         private final RenderedTextBlock label = PixelScene.renderTextBlock(5);
@@ -355,6 +362,8 @@ final class NativeInnBoard extends Group {
         private Image sign;
         private RenderedTextBlock signText;
         private String name;
+        private InnApi.Appearance appearance;
+        private AvatarSprites outfit;
         private int frame = -1;
         private float depth;
 
@@ -362,7 +371,8 @@ final class NativeInnBoard extends Group {
             this.motion = motion;
             this.companion = companion;
             this.npcColumn = npcColumn;
-            sprite = new Image(npcColumn >= 0 ? NPC_SPRITES : own ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE);
+            baseSprite = npcColumn >= 0 ? NPC_SPRITES : own ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
+            sprite = new Image(baseSprite);
             marker = new ColorBlock(1, 1, own ? 0xffefbb77 : companion ? 0xff98d4eb : 0x99231613);
             add(marker);
             add(sprite);
@@ -372,6 +382,22 @@ final class NativeInnBoard extends Group {
             label.setHightlighting(false);
             label.hardlight(own ? GOLD : companion ? BLUE : CREAM);
             rename(name);
+        }
+
+        void appearance(InnApi.Appearance value) {
+            if (value == null || value.equals(appearance)) return;
+            AvatarSprites replacement = AvatarSprites.acquire(value, baseSprite);
+            sprite.texture(replacement.texture());
+            if (outfit != null) outfit.close();
+            outfit = replacement;
+            appearance = value;
+            frame = -1;
+        }
+
+        @Override
+        public void destroy() {
+            super.destroy();
+            if (outfit != null) outfit.close();
         }
 
         void rename(String value) {
@@ -407,7 +433,7 @@ final class NativeInnBoard extends Group {
                 frame = pose.frame();
                 sprite.flipHorizontal = pose.facingLeft();
                 if (npcColumn >= 0) sprite.frame(npcColumn * TILE, frame * TILE, TILE, TILE);
-                else sprite.frame(frame * 12, 0, 12, 15);
+                else sprite.frame(frame * AvatarSprites.FRAME_WIDTH, 0, AvatarSprites.FRAME_WIDTH, AvatarSprites.FRAME_HEIGHT);
             }
             sprite.x = center - sprite.width() / 2;
             sprite.y = depth - sprite.height();

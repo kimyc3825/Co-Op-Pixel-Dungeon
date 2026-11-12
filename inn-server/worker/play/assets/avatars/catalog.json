@@ -1,0 +1,119 @@
+{
+  "frameWidth": 12,
+  "frameHeight": 15,
+  "frames": 18,
+  "jobs": [
+    {
+      "id": "warrior",
+      "label": "전사"
+    },
+    {
+      "id": "mage",
+      "label": "마법사"
+    },
+    {
+      "id": "rogue",
+      "label": "도적"
+    },
+    {
+      "id": "huntress",
+      "label": "사냥꾼"
+    },
+    {
+      "id": "duelist",
+      "label": "결투자"
+    },
+    {
+      "id": "cleric",
+      "label": "성직자"
+    }
+  ],
+  "hairColors": [
+    {
+      "id": "natural",
+      "label": "기본"
+    },
+    {
+      "id": "chestnut",
+      "label": "밤색",
+      "swatch": "#9a623c"
+    },
+    {
+      "id": "black",
+      "label": "흑색",
+      "swatch": "#4a4655"
+    },
+    {
+      "id": "silver",
+      "label": "은빛",
+      "swatch": "#c3c9ce"
+    },
+    {
+      "id": "auburn",
+      "label": "적갈색",
+      "swatch": "#b75841"
+    }
+  ],
+  "outfitColors": [
+    {
+      "id": "natural",
+      "label": "기본"
+    },
+    {
+      "id": "slate",
+      "label": "석판색",
+      "swatch": "#808596"
+    },
+    {
+      "id": "forest",
+      "label": "숲색",
+      "swatch": "#6d9257"
+    },
+    {
+      "id": "wine",
+      "label": "포도주색",
+      "swatch": "#a65a6d"
+    },
+    {
+      "id": "ocean",
+      "label": "바다색",
+      "swatch": "#689db1"
+    }
+  ],
+  "hairStyles": [
+    {
+      "id": "original",
+      "label": "원래 머리"
+    },
+    {
+      "id": "swept",
+      "label": "옆가르마"
+    },
+    {
+      "id": "crop",
+      "label": "짧은 머리"
+    },
+    {
+      "id": "tie",
+      "label": "묶은 머리"
+    }
+  ],
+  "accessories": [
+    {
+      "id": "none",
+      "label": "없음"
+    },
+    {
+      "id": "round-glasses",
+      "label": "둥근 안경"
+    },
+    {
+      "id": "headband",
+      "label": "머리띠"
+    },
+    {
+      "id": "cap",
+      "label": "천 모자"
+    }
+  ]
+}

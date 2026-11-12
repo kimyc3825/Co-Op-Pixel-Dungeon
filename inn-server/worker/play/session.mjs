@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { PRISON, SEWERS } from './rules.mjs';
 import { loadBattleRuntime } from './runtime-loader.mjs';
+import { normalizeAppearance } from './avatar-catalog.mjs';
 
 const INN = '/api/v2/inn/';
 const LINK = '/api/v4/link/';
@@ -94,6 +95,7 @@ export class PlaySession {
     this.inn = this.frame = this.battle = this.key = null;
     this.innSync = this.innTimer = null;
     this.name = '';
+    this.appearance = normalizeAppearance();
     this.theme = SEWERS;
     this.friendlyFire = false;
     this.history = [];
@@ -116,7 +118,7 @@ export class PlaySession {
     this.pageHidden = event => { if (!event.persisted) this.close(); };
   }
 
-  async join(name) {
+  async join(name, appearance = this.appearance) {
     if (this.closed || this.battle || this.innSuspended) return false;
     const value = typeof name === 'string' ? name.trim() : '';
     if (!validName(value)) {
@@ -124,6 +126,7 @@ export class PlaySession {
       return false;
     }
     this.name = value;
+    this.appearance = normalizeAppearance(appearance);
     this.renamePending = true;
     if (!this.key) {
       this.key = newKey();
@@ -134,7 +137,7 @@ export class PlaySession {
     return this.#refreshInn('enter');
   }
 
-  rename(name) { return this.join(name); }
+  rename(name, appearance) { return this.join(name, appearance); }
 
   setTheme(theme) {
     if (this.closed || this.battle || this.innSuspended || this.inn?.queued || this.inn?.match ||
@@ -179,7 +182,7 @@ export class PlaySession {
 
   practice() {
     if (this.closed || this.battle || this.innSuspended || !this.name) return false;
-    const player = this.inn?.people.find(person => person.id === this.inn.selfId) ?? { id: crypto.randomUUID(), name: this.name };
+    const player = { id: this.inn?.selfId ?? crypto.randomUUID(), name: this.name, appearance: this.appearance };
     this.#beginBattle(null, player);
     return true;
   }
@@ -262,11 +265,12 @@ export class PlaySession {
     const positionRevision = this.positionRevision;
     const enter = force === 'enter' || !this.inn || this.renamePending;
     const name = this.name;
+    const appearance = this.appearance;
     const wasOnline = this.online;
     this.innSync = request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST',
-      enter ? { name, after: this.after, dungeonProtocol: 7 } : { after: this.after }).then(fresh => {
+      enter ? { name, appearance, after: this.after, dungeonProtocol: 7 } : { after: this.after }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
-      if (enter && name === this.name) this.renamePending = false;
+      if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;
       if (positionRevision !== this.positionRevision && fresh.selfId === this.inn?.selfId) {
         const self = this.inn.people.find(person => person.id === fresh.selfId);
         if (self) fresh.people = fresh.people.map(person => person.id === self.id ? { ...person, x: self.x, y: self.y } : person);
@@ -530,9 +534,9 @@ class BattleSession {
     if (this.practicePlayer) {
       this.engine = new HostBattle(crypto.randomUUID(), this.practicePlayer, null, now(), newSeed(), this.theme, this.friendlyFire);
     } else if (this.host && this.link?.paired) {
-      const { id, selfId, selfName, partnerId, partnerName } = this.link;
-      this.engine = new HostBattle(id, { id: selfId, name: selfName }, { id: partnerId, name: partnerName },
-        now(), newSeed(), this.theme, this.friendlyFire);
+      const { id, selfId, selfName, selfAppearance, partnerId, partnerName, partnerAppearance } = this.link;
+      this.engine = new HostBattle(id, { id: selfId, name: selfName, appearance: selfAppearance },
+        { id: partnerId, name: partnerName, appearance: partnerAppearance }, now(), newSeed(), this.theme, this.friendlyFire);
     }
   }
 
@@ -592,8 +596,19 @@ class BattleSession {
       this.unacked = this.unacked.filter(command => command.sequence > wire.state.commandAck);
       if (this.relayPending?.seq <= wire.state.commandAck) this.relayPending = null;
       const hostTime = Math.max(wire.state.wallNow, this.frame?.wallTime() ?? 0);
-      this.#publish(wire.state.revision === this.frame?.state.revision ? this.frame.state : wire.state, hostTime);
+      const state = wire.state.revision === this.frame?.state.revision
+        ? this.frame.state : this.#withPartyAppearances(wire.state);
+      this.#publish(state, hostTime);
     }
+  }
+
+  #withPartyAppearances(state) {
+    const { selfId, partnerId, selfAppearance, partnerAppearance } = this.link;
+    if (!selfAppearance && !partnerAppearance) return state;
+    return { ...state, actors: state.actors.map(actor => {
+      const appearance = actor.id === selfId ? selfAppearance : actor.id === partnerId ? partnerAppearance : null;
+      return appearance ? { ...actor, appearance } : actor;
+    }) };
   }
 
   #validSnapshot(state) {

@@ -37,6 +37,7 @@ final class LobbySession implements AutoCloseable {
     private volatile String key = newKey();
     private String pendingDeparture;
     private String name;
+    private InnApi.Appearance appearance;
     private InnApi.State state;
     private long after;
     private long retryAt;
@@ -50,9 +51,10 @@ final class LobbySession implements AutoCloseable {
     private String connectionMessage = "여관에 접속하는 중…";
     private String notice = "";
     private long noticeUntil;
-    LobbySession(InnApi api, String name, Consumer<Snapshot> listener) {
+    LobbySession(InnApi api, String name, InnApi.Appearance appearance, Consumer<Snapshot> listener) {
         this.api = api;
         this.name = name;
+        this.appearance = appearance;
         this.listener = listener;
         network.scheduleWithFixedDelay(this::periodicPoll, 0, 700, TimeUnit.MILLISECONDS);
     }
@@ -113,7 +115,7 @@ final class LobbySession implements AutoCloseable {
                 api.leave(pendingDeparture);
                 pendingDeparture = null;
             }
-            accept(state == null || renamePending ? api.enter(name, key, after) : api.sync(key, after));
+            accept(state == null || renamePending ? api.enter(name, appearance, key, after) : api.sync(key, after));
             renamePending = false;
         } catch (IOException error) {
             pollFailed(error);
@@ -161,9 +163,10 @@ final class LobbySession implements AutoCloseable {
         after = fresh.after();
     }
 
-    void rename(String value) {
+    void updateProfile(String value, InnApi.Appearance avatar) {
         submit(() -> {
             name = value;
+            appearance = avatar;
             renamePending = true;
             poll();
         });

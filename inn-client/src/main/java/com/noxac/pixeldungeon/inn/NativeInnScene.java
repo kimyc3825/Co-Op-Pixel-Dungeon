@@ -10,7 +10,6 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
-import com.shatteredpixel.shatteredpixeldungeon.windows.WndTextInput;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndTitledMessage;
 import com.watabou.input.KeyEvent;
 import com.watabou.input.PointerEvent;
@@ -52,7 +51,7 @@ public final class NativeInnScene extends PixelScene {
     private ScrollPane chat;
     private Group help;
     private FlatButton mode;
-    private FlatButton nick;
+    private FlatButton profile;
     private FlatButton match;
     private FlatButton theme;
     private FlatButton friendlyFire;
@@ -85,7 +84,7 @@ public final class NativeInnScene extends PixelScene {
         presence = label("서버 연결 중", 6, MUTED, EDGE + 31, 21);
         add(presence);
         FlatButton keys = button("F1 도움말", w - 44, 10, 36, 14, false, this::toggleHelp);
-        nick = button("닉네임", w - 112, 10, 64, 14, false, this::rename);
+        profile = button("프로필", w - 112, 10, 64, 14, false, this::editProfile);
         mode = button("여관 길잡이", w - 165, 10, 49, 14, false, this::toggleTestMode);
         keys.enabled(true);
 
@@ -133,6 +132,7 @@ public final class NativeInnScene extends PixelScene {
         add(help);
         help.visible = false;
         showSnapshot();
+        if (!NativeClient.profileConfirmed()) editProfile();
         fadeIn();
     }
 
@@ -178,6 +178,8 @@ public final class NativeInnScene extends PixelScene {
     private void showSnapshot() {
         LobbySession.Snapshot snapshot = NativeClient.innSnapshot();
         boolean testMode = NativeClient.isTestMode();
+        boolean profileConfirmed = NativeClient.profileConfirmed();
+        profile.enabled(!profileConfirmed || NativeClient.canChooseExpeditionTheme());
         theme.enabled(NativeClient.canChooseExpeditionTheme());
         friendlyFire.enabled(NativeClient.canChooseExpeditionTheme());
         if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode) {
@@ -195,10 +197,9 @@ public final class NativeInnScene extends PixelScene {
             if (predictedStep != null && (!online || !predictedStep.awaiting(state))) {
                 predictedStep = null;
             }
-            board.showState(state, history, testMode, predictedStep == null ? null : predictedStep.target());
-            replace(presence, online ? "접속 " + state.people().size() + "명" : "서버 연결 중");
+            board.showState(state, history, testMode, predictedStep == null ? null : predictedStep.target(), NativeClient.appearance());
+            replace(presence, online ? "접속 " + state.people().size() + "명" : profileConfirmed ? "서버 연결 중" : "프로필 설정");
             presence.hardlight(online ? GREEN : MUTED);
-            nick.caption(shortName(NativeClient.nickname()));
             mode.caption(testMode ? "길잡이 켜짐" : "여관 길잡이");
             match.enabled(online);
             match.caption(state != null && state.match() != null ? "던전 연결 중" :
@@ -214,7 +215,8 @@ public final class NativeInnScene extends PixelScene {
 
         String status = NativeClient.innNotice();
         if (status == null || status.isBlank()) {
-            if (snapshot == null) status = "여관에 접속하는 중…";
+            if (!profileConfirmed) status = "프로필을 적용하면 여관에 입장합니다.";
+            else if (snapshot == null) status = "여관에 접속하는 중…";
             else if (!snapshot.notice().isBlank()) status = snapshot.notice();
             else if (!snapshot.online()) status = snapshot.networkStatus();
             else status = snapshot.matchStatus();
@@ -289,29 +291,17 @@ public final class NativeInnScene extends PixelScene {
         if (session != null && displayed != null && displayed.online()) session.joinSeeking(id);
     }
 
-    private void rename() {
-        if (modalOpen) return;
+    private void editProfile() {
+        boolean required = !NativeClient.profileConfirmed();
+        if (modalOpen || !required && !NativeClient.canChooseExpeditionTheme()) return;
         closeComposer();
         destination = null;
         keyboard.reset();
         modalOpen = true;
-        add(new WndTextInput("닉네임", null, NativeClient.nickname(), 20, false, "변경", "취소") {
-            @Override
-            public void onSelect(boolean accepted, String value) {
-                if (accepted) NativeClient.rename(value.strip());
-            }
-
-            @Override
-            public void onBackPressed() {
-                hide();
-            }
-
-            @Override
-            public void destroy() {
-                modalOpen = false;
-                super.destroy();
-            }
-        });
+        add(new AvatarProfileWindow(NativeClient.nickname(), NativeClient.appearance(), required, NativeClient::saveProfile, () -> {
+            modalOpen = false;
+            hasDisplayed = false;
+        }));
     }
 
     private static String themeCaption() {
@@ -440,12 +430,6 @@ public final class NativeInnScene extends PixelScene {
         add(button);
         button.setRect(x, y, w, h);
         return button;
-    }
-
-    private static String shortName(String name) {
-        if (name == null || name.isBlank()) return "닉네임";
-        int length = name.codePointCount(0, name.length());
-        return length <= 11 ? name : name.substring(0, name.offsetByCodePoints(0, 10)) + "…";
     }
 
     private static ColorBlock block(float x, float y, float w, float h, int color) {

@@ -251,8 +251,10 @@ final class DungeonSession implements AutoCloseable {
         if (!paired) {
             host = "host".equals(next.role());
             if (host) {
-                battle = new HostBattle(next.id(), person(next.selfId(), next.selfName()),
-                    person(next.partnerId(), next.partnerName()), now(), seed(), theme, friendlyFire);
+                battle = new HostBattle(next.id(),
+                    new InnApi.Person(next.selfId(), next.selfName(), 0, 0, false, next.selfAppearance()),
+                    new InnApi.Person(next.partnerId(), next.partnerName(), 0, 0, false, next.partnerAppearance()),
+                    now(), seed(), theme, friendlyFire);
             }
             openPeer();
         }
@@ -400,8 +402,18 @@ final class DungeonSession implements AutoCloseable {
         long receipt = System.nanoTime();
         long hostTime = next.wallNow();
         if (frame != null) hostTime = Math.max(hostTime, frame.wallTime());
-        InnApi.DungeonState changed = frame != null && next.revision() == frame.state().revision() ? frame.state() : next;
+        InnApi.DungeonState changed = frame != null && next.revision() == frame.state().revision()
+            ? frame.state() : withPartyAppearances(next);
         publish(changed, hostTime, receipt, "");
+    }
+
+    private InnApi.DungeonState withPartyAppearances(InnApi.DungeonState state) {
+        if (link.selfAppearance() == null && link.partnerAppearance() == null) return state;
+        return state.withActors(state.actors().stream().map(actor -> {
+            if (actor.id().equals(link.selfId())) return actor.withAppearance(link.selfAppearance());
+            if (actor.id().equals(link.partnerId())) return actor.withAppearance(link.partnerAppearance());
+            return actor;
+        }).toList());
     }
 
     private void finish(String notice) {
@@ -435,10 +447,6 @@ final class DungeonSession implements AutoCloseable {
 
     private String selfId() {
         return practicePlayer == null ? link.selfId() : practicePlayer.id();
-    }
-
-    private static InnApi.Person person(String id, String name) {
-        return new InnApi.Person(id, name, 0, 0, false);
     }
 
     private static long seed() {

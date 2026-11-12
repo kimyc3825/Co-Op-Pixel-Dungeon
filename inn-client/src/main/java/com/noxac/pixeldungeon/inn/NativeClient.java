@@ -23,6 +23,8 @@ final class NativeClient {
     private static String innNotice = "";
     private static long noticeUntil;
     private static String nickname;
+    private static InnApi.Appearance appearance;
+    private static boolean profileConfirmed;
     private static String expeditionTheme = DungeonLayout.SEWERS;
     private static boolean friendlyFire;
     private static boolean testMode;
@@ -33,10 +35,17 @@ final class NativeClient {
 
     static void start(InnApi connection) {
         api = connection;
-        nickname = SETTINGS.get("nickname", "");
+        AvatarProfile.Saved saved = AvatarProfile.restore(SETTINGS.get("inn-avatar-profile", ""));
+        profileConfirmed = saved != null;
+        nickname = saved == null ? SETTINGS.get("nickname", "") : saved.name();
         if (!LobbySession.validName(nickname)) nickname = LobbySession.guestName();
+        appearance = saved == null ? AvatarProfile.normalize(null) : saved.appearance();
         expeditionTheme = DungeonLayout.themeOrDefault(SETTINGS.get("expeditionTheme", DungeonLayout.SEWERS));
-        inn = new LobbySession(api, nickname, snapshot -> {
+        if (profileConfirmed) connectInn();
+    }
+
+    private static void connectInn() {
+        inn = new LobbySession(api, nickname, appearance, snapshot -> {
             if (!shuttingDown) Gdx.app.postRunnable(() -> onInn(snapshot));
         });
     }
@@ -51,6 +60,8 @@ final class NativeClient {
     static LobbySession.Snapshot innSnapshot() { return innSnapshot; }
     static LobbySession inn() { return inn; }
     static String nickname() { return nickname; }
+    static InnApi.Appearance appearance() { return appearance; }
+    static boolean profileConfirmed() { return profileConfirmed; }
     static boolean isTestMode() { return testMode; }
     static void setTestMode(boolean enabled) { testMode = enabled; }
 
@@ -77,13 +88,22 @@ final class NativeClient {
     }
 
     static void rename(String value) {
+        saveProfile(value, appearance);
+    }
+
+    static void saveProfile(String name, InnApi.Appearance draft) {
+        if (!canChooseExpeditionTheme()) return;
+        String value = name == null ? "" : name.strip();
         if (!LobbySession.validName(value)) {
             notice("닉네임을 1~20자로 입력하세요.");
             return;
         }
         nickname = value;
-        SETTINGS.put("nickname", value);
-        inn.rename(value);
+        appearance = AvatarProfile.normalize(draft);
+        SETTINGS.put("inn-avatar-profile", AvatarProfile.save(nickname, appearance));
+        profileConfirmed = true;
+        if (inn == null) connectInn();
+        else inn.updateProfile(nickname, appearance);
     }
 
     static String innNotice() {
@@ -91,10 +111,10 @@ final class NativeClient {
     }
 
     static void enterPractice() {
-        if (view != View.INN) return;
-        InnApi.Person player = innSnapshot != null && innSnapshot.online()
-            ? innSnapshot.state().self()
-            : new InnApi.Person(UUID.randomUUID().toString(), nickname, 0, 0, false);
+        if (view != View.INN || !profileConfirmed) return;
+        String id = innSnapshot != null && innSnapshot.online()
+            ? innSnapshot.state().selfId() : UUID.randomUUID().toString();
+        InnApi.Person player = new InnApi.Person(id, nickname, 0, 0, false, appearance);
         enterDungeon(null, player);
     }
 
@@ -166,7 +186,7 @@ final class NativeClient {
     }
 
     static void enterSolo() {
-        if (view != View.INN) return;
+        if (view != View.INN || !profileConfirmed) return;
         view = View.SOLO;
         leftInn = true;
         inn.enterDungeon();

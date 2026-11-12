@@ -23,7 +23,7 @@
       </div>
     </header>
 
-    <div class="layout">
+    <div class="layout" data-profile-entry="true">
       <section class="stage" aria-labelledby="board-title">
         <header class="stage-heading"><h2 id="board-title">여관 홀</h2><span id="board-status">모험가 대기 중</span></header>
         <div class="canvas-wrap">
@@ -81,14 +81,39 @@
 
       <aside class="sidebar" aria-label="게임 조작과 상태">
         <div id="inn-panel">
-          <section class="card profile-card" aria-labelledby="name-heading">
+          <section class="card profile-card" aria-labelledby="name-heading" data-editing="true">
             <h2 id="name-heading">여관 입장</h2>
-            <form id="name-form" class="inline-form">
-              <label class="sr-only" for="player-name">닉네임</label>
-              <input id="player-name" name="name" maxlength="40" placeholder="닉네임" autocomplete="nickname" required>
-              <button class="primary" id="name-button" type="submit">입장</button>
+            <canvas id="profile-preview" class="profile-preview" width="20" height="20" role="img" aria-label="아바타 미리보기"></canvas>
+            <form id="name-form" class="profile-form">
+              <label class="profile-field profile-name-field">닉네임
+                <input id="player-name" name="name" maxlength="40" placeholder="닉네임" autocomplete="nickname" required>
+              </label>
+              <label class="profile-field profile-job-field">직업
+                <select id="profile-job" name="job"></select>
+              </label>
+              <label class="profile-field">머리 모양
+                <select id="profile-hair-style" name="hairStyle"></select>
+              </label>
+              <label class="profile-field">머리 색
+                <span class="profile-palette"><span id="profile-hair-swatch" class="profile-swatch" aria-hidden="true"></span><select id="profile-hair-color" name="hairColor"></select></span>
+              </label>
+              <label class="profile-field">장신구
+                <select id="profile-accessory" name="accessory"></select>
+              </label>
+              <label class="profile-field">옷 색
+                <span class="profile-palette"><span id="profile-outfit-swatch" class="profile-swatch" aria-hidden="true"></span><select id="profile-outfit-color" name="outfitColor"></select></span>
+              </label>
+              <div class="profile-actions">
+                <button id="profile-cancel" type="button" hidden>취소</button>
+                <button class="primary" id="name-button" type="submit">여관에 입장</button>
+              </div>
+              <p id="profile-notice" class="profile-notice" role="status" hidden></p>
             </form>
-            <button id="drink" type="button" disabled>술 한 잔</button>
+            <div id="profile-summary" class="profile-summary" hidden>
+              <div><strong id="profile-name"></strong><p id="profile-job-label"></p></div>
+              <button id="profile-change" type="button" aria-controls="name-form" aria-expanded="false">프로필 변경</button>
+            </div>
+            <button id="drink" type="button" disabled hidden>술 한 잔</button>
           </section>
 
           <section class="card" aria-labelledby="expedition-heading">
@@ -108,7 +133,7 @@
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 녹픽던 시작</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.9.0" target="_blank" rel="noopener">Windows 배포판 0.9.0</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.10.0" target="_blank" rel="noopener">Windows 배포판 0.10.0</a>
             </div>
           </section>
 

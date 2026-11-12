@@ -40,6 +40,7 @@ final class HostBattle {
         final String id;
         final String name;
         final Kind kind;
+        final InnApi.Appearance appearance;
         final int maxHp;
         int x;
         int y;
@@ -56,10 +57,12 @@ final class HostBattle {
         long energyAt;
         int rations;
 
-        Actor(String id, String name, Kind kind, DungeonLayout.Cell start, int hp, long now) {
+        Actor(String id, String name, Kind kind, DungeonLayout.Cell start, int hp, long now,
+              InnApi.Appearance appearance) {
             this.id = id;
             this.name = name;
             this.kind = kind;
+            this.appearance = appearance;
             x = start.x();
             y = start.y();
             this.hp = maxHp = hp;
@@ -77,7 +80,8 @@ final class HostBattle {
         InnApi.Combatant snapshot(long now) {
             double energy = energyUnitsAt(now) / (double) BattleRules.REGEN_POINT_MS;
             return new InnApi.Combatant(id, name, kind.wireName, x, y, hp, maxHp,
-                actionSeq, lastAction, targetId, actionAt, energy, energyAt, moveReadyAt, attackReadyAt, rations);
+                actionSeq, lastAction, targetId, actionAt, energy, energyAt, moveReadyAt, attackReadyAt, rations,
+                appearance);
         }
     }
 
@@ -150,11 +154,12 @@ final class HostBattle {
         this.wallObservedAt = now;
         String ratName = DungeonLayout.PRISON.equals(layout.theme()) ? "감옥 쥐" : "하수도 쥐";
         actors = List.of(
-            new Actor(host.id(), host.name(), Kind.PLAYER, layout.host(), 24, now),
-            guestOrNull == null ? new Actor("guide", "길잡이", Kind.GUIDE, layout.partner(), 24, now)
-                : new Actor(guestOrNull.id(), guestOrNull.name(), Kind.PLAYER, layout.partner(), 24, now),
-            new Actor("rat-1", ratName, Kind.ENEMY, layout.enemy1(), 12, now),
-            new Actor("rat-2", ratName, Kind.ENEMY, layout.enemy2(), 12, now)
+            new Actor(host.id(), host.name(), Kind.PLAYER, layout.host(), 24, now, host.appearance()),
+            guestOrNull == null ? new Actor("guide", "길잡이", Kind.GUIDE, layout.partner(), 24, now, null)
+                : new Actor(guestOrNull.id(), guestOrNull.name(), Kind.PLAYER, layout.partner(), 24, now,
+                    guestOrNull.appearance()),
+            new Actor("rat-1", ratName, Kind.ENEMY, layout.enemy1(), 12, now, null),
+            new Actor("rat-2", ratName, Kind.ENEMY, layout.enemy2(), 12, now, null)
         );
     }
 

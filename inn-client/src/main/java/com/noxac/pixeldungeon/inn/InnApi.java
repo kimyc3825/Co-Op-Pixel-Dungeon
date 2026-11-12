@@ -16,14 +16,41 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
 final class InnApi {
-    record Person(String id, String name, int x, int y, boolean queued) {}
+    record Appearance(String job, String hairColor, String outfitColor, String hairStyle, String accessory) {}
+    record Person(String id, String name, int x, int y, boolean queued, Appearance appearance) {
+        Person {
+            appearance = AvatarProfile.normalize(appearance);
+        }
+
+        Person(String id, String name, int x, int y, boolean queued) {
+            this(id, name, x, y, queued, null);
+        }
+    }
     record Npc(String id, String name, String role, int x, int y, String dialogue) {}
     record Event(long id, String playerId, String name, String kind, String text, long time) {}
     record Match(String id, String role, String partnerName) {}
     record Action(String type, int dx, int dy, String target) {}
     record Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
                      int actionSeq, String lastAction, String targetId, long actionAt,
-                     double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations) {}
+                     double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations,
+                     Appearance appearance) {
+        Combatant {
+            appearance = AvatarProfile.normalize(appearance);
+        }
+
+        Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
+                  int actionSeq, String lastAction, String targetId, long actionAt,
+                  double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations) {
+            this(id, name, kind, x, y, hp, maxHp, actionSeq, lastAction, targetId, actionAt,
+                energy, energyAt, moveReadyAt, attackReadyAt, rations, null);
+        }
+
+        Combatant withAppearance(Appearance value) {
+            return value == null || value.equals(appearance) ? this : new Combatant(id, name, kind, x, y, hp,
+                maxHp, actionSeq, lastAction, targetId, actionAt, energy, energyAt, moveReadyAt, attackReadyAt,
+                rations, value);
+        }
+    }
     record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
     record PartyChat(long id, String actorId, String name, String text) {}
     record BattleEvent(long id, String action, String result, String actorId, String targetId,
@@ -64,11 +91,22 @@ final class InnApi {
             this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
                 drops, commandAck, inCombat, DungeonLayout.SEWERS);
         }
+
+        DungeonState withActors(List<Combatant> updated) {
+            return actors.equals(updated) ? this : new DungeonState(id, selfId, now, map, updated, queued, status,
+                waitingForPartner, revision, drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt,
+                messages, friendlyFire, attackEvents, projectiles);
+        }
     }
     record Signal(String type, String sdp) {}
     record LinkState(String id, String role, String selfId, String partnerId, String selfName,
                      String partnerName, boolean paired, boolean closed, Signal signal,
-                     String message, long messageSeq) {}
+                     String message, long messageSeq, Appearance selfAppearance, Appearance partnerAppearance) {
+        LinkState {
+            if (selfAppearance != null) selfAppearance = AvatarProfile.normalize(selfAppearance);
+            if (partnerAppearance != null) partnerAppearance = AvatarProfile.normalize(partnerAppearance);
+        }
+    }
 
     record State(String selfId, List<Person> people, List<String> map, List<Event> events,
                  long after, long now, boolean queued, Match match, List<Npc> npcs) {
@@ -86,7 +124,8 @@ final class InnApi {
 
         State withSelfPosition(int x, int y) {
             List<Person> updated = people.stream()
-                .map(person -> person.id().equals(selfId) ? new Person(selfId, person.name(), x, y, person.queued()) : person)
+                .map(person -> person.id().equals(selfId)
+                    ? new Person(selfId, person.name(), x, y, person.queued(), person.appearance()) : person)
                 .toList();
             return new State(selfId, updated, map, events, after, now, queued, match, npcs);
         }
@@ -144,6 +183,11 @@ final class InnApi {
 
     State enter(String name, String key, long after) throws IOException, InterruptedException {
         return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 7)));
+    }
+
+    State enter(String name, Appearance appearance, String key, long after) throws IOException, InterruptedException {
+        return decode(send("PUT", API + "session", key,
+            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 7)));
     }
 
     State sync(String key, long after) throws IOException, InterruptedException {

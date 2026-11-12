@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { dungeonLayout } from './layout.mjs';
 import { actionGate, BattleRules, offensive, PRISON, SEWERS } from './rules.mjs';
+import { normalizeAppearance } from './avatar-catalog.mjs';
 
 export { BattleRules };
 
@@ -75,13 +76,14 @@ function normalize(action) {
   return null;
 }
 
-function createActor(id, name, kind, { x, y }, hp, now) {
+function createActor(id, name, kind, { x, y }, hp, now, appearance) {
   return {
     id, name, kind, x, y, hp, maxHp: hp, actionSeq: 0, lastAction: null, targetId: null, actionAt: 0,
     energyUnits: ENERGY_CAP_UNITS, energyAt: now,
     moveReadyAt: kind === 'enemy' ? now + RAT_MOVE_COOLDOWN_MS : now,
     attackReadyAt: kind === 'enemy' ? now + ATTACK_COOLDOWN_MS : now,
     rations: kind === 'player' ? 1 : 0, queued: null, commandAck: 0,
+    appearance: kind === 'player' ? normalizeAppearance(appearance) : undefined,
   };
 }
 
@@ -91,10 +93,11 @@ function energyUnitsAt(actor, now) {
 
 function actorSnapshot(actor, now) {
   const { id, name, kind, x, y, hp, maxHp, actionSeq, lastAction, targetId, actionAt,
-    energyAt, moveReadyAt, attackReadyAt, rations } = actor;
+    energyAt, moveReadyAt, attackReadyAt, rations, appearance } = actor;
   return {
     id, name, kind, x, y, hp, maxHp, actionSeq, lastAction, targetId, actionAt,
     energy: energyUnitsAt(actor, now) / REGEN_POINT_MS, energyAt, moveReadyAt, attackReadyAt, rations,
+    ...(appearance && { appearance }),
   };
 }
 
@@ -168,8 +171,8 @@ export class HostBattle {
     const ratName = this.#layout.theme === PRISON ? '감옥 쥐' : '하수도 쥐';
     this.#battleAt = this.#gameObservedAt = this.#wallObservedAt = Math.trunc(now);
     this.#actors = [
-      createActor(host.id, host.name, 'player', entrance, 24, this.#battleAt),
-      guest ? createActor(guest.id, guest.name, 'player', partner, 24, this.#battleAt)
+      createActor(host.id, host.name, 'player', entrance, 24, this.#battleAt, host.appearance),
+      guest ? createActor(guest.id, guest.name, 'player', partner, 24, this.#battleAt, guest.appearance)
         : createActor('guide', '길잡이', 'guide', partner, 24, this.#battleAt),
       createActor('rat-1', ratName, 'enemy', enemy1, 12, this.#battleAt),
       createActor('rat-2', ratName, 'enemy', enemy2, 12, this.#battleAt),

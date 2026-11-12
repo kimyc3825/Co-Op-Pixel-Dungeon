@@ -3,12 +3,16 @@ import { BattleRules, PRISON } from './rules.mjs';
 import { Board, canStep, canStrike, nextToward } from './board.mjs';
 import { OriginalGame } from './original.mjs';
 import { PlaySession } from './session.mjs';
+import { AvatarCatalog, normalizeAppearance } from './avatar-catalog.mjs';
+import { drawAvatar, getAvatar } from './avatar.mjs';
 
 const byId = (id) => document.getElementById(id);
 const board = new Board(byId('board'));
 const fields = Object.fromEntries([
   'scene-title', 'connection', 'board-title', 'board-status', 'help', 'help-toggle', 'pause', 'battle-overlay', 'notice',
   'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'friendly-fire', 'match', 'guide', 'drink', 'seekers',
+  'profile-preview', 'profile-summary', 'profile-name', 'profile-job-label', 'profile-change', 'profile-cancel', 'profile-notice',
+  'profile-job', 'profile-hair-style', 'profile-hair-color', 'profile-hair-swatch', 'profile-outfit-color', 'profile-outfit-swatch', 'profile-accessory',
   'chat-form', 'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
   'touch-controls', 'touch-battle', 'touch-attack', 'touch-shoot', 'touch-eat', 'backpack', 'backpack-hint', 'attack-log', 'aim-hint',
   'dungeon-chat-log', 'dungeon-chat-form', 'dungeon-chat-message', 'dungeon-chat-send',
@@ -44,6 +48,23 @@ const LOADING_TIPS = [
 const held = new Map();
 const busy = new Set();
 const party = new Map();
+const profileFields = [
+  { input: fields['profile-job'], field: 'job', options: AvatarCatalog.jobs },
+  { input: fields['profile-hair-style'], field: 'hairStyle', options: AvatarCatalog.hairStyles },
+  { input: fields['profile-hair-color'], field: 'hairColor', options: AvatarCatalog.hairColors, swatch: fields['profile-hair-swatch'] },
+  { input: fields['profile-outfit-color'], field: 'outfitColor', options: AvatarCatalog.outfitColors, swatch: fields['profile-outfit-swatch'] },
+  { input: fields['profile-accessory'], field: 'accessory', options: AvatarCatalog.accessories },
+];
+const profileCard = fields['name-form'].closest('.profile-card');
+const layout = profileCard.closest('.layout');
+const preview = fields['profile-preview'];
+const previewContext = preview.getContext('2d');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let profileOpen = true;
+let savedProfile = loadProfile();
+let previewAvatar;
+let lastPreviewAvatar;
+let lastPreviewFrame = -1;
 const itemNames = { ration: '식량', gold: '금화' };
 const backpack = ['ration', 'gold', null, null, null, null];
 const slotViews = [];
@@ -195,14 +216,88 @@ async function run(name, task) {
   }
 }
 
-function saveName(name) {
-  try { localStorage.setItem('noxac.playerName', name); }
+function saveProfile(profile) {
+  savedProfile = profile;
+  try { localStorage.setItem('noxac.playerProfile', JSON.stringify(profile)); }
   catch { /* The game can run without persistent storage. */ }
 }
 
-function loadName() {
-  try { return localStorage.getItem('noxac.playerName') ?? ''; }
-  catch { return ''; }
+function loadProfile() {
+  let name = '';
+  let appearance;
+  try {
+    name = localStorage.getItem('noxac.playerName') ?? '';
+    const profile = JSON.parse(localStorage.getItem('noxac.playerProfile'));
+    if (typeof profile?.name === 'string') name = profile.name;
+    appearance = profile?.appearance;
+  } catch { /* Retain defaults if preferences are unavailable. */ }
+  return { name, appearance: normalizeAppearance(appearance) };
+}
+
+function readAppearance() {
+  return normalizeAppearance(Object.fromEntries(profileFields.map(({ input, field }) => [field, input.value])));
+}
+
+function ownProfile(state = play.inn) {
+  const person = state?.people.find(({ id }) => id === state.selfId);
+  return person ? { name: person.name, appearance: normalizeAppearance(person.appearance) } : savedProfile;
+}
+
+function setPreview(appearance) {
+  previewAvatar = getAvatar(appearance);
+  const job = AvatarCatalog.jobs.find(({ id }) => id === appearance.job);
+  preview.setAttribute('aria-label', `${job.label} 아바타 미리보기`);
+  for (const { field, options, swatch } of profileFields) {
+    if (!swatch) continue;
+    const color = options.find(({ id }) => id === appearance[field]).swatch;
+    if (color) swatch.style.setProperty('--swatch', color);
+    else swatch.style.removeProperty('--swatch');
+  }
+}
+
+function profileNotice(message = '') {
+  text(fields['profile-notice'], message);
+  fields['profile-notice'].hidden = !message;
+}
+
+function writeProfile(profile) {
+  fields['player-name'].value = profile.name;
+  for (const { input, field } of profileFields) input.value = profile.appearance[field];
+  setPreview(profile.appearance);
+  profileNotice();
+}
+
+function updateProfile(state, online, locked) {
+  profileCard.dataset.editing = String(profileOpen);
+  layout.dataset.profileEntry = String(!online && profileOpen);
+  fields['name-form'].hidden = !profileOpen;
+  fields['profile-summary'].hidden = profileOpen;
+  fields['profile-cancel'].hidden = !online;
+  fields.drink.hidden = !online || profileOpen;
+  fields['profile-change'].disabled = !online || locked;
+  fields['profile-cancel'].disabled = busy.has('name');
+  fields['name-button'].disabled = locked;
+  fields['player-name'].disabled = locked;
+  for (const { input } of profileFields) input.disabled = locked;
+  text(fields['name-heading'], online ? profileOpen ? '프로필 변경' : '모험가' : '여관 입장');
+  text(fields['name-button'], online ? '저장' : '여관에 입장');
+  if (profileOpen) return;
+  const profile = ownProfile(state);
+  text(fields['profile-name'], profile.name);
+  text(fields['profile-job-label'], AvatarCatalog.jobs.find(({ id }) => id === profile.appearance.job).label);
+  setPreview(profile.appearance);
+}
+
+function drawProfile(now) {
+  const frame = !reduceMotion.matches && Math.floor(now / 620) % 4 === 3 ? 1 : 0;
+  if (lastPreviewAvatar === previewAvatar && lastPreviewFrame === frame && previewAvatar?.sheet) return;
+  previewContext.clearRect(0, 0, preview.width, preview.height);
+  previewContext.fillStyle = '#191b16a8';
+  previewContext.fillRect(5, 16, 10, 2);
+  if (drawAvatar(previewContext, previewAvatar, frame, 4, 2, 12, 15)) {
+    lastPreviewAvatar = previewAvatar;
+    lastPreviewFrame = frame;
+  }
 }
 
 function focusBoard() { board.canvas.focus({ preventScroll: true }); }
@@ -276,12 +371,9 @@ function updateInn() {
   else if (play.name && connectionNotice) status('재접속 중', 'offline');
   else status('입장 대기', 'idle');
   text(fields['board-status'], online ? `모험가 ${state.people.length}명` : '모험가 대기 중');
-  text(fields['name-heading'], online ? '모험가' : '여관 입장');
-  text(fields['name-button'], online ? '이름 변경' : '입장');
-  fields['name-button'].disabled = busy.has('name') || entering || returning;
-  fields['player-name'].disabled = entering || returning;
   const queued = Boolean(state?.queued);
   const rulesLocked = queued || entering || returning || busy.has('match');
+  updateProfile(state, online, rulesLocked || busy.has('name'));
   fields['dungeon-theme'].value = play.theme;
   fields['dungeon-theme'].disabled = rulesLocked;
   fields['friendly-fire'].checked = play.friendlyFire === true;
@@ -847,7 +939,24 @@ function toggleHelp() {
   fields['help-toggle'].setAttribute('aria-expanded', String(!fields.help.hidden));
 }
 
-fields['player-name'].value = loadName();
+for (const { input, options } of profileFields) {
+  input.replaceChildren(...options.map(({ id, label }) => new Option(label, id)));
+  input.addEventListener('change', () => setPreview(readAppearance()));
+}
+writeProfile(savedProfile);
+fields['profile-change'].addEventListener('click', () => {
+  clearMovement();
+  writeProfile(ownProfile());
+  profileOpen = true;
+  updateInn();
+  fields['player-name'].focus();
+});
+fields['profile-cancel'].addEventListener('click', () => {
+  profileOpen = false;
+  updateInn();
+  if (fields['profile-change'].disabled) focusBoard();
+  else fields['profile-change'].focus();
+});
 fields['dungeon-theme'].addEventListener('change', () => {
   play.setTheme(fields['dungeon-theme'].value);
   updateInn();
@@ -858,12 +967,18 @@ fields['friendly-fire'].addEventListener('change', () => {
 });
 fields['name-form'].addEventListener('submit', (event) => {
   event.preventDefault();
+  if (fields['name-button'].disabled) return;
   const name = fields['player-name'].value.trim();
+  const appearance = readAppearance();
+  profileNotice();
   void run('name', async () => {
-    if (await (play.online ? play.rename(name) : play.join(name))) {
-      saveName(name);
-      focusBoard();
+    if (!await (play.online ? play.rename(name, appearance) : play.join(name, appearance))) {
+      profileNotice(connectionNotice || '프로필을 저장하지 못했습니다. 다시 시도해 주세요.');
+      return;
     }
+    saveProfile(ownProfile());
+    profileOpen = false;
+    focusBoard();
   });
 });
 fields['chat-form'].addEventListener('submit', (event) => {
@@ -1019,6 +1134,7 @@ function render(now) {
   if (!original.active) {
     movement(now);
     board.draw(visualTime(now), selected, destination, aimCell, play.frame?.serverTime());
+    if (!play.frame) drawProfile(now);
     updateCombatUi();
     updateNotice(now);
   }

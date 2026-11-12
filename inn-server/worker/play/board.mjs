@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BattleRules, PRISON } from './rules.mjs';
 import { runtimeImage } from './runtime-loader.mjs';
+import { drawAvatar, getAvatar } from './avatar.mjs';
 
 const TILE = 32;
 const ATLAS_TILE = 16;
@@ -260,11 +261,15 @@ export class Board {
     const present = new Set(actors.map((actor) => actor.id));
     for (const id of this.figures.keys()) if (!present.has(id)) this.figures.delete(id);
     for (const actor of actors) {
-      const figure = this.figures.get(actor.id);
+      let figure = this.figures.get(actor.id);
       const interval = dungeon ? (actor.kind === 'enemy' ? 270 : 180) : 145;
       if (figure) figure.accept(actor, actors.find((other) => other.id === actor.targetId), now, interval,
         Array.isArray(snapshot.attackEvents));
-      else this.figures.set(actor.id, new Figure(actor, now));
+      else {
+        figure = new Figure(actor, now);
+        this.figures.set(actor.id, figure);
+      }
+      if (!dungeon || actor.kind === 'player') figure.avatar = getAvatar(actor.appearance);
     }
     if (sceneChanged) this.updateCamera(now);
     if (!dungeon) {
@@ -563,10 +568,9 @@ export class Board {
     paint(context, '#201b176e', x - 8, y - 3, 16, 5);
     context.translate(x + lunge * (figure.attackX ?? 0), y + lunge * (figure.attackY ?? 0));
     if (figure.left) context.scale(-1, 1);
-    if (image.naturalWidth) {
-      context.drawImage(image, size * frame, 0, size, 15, -size, -30, size * 2, 30);
-    } else {
-      paint(context, own ? '#d8ad65' : '#95bfb4', -6, -20, 12, 20);
+    if (!drawAvatar(context, figure.avatar, frame, -size, -30, size * 2, 30)) {
+      if (image.naturalWidth) context.drawImage(image, size * frame, 0, size, 15, -size, -30, size * 2, 30);
+      else paint(context, own ? '#d8ad65' : '#95bfb4', -6, -20, 12, 20);
     }
     context.restore();
   }

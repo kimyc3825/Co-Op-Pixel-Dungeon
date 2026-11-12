@@ -20,6 +20,7 @@ final class DungeonActorView extends Group {
     private static final float FOOT_OFFSET = 0.89f;
 
     private final MovieClip sprite;
+    private final AvatarSprites outfit;
     private final MovieClip.Animation idle;
     private final MovieClip.Animation walk;
     private final MovieClip.Animation attack;
@@ -61,9 +62,11 @@ final class DungeonActorView extends Group {
         fromY = toY = shownY = actor.y();
 
         boolean enemy = "enemy".equals(actor.kind());
-        String texture = enemy ? Assets.Sprites.RAT : host ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
+        String baseSprite = enemy ? Assets.Sprites.RAT : host ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
+        outfit = "player".equals(actor.kind()) ? AvatarSprites.acquire(actor.appearance(), baseSprite) : null;
+        Object texture = outfit == null ? baseSprite : outfit.texture();
         sprite = new MovieClip(texture);
-        TextureFilm atlas = new TextureFilm(texture, enemy ? 16 : 12, 15);
+        TextureFilm atlas = new TextureFilm(texture, enemy ? 16 : AvatarSprites.FRAME_WIDTH, AvatarSprites.FRAME_HEIGHT);
         idle = enemy ? animation(2, true, atlas, 0, 0, 0, 1) : animation(1, true, atlas, 0, 0, 0, 1, 0, 0, 1, 1);
         walk = enemy ? animation(10, true, atlas, 6, 7, 8, 9, 10) : animation(20, true, atlas, 2, 3, 4, 5, 6, 7);
         attack = enemy ? animation(15, false, atlas, 2, 3, 4, 5, 0) : animation(15, false, atlas, 13, 14, 15, 0);
@@ -108,6 +111,7 @@ final class DungeonActorView extends Group {
         overlay.remove();
         overlay.destroy();
         super.destroy();
+        if (outfit != null) outfit.close();
     }
 
     void previewMove(int dx, int dy, boolean newInput) {
