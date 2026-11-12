@@ -27,6 +27,11 @@ public final class InnAdventureScene extends PixelScene {
         Badges.loadGlobal();
         Journal.loadGlobal();
 
+        if (InnAdventure.atb()) {
+            enter(InnAdventure.startAtbRun(), false);
+            return;
+        }
+
         ArrayList<GamesInProgress.Info> saves = GamesInProgress.checkAll();
         saves.sort(GamesInProgress.lastPlayedComparator);
         for (GamesInProgress.Info save : saves) {

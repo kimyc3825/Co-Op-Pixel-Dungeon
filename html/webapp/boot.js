@@ -50,7 +50,7 @@
 	var finished = false;
 	var exiting = false;
 	document.addEventListener("visibilitychange", function (event) {
-		// Returning already paused and saved on the game thread. The backend listener can be gone on detach.
+		// Returning already finalized the adventure on the game thread. The backend listener can be gone on detach.
 		if (exiting) event.stopImmediatePropagation();
 	}, true);
 	function notifyParent(type, percent) {

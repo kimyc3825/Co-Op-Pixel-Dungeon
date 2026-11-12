@@ -216,7 +216,10 @@ final class NativeClient {
 
     static void returnToInn(String message) {
         if (view == View.INN) return;
-        if (inSolo()) InnAdventure.clear();
+        if (inSolo()) {
+            InnAdventure.retreat();
+            InnAdventure.clear();
+        }
         if (dungeon != null) dungeon.close();
         dungeon = null;
         dungeonFrame = null;

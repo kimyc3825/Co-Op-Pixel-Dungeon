@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.noxac.pixeldungeon.inn;
 
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.desktop.DesktopPlatformSupport;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.AmuletScene;
@@ -53,7 +54,8 @@ final class NativeGame extends ShatteredPixelDungeon {
 
     @Override
     public String runExitLabel() {
-        return NativeClient.inSolo() ? "저장하고 여관으로" : null;
+        if (!NativeClient.inSolo()) return null;
+        return InnAdventure.atb() ? "여관으로 철수" : "저장하고 여관으로";
     }
 
     @Override

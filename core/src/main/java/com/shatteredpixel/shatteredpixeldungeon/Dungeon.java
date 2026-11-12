@@ -622,8 +622,14 @@ public class Dungeon {
 	private static final String CHAPTERS	= "chapters";
 	private static final String QUESTS		= "quests";
 	private static final String BADGES		= "badges";
+	private static final Object ATB_CHECKPOINT_LOCK = new Object();
 	
 	public static void saveGame( int save ) {
+		saveGame(save, InnAdventure.atbRunForSlot(save));
+	}
+
+	private static void saveGame(int save, InnAdventure.AtbRun run) {
+		if (GamesInProgress.isAtbSlot(save) && !InnAdventure.ownsAtbRun(run)) return;
 		try {
 			Bundle bundle = new Bundle();
 			if (GamesInProgress.isAtbSlot(save)) InnAtb.store(bundle);
@@ -691,7 +697,7 @@ public class Dungeon {
 			Badges.saveLocal( badges );
 			bundle.put( BADGES, badges );
 			
-			FileUtils.bundleToFile( GamesInProgress.gameFile(save), bundle);
+			writeCheckpoint(save, run, GamesInProgress.gameFile(save), bundle);
 			
 		} catch (IOException e) {
 			GamesInProgress.setUnknown( save );
@@ -700,21 +706,47 @@ public class Dungeon {
 	}
 	
 	public static void saveLevel( int save ) throws IOException {
+		saveLevel(save, InnAdventure.atbRunForSlot(save));
+	}
+
+	private static void saveLevel(int save, InnAdventure.AtbRun run) throws IOException {
+		if (GamesInProgress.isAtbSlot(save) && !InnAdventure.ownsAtbRun(run)) return;
 		Bundle bundle = new Bundle();
 		bundle.put( LEVEL, level );
 		
-		FileUtils.bundleToFile(GamesInProgress.depthFile( save, depth, branch ), bundle);
+		writeCheckpoint(save, run, GamesInProgress.depthFile(save, depth, branch), bundle);
+	}
+
+	private static void writeCheckpoint(int save, InnAdventure.AtbRun run, String file, Bundle bundle) throws IOException {
+		if (!GamesInProgress.isAtbSlot(save)) {
+			FileUtils.bundleToFile(file, bundle);
+			return;
+		}
+		synchronized (ATB_CHECKPOINT_LOCK) {
+			// Recheck ownership in case a retreat happened while the bundle was prepared.
+			if (InnAdventure.ownsAtbRun(run)) FileUtils.bundleToFile(file, bundle);
+		}
 	}
 	
 	public static void saveAll() throws IOException {
+		int save = GamesInProgress.curSlot;
+		boolean atbSlot = GamesInProgress.isAtbSlot(save);
+		InnAdventure.AtbRun run = InnAdventure.atbRunForSlot(save);
+		if (atbSlot && run == null) return;
 		if (hero != null && (hero.isAlive() || WndResurrect.instance != null)) {
 			
 			Actor.fixTime();
 			updateLevelExplored();
-			saveGame( GamesInProgress.curSlot );
-			saveLevel( GamesInProgress.curSlot );
+			saveGame(save, run);
+			saveLevel(save, run);
 
-			GamesInProgress.set( GamesInProgress.curSlot );
+			if (atbSlot) {
+				synchronized (ATB_CHECKPOINT_LOCK) {
+					if (InnAdventure.ownsAtbRun(run)) GamesInProgress.set(save);
+				}
+			} else {
+				GamesInProgress.set(save);
+			}
 
 		}
 	}
@@ -844,19 +876,27 @@ public class Dungeon {
 	}
 	
 	public static void deleteGame( int save, boolean deleteLevels ) {
-
-		if (deleteLevels) {
-			String folder = GamesInProgress.gameFolder(save);
-			for (String file : FileUtils.filesInDir(folder)){
-				if (file.contains("depth")){
-					FileUtils.deleteFile(folder + "/" + file);
-				}
+		if (GamesInProgress.isAtbSlot(save)) {
+			synchronized (ATB_CHECKPOINT_LOCK) {
+				String file = GamesInProgress.gameFile(save);
+				FileUtils.deleteFile(file + ".spdtmp");
+				FileUtils.deleteFile(file);
+				if (deleteLevels) deleteSavedLevels(save);
+				GamesInProgress.delete(save);
 			}
+			return;
 		}
 
+		if (deleteLevels) deleteSavedLevels(save);
 		FileUtils.overwriteFile(GamesInProgress.gameFile(save), 1);
-		
 		GamesInProgress.delete( save );
+	}
+
+	private static void deleteSavedLevels(int save) {
+		String folder = GamesInProgress.gameFolder(save);
+		for (String file : FileUtils.filesInDir(folder)) {
+			if (file.contains("depth")) FileUtils.deleteFile(folder + "/" + file);
+		}
 	}
 	
 	public static void preview( GamesInProgress.Info info, Bundle bundle ) {

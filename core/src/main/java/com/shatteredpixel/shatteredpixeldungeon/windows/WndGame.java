@@ -23,6 +23,7 @@ package com.shatteredpixel.shatteredpixeldungeon.windows;
 
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
@@ -103,6 +104,10 @@ public class WndGame extends Window {
 		addButton(curBtn = new RedButton(exitLabel != null ? exitLabel : Messages.get(this, "menu")) {
 			@Override
 			protected void onClick() {
+				if (InnAdventure.atb()) {
+					Game.instance.finish();
+					return;
+				}
 				try {
 					Dungeon.saveAll();
 				} catch (IOException e) {

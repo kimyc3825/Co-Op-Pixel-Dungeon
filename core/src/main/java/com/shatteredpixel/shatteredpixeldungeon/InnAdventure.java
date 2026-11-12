@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.shatteredpixel.shatteredpixeldungeon;
 
+import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroClass;
 
 /** The inn profile for the current original-engine adventure. */
@@ -33,6 +34,15 @@ public final class InnAdventure {
 
     private static Profile profile;
     private static volatile boolean atb;
+    private static volatile AtbRun activeAtbRun;
+
+    static final class AtbRun {
+        private final int slot;
+
+        private AtbRun(int slot) {
+            this.slot = slot;
+        }
+    }
 
     private InnAdventure() {}
 
@@ -52,6 +62,7 @@ public final class InnAdventure {
         }
         profile = new Profile(name, selected, hairColor, outfitColor, hairStyle, accessory);
         InnAtb.reset();
+        activeAtbRun = null;
         atb = realTime;
     }
 
@@ -63,7 +74,35 @@ public final class InnAdventure {
         return atb;
     }
 
+    /** Allocate the temporary checkpoint slot before generating the new expedition. */
+    public static int startAtbRun() {
+        int slot = GamesInProgress.firstSlot();
+        if (!GamesInProgress.isAtbSlot(slot)) throw new IllegalStateException("ATB adventure is not active");
+        Dungeon.deleteGame(slot, true);
+        activeAtbRun = new AtbRun(slot);
+        return slot;
+    }
+
+    static AtbRun atbRunForSlot(int slot) {
+        AtbRun run = activeAtbRun;
+        return run != null && run.slot == slot ? run : null;
+    }
+
+    static boolean ownsAtbRun(AtbRun run) {
+        return run != null && activeAtbRun == run;
+    }
+
+    /** Retire this expedition before returning to the inn. */
+    public static void retreat() {
+        AtbRun run = activeAtbRun;
+        if (run == null) return;
+        activeAtbRun = null;
+        Actor.updateAtb(0, true);
+        Dungeon.deleteGame(run.slot, true);
+    }
+
     public static void clear() {
+        activeAtbRun = null;
         atb = false;
         profile = null;
     }

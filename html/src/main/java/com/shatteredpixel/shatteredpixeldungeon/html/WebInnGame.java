@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.shatteredpixel.shatteredpixeldungeon.html;
 
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.AmuletScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
@@ -31,7 +32,7 @@ final class WebInnGame extends ShatteredPixelDungeon {
 
     @Override
     public String runExitLabel() {
-        return "저장하고 여관으로";
+        return InnAdventure.atb() ? "여관으로 철수" : "저장하고 여관으로";
     }
 
     @Override
@@ -54,6 +55,7 @@ final class WebInnGame extends ShatteredPixelDungeon {
     void returnToInn() {
         if (returning) return;
         returning = true;
+        InnAdventure.retreat();
         pause();
         WebJS.exit();
     }

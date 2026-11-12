@@ -2,6 +2,7 @@
 const MANIFEST = '/play/original/manifest.json';
 const BOOT_TIMEOUT = 120_000;
 const SAVE_TIMEOUT = 8_000;
+const RETREAT_TIMEOUT = 3_000;
 
 async function runtimeEntry(signal) {
   const timeout = AbortSignal.timeout(6000);
@@ -59,17 +60,18 @@ export class OriginalGame {
     this.progress = -1;
     document.getElementById('original-launch').addEventListener('click', () => this.start());
     this.back.addEventListener('click', () => {
-      if (this.phase === 'ready') this.requestSave();
+      if (this.phase === 'ready') this.requestReturn();
       else void this.returnToInn();
     });
     this.retry.addEventListener('click', () => {
-      if (this.phase === 'save-failed') this.requestSave();
+      if (this.phase === 'save-failed') this.requestReturn();
       else if (this.phase === 'failed') void this.load();
     });
     window.addEventListener('message', (event) => this.onMessage(event));
   }
 
   get active() { return !this.screen.hidden; }
+  get atb() { return this.launchProfile?.get('atb') === '1'; }
 
   start(atb = false) {
     if (this.active || !this.canLaunch()) return;
@@ -125,8 +127,9 @@ export class OriginalGame {
     this.label.textContent = label ?? '';
     this.retry.hidden = !failed;
     this.retry.textContent = phase === 'save-failed' ? '저장 다시 시도' : '다시 시도';
-    this.back.textContent = phase === 'save-failed' ? '저장 확인 없이 돌아가기' : '여관으로';
-    this.back.disabled = phase === 'saving' || phase === 'returning';
+    this.back.textContent = phase === 'save-failed' ? '저장 확인 없이 돌아가기' :
+      this.atb && phase === 'ready' ? '여관으로 철수' : '여관으로';
+    this.back.disabled = phase === 'saving' || phase === 'retreating' || phase === 'returning';
     if (this.frame) this.frame.tabIndex = phase === 'ready' ? 0 : -1;
     if (loading) {
       if (this.tipTimer === null) {
@@ -158,7 +161,8 @@ export class OriginalGame {
       this.setPhase('ready');
       this.frame.focus();
     } else if (type === 'noxac-original-error') {
-      this.fail('원본 게임이 중단되었습니다');
+      if (this.phase === 'retreating') void this.returnToInn();
+      else this.fail('원본 게임이 중단되었습니다');
     } else if (type === 'noxac-original-exit') {
       void this.returnToInn();
     }
@@ -169,10 +173,14 @@ export class OriginalGame {
     this.deadline = setTimeout(() => this.fail('원본 게임을 시작하지 못했습니다'), BOOT_TIMEOUT);
   }
 
-  requestSave() {
-    this.setPhase('saving', '게임 저장 중');
+  requestReturn() {
+    const retreating = this.atb;
+    this.setPhase(retreating ? 'retreating' : 'saving', retreating ? '원정 철수 중' : '게임 저장 중');
     this.frame.contentWindow.postMessage({ type: 'noxac-original-return-request' }, window.location.origin);
-    this.deadline = setTimeout(() => this.setPhase('save-failed', '저장 확인을 받지 못했습니다'), SAVE_TIMEOUT);
+    this.deadline = setTimeout(() => {
+      if (retreating) void this.returnToInn();
+      else this.setPhase('save-failed', '저장 확인을 받지 못했습니다');
+    }, retreating ? RETREAT_TIMEOUT : SAVE_TIMEOUT);
   }
 
   clearFrame() {
