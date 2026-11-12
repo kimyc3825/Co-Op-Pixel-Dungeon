@@ -2,6 +2,7 @@
 package com.noxac.pixeldungeon.inn;
 
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
+import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.Game;
@@ -152,7 +153,11 @@ final class DungeonActorView extends Group {
             speechOverlay.add(speech);
             speechBack = NativeDungeonScene.panel(speech, 0, 0, 1, 1, 0xF12B2D25);
             speechTail = NativeDungeonScene.panel(speech, 0, 0, 4, 2, 0xF12B2D25);
-            speechText = NativeDungeonScene.label(speech, " ", 7, NativeDungeonScene.TEXT, 0, 0, 97);
+            speechText = PixelScene.renderTextBlock(7, false);
+            speechText.maxWidth(97);
+            speechText.setHightlighting(false);
+            speechText.hardlight(NativeDungeonScene.TEXT);
+            speech.add(speechText);
         }
         int length = message.codePointCount(0, message.length());
         String preview = length <= 28 ? message : message.substring(0, message.offsetByCodePoints(0, 27)) + "…";

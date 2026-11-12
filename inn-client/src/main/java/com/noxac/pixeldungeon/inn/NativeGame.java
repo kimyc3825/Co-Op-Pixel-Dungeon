@@ -2,6 +2,7 @@
 package com.noxac.pixeldungeon.inn;
 
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
+import com.shatteredpixel.shatteredpixeldungeon.desktop.DesktopPlatformSupport;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.AmuletScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.RankingsScene;
@@ -20,6 +21,7 @@ final class NativeGame extends ShatteredPixelDungeon {
 
     @Override
     public void create() {
+        if (platform instanceof DesktopPlatformSupport desktop) desktop.enableWindowImeOnTextInputOnly();
         super.create();
         NativeClient.start(api);
         if (!NativeClient.profileConfirmed()) switchNoFade(NativeAvatarScene.class);
@@ -62,7 +64,11 @@ final class NativeGame extends ShatteredPixelDungeon {
 
     @Override
     public void destroy() {
-        NativeClient.shutdown();
-        super.destroy();
+        try {
+            NativeClient.shutdown();
+            super.destroy();
+        } finally {
+            if (platform instanceof DesktopPlatformSupport desktop) desktop.restoreWindowIme();
+        }
     }
 }

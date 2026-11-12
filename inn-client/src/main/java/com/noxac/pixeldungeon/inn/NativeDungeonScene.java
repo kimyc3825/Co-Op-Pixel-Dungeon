@@ -1438,9 +1438,10 @@ public final class NativeDungeonScene extends PixelScene {
         chatEditor = new TextInput(Chrome.get(Chrome.Type.TOAST_WHITE), false, defaultZoom * 7) {
             @Override
             public void enterPressed() {
-                if (composerEnterReleased) chatSubmitPending = true;
+                if (composerEnterReleased && !enterWithAlt()) chatSubmitPending = true;
             }
         };
+        chatEditor.setLeftAligned();
         chatEditor.setMaxLength(160);
         chatLog.add(chatEditor);
         chatEditor.setRect(chatPrompt.left(), chatPrompt.top(), chatSend.left() - chatPrompt.left() - 2,

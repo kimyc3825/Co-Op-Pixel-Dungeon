@@ -332,10 +332,18 @@ public class PixelScene extends Scene {
 	}
 
 	public static RenderedTextBlock renderTextBlock(String text, int size ){
+		return renderTextBlock(text, size, true);
+	}
+
+	public static RenderedTextBlock renderTextBlock(int size, boolean outline){
+		return renderTextBlock("", size, outline);
+	}
+
+	private static RenderedTextBlock renderTextBlock(String text, int size, boolean outline){
 		//some systems (macOS mainly) require this back buffer check to ensure
 		// that we're working with real pixels, not logical ones
 		float scale = DeviceCompat.getRealPixelScaleX();
-		RenderedTextBlock result = new RenderedTextBlock( text, size*Math.round(defaultZoom*scale));
+		RenderedTextBlock result = new RenderedTextBlock(text, size*Math.round(defaultZoom*scale), outline);
 		result.zoom(1/(float)Math.round(defaultZoom*scale));
 		return result;
 	}

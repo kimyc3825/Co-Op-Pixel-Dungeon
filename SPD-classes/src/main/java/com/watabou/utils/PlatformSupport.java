@@ -85,6 +85,9 @@ public abstract class PlatformSupport {
 		Gdx.input.setOnscreenKeyboardVisible(value, Input.OnscreenKeyboardType.Default);
 	}
 
+	/** Indicates that a game text field started or finished accepting text. */
+	public void setTextInputActive(boolean active){ }
+
 	//TODO should consider spinning this into its own class, rather than platform support getting ever bigger
 	protected static HashMap<FreeTypeFontGenerator, HashMap<Integer, BitmapFont>> fonts;
 

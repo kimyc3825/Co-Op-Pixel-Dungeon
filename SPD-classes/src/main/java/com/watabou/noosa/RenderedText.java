@@ -41,6 +41,7 @@ import java.util.HashMap;
 public class RenderedText extends Image {
 	
 	private BitmapFont font = null;
+	private boolean outline = true;
 	private int size;
 	private String text;
 	
@@ -54,8 +55,13 @@ public class RenderedText extends Image {
 	}
 	
 	public RenderedText(String text, int size){
+		this(text, size, true);
+	}
+
+	public RenderedText(String text, int size, boolean outline){
 		this.text = text;
 		this.size = size;
+		this.outline = outline;
 		
 		measure();
 	}
@@ -92,7 +98,7 @@ public class RenderedText extends Image {
 			visible = true;
 		}
 		
-		font = Game.platform.getFont(size, text, true, true);
+		font = Game.platform.getFont(size, text, true, outline);
 		
 		if (font != null){
 			GlyphLayout glyphs = new GlyphLayout( font, text);

@@ -33,11 +33,85 @@ import com.watabou.noosa.Game;
 import com.watabou.utils.PlatformSupport;
 import com.watabou.utils.Point;
 
+import org.lwjgl.glfw.GLFWNativeWin32;
+import org.lwjgl.system.JNI;
+import org.lwjgl.system.Platform;
+import org.lwjgl.system.windows.WindowsLibrary;
+
 import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class DesktopPlatformSupport extends PlatformSupport {
+
+	private WindowIme windowIme;
+
+	public void enableWindowImeOnTextInputOnly() {
+		if (windowIme != null || Platform.get() != Platform.WINDOWS || !(Gdx.graphics instanceof Lwjgl3Graphics)) return;
+		long glfwWindow = ((Lwjgl3Graphics) Gdx.graphics).getWindow().getWindowHandle();
+		long hwnd = GLFWNativeWin32.glfwGetWin32Window(glfwWindow);
+		if (hwnd == 0) return;
+		WindowsLibrary library = new WindowsLibrary("imm32.dll");
+		long associate = library.getFunctionAddress("ImmAssociateContext");
+		if (associate == 0) {
+			library.free();
+			return;
+		}
+		windowIme = new WindowIme(library, associate, hwnd);
+		windowIme.apply();
+	}
+
+	@Override
+	public void setTextInputActive(boolean active) {
+		WindowIme ime = windowIme;
+		if (ime != null) ime.setTextInputActive(active);
+	}
+
+	public void restoreWindowIme() {
+		WindowIme ime = windowIme;
+		windowIme = null;
+		if (ime != null) ime.close();
+	}
+
+	private static class WindowIme {
+		private final Thread owner = Thread.currentThread();
+		private final WindowsLibrary library;
+		private final long associate;
+		private final long hwnd;
+		private long context;
+		private int editors;
+		private boolean detached;
+		private boolean closed;
+
+		WindowIme(WindowsLibrary library, long associate, long hwnd) {
+			this.library = library;
+			this.associate = associate;
+			this.hwnd = hwnd;
+		}
+
+		synchronized void setTextInputActive(boolean active) {
+			if (closed) return;
+			editors = active ? editors + 1 : Math.max(0, editors - 1);
+			if (Thread.currentThread() == owner) apply();
+			else Gdx.app.postRunnable(this::apply);
+		}
+
+		synchronized void apply() {
+			boolean detach = editors == 0;
+			if (closed || detach == detached) return;
+			// GLFW drops key presses consumed by the Windows IME. Associate the original
+			// context only while a text field is open, without changing the selected language.
+			if (detach) context = JNI.invokePPP(hwnd, 0, associate);
+			else JNI.invokePPP(hwnd, context, associate);
+			detached = detach;
+		}
+
+		synchronized void close() {
+			if (detached) JNI.invokePPP(hwnd, context, associate);
+			closed = true;
+			library.free();
+		}
+	}
 
 	//we recall previous window sizes as a workaround to not save maximized size to settings
 	//have to do this as updateDisplaySize is called before maximized is set =S
@@ -136,7 +210,7 @@ public class DesktopPlatformSupport extends PlatformSupport {
 		packer = new PixmapPacker(pageSize, pageSize, Pixmap.Format.RGBA8888, 1, false);
 	}
 	
-	private static Matcher asianMatcher = Pattern.compile("\\p{InHangul_Syllables}|" +
+	private static Matcher asianMatcher = Pattern.compile("\\p{InHangul_Syllables}|\\p{InHangul_Jamo}|\\p{InHangul_Compatibility_Jamo}|" +
 			"\\p{InCJK_Unified_Ideographs}|\\p{InCJK_Symbols_and_Punctuation}|\\p{InHalfwidth_and_Fullwidth_Forms}|" +
 			"\\p{InHiragana}|\\p{InKatakana}").matcher("");
 

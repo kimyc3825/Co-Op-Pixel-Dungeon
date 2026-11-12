@@ -481,6 +481,7 @@ public final class NativeInnScene extends PixelScene {
                 if (!openingEnterHeld && !altHeld()) submitPending = true;
             }
         };
+        editor.setLeftAligned();
         editor.setMaxLength(160);
         if (!unsentChat.isEmpty()) {
             editor.setText(unsentChat);

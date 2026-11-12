@@ -148,6 +148,7 @@ public class TextInput extends Component {
 		container.setActor(textField);
 		stage.setKeyboardFocus(textField);
 		Game.platform.setOnscreenKeyboardVisible(true, multiline);
+		Game.platform.setTextInputActive(true);
 	}
 
 	public void enterPressed(){
@@ -169,6 +170,10 @@ public class TextInput extends Component {
 
 	public void setMaxLength(int maxLength){
 		textField.setMaxLength(maxLength);
+	}
+
+	public void setLeftAligned(){
+		textField.setAlignment(Align.left);
 	}
 
 	public String getText(){
@@ -258,6 +263,8 @@ public class TextInput extends Component {
 			stage.dispose();
 			skin.dispose();
 			Game.inputHandler.removeInputProcessor(stage);
+			stage = null;
+			Game.platform.setTextInputActive(false);
 			Game.platform.setOnscreenKeyboardVisible(false, false);
 			if (!DeviceCompat.isDesktop()) Game.platform.updateSystemUI();
 		}

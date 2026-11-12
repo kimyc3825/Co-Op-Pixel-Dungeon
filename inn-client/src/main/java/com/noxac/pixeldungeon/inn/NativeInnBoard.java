@@ -379,7 +379,7 @@ final class NativeInnBoard extends Group {
         private final ColorBlock tail = new ColorBlock(5, 2, EDGE);
         private final ColorBlock tailCenter = new ColorBlock(3, 1, PAPER);
         private final ColorBlock tip = new ColorBlock(1, 1, EDGE);
-        private final RenderedTextBlock label = PixelScene.renderTextBlock(6);
+        private final RenderedTextBlock label = PixelScene.renderTextBlock(6, false);
         private String message;
         private long expires;
         private int columns;

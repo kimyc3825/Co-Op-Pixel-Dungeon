@@ -238,6 +238,12 @@ export class Board {
     this.images = Object.fromEntries(INN_ASSETS.map((name) => [name, this.loadImage(name)]));
     this.set(null, false);
     if (this.gameViewport) {
+      this.speechCanvas = canvas.ownerDocument.createElement('canvas');
+      this.speechCanvas.className = 'speech-board';
+      this.speechCanvas.setAttribute('aria-hidden', 'true');
+      this.speechCanvas.hidden = true;
+      this.speechContext = this.speechCanvas.getContext('2d');
+      canvas.after(this.speechCanvas);
       const observer = new ResizeObserver(() => {
         this.resizeViewport();
         this.cameraAt = null;
@@ -564,39 +570,57 @@ export class Board {
 
   drawSpeech(now) {
     const speakers = [...this.figures.values()].filter(({ speech }) => speech?.until > now);
-    if (!speakers.length) return;
+    const overlay = this.speechCanvas;
+    const hideSpeech = speakers.length === 0;
+    if (overlay && overlay.hidden !== hideSpeech) overlay.hidden = hideSpeech;
+    if (hideSpeech) return;
     speakers.sort((a, b) => b.speech.id - a.speech.id);
-    const { context, canvas } = this;
-    const scale = canvas.width / (canvas.clientWidth || canvas.width);
-    const fontSize = Math.max(9, Math.round(12 * scale));
-    const lineHeight = Math.ceil(fontSize * 1.3);
-    const pad = Math.max(4, Math.round(6 * scale));
-    const tail = Math.max(3, Math.round(5 * scale));
+    const canvas = this.canvas;
+    const context = overlay ? this.speechContext : this.context;
+    const width = overlay ? canvas.clientWidth : canvas.width;
+    const height = overlay ? canvas.clientHeight : canvas.height;
+    if (!width || !height) return;
+    if (overlay) {
+      // Keep text at screen resolution while the board scales its pixel art.
+      const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+      const pixelWidth = Math.round(width * ratio);
+      const pixelHeight = Math.round(height * ratio);
+      if (overlay.width !== pixelWidth) overlay.width = pixelWidth;
+      if (overlay.height !== pixelHeight) overlay.height = pixelHeight;
+      context.setTransform(pixelWidth / width, 0, 0, pixelHeight / height, 0, 0);
+      context.clearRect(0, 0, width, height);
+    }
+    const scaleX = width / canvas.width;
+    const scaleY = height / canvas.height;
+    const fontSize = 14;
+    const lineHeight = 20;
+    const pad = 7;
+    const tail = 5;
     const margin = pad + tail;
-    const textWidth = Math.min(Math.round(176 * scale), canvas.width - 2 * (margin + pad));
+    const textWidth = Math.min(192, width - 2 * (margin + pad));
     if (textWidth < fontSize) return;
     const placed = [];
     context.save();
-    context.font = `600 ${fontSize}px "Malgun Gothic", sans-serif`;
-    context.textAlign = 'center';
+    context.font = `400 ${fontSize}px "Malgun Gothic", system-ui, sans-serif`;
+    context.textAlign = 'left';
     context.textBaseline = 'top';
-    context.lineWidth = Math.max(1, scale);
+    context.lineWidth = .75;
     for (const figure of speakers) {
-      const headX = Math.round((figure.x + .5) * TILE - this.viewX);
-      const feetY = Math.round((figure.y + .87) * TILE - this.viewY);
-      if (headX < 0 || headX > canvas.width || feetY < 0 || feetY - TILE > canvas.height) continue;
-      const headY = feetY - (figure.actor.queued ? 57 : 36);
+      const headX = Math.round(((figure.x + .5) * TILE - this.viewX) * scaleX);
+      const feetY = Math.round(((figure.y + .87) * TILE - this.viewY) * scaleY);
+      if (headX < 0 || headX > width || feetY < 0 || feetY - TILE * scaleY > height) continue;
+      const headY = feetY - (figure.actor.queued ? 57 : 36) * scaleY;
       const speech = figure.speech;
       if (!speech.layout || speech.layout.fontSize !== fontSize || speech.layout.textWidth !== textWidth) {
         const lines = speechLines(context, speech.text, textWidth);
         const width = Math.ceil(Math.max(0, ...lines.map(line => context.measureText(line).width)));
         speech.layout = { lines, width, fontSize, textWidth };
       }
-      const { lines, width } = speech.layout;
-      const boxWidth = width + pad * 2;
+      const { lines, width: lineWidth } = speech.layout;
+      const boxWidth = lineWidth + pad * 2;
       const boxHeight = lines.length * lineHeight + pad * 2;
-      const left = Math.max(margin, Math.min(canvas.width - margin - boxWidth, Math.round(headX - boxWidth / 2)));
-      let top = Math.max(margin, Math.min(canvas.height - margin - boxHeight - tail, headY - boxHeight - tail));
+      const left = Math.max(margin, Math.min(width - margin - boxWidth, Math.round(headX - boxWidth / 2)));
+      let top = Math.max(margin, Math.min(height - margin - boxHeight - tail, headY - boxHeight - tail));
       for (const other of placed) {
         if (left < other.right && left + boxWidth > other.left && top < other.bottom && top + boxHeight + tail > other.top) {
           top = Math.max(margin, other.top - boxHeight - tail - pad);
@@ -608,7 +632,7 @@ export class Board {
       placed.push({ left, right, top, bottom: bottom + tail });
       context.globalAlpha = Math.min(1, (speech.until - now) / 250);
       context.fillStyle = '#242019';
-      context.strokeStyle = '#d1a873';
+      context.strokeStyle = '#9c8466';
       context.beginPath();
       context.moveTo(left, top);
       context.lineTo(right, top);
@@ -621,7 +645,7 @@ export class Board {
       context.fill();
       context.stroke();
       context.fillStyle = '#fff0d0';
-      for (const [index, line] of lines.entries()) context.fillText(line, (left + right) / 2, top + pad + index * lineHeight);
+      for (const [index, line] of lines.entries()) context.fillText(line, left + pad, top + pad + index * lineHeight);
     }
     context.restore();
   }

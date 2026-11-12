@@ -44,6 +44,7 @@ public class RenderedTextBlock extends Component {
 	protected boolean multiline = false;
 
 	private int size;
+	private final boolean outline;
 	private float zoom;
 	private int color = -1;
 	
@@ -56,11 +57,16 @@ public class RenderedTextBlock extends Component {
 	private int alignment = LEFT_ALIGN;
 	
 	public RenderedTextBlock(int size){
-		this.size = size;
+		this(null, size);
 	}
 
 	public RenderedTextBlock(String text, int size){
+		this(text, size, true);
+	}
+
+	public RenderedTextBlock(String text, int size, boolean outline){
 		this.size = size;
+		this.outline = outline;
 		text(text);
 	}
 
@@ -126,7 +132,7 @@ public class RenderedTextBlock extends Component {
 			} else if (str.equals(" ")){
 				words.add(SPACE);
 			} else {
-				RenderedText word = new RenderedText(str, size);
+				RenderedText word = new RenderedText(str, size, outline);
 				
 				if (highlighting) word.hardlight(hightlightColor);
 				else if (color != -1) word.hardlight(color);
@@ -214,6 +220,7 @@ public class RenderedTextBlock extends Component {
 		lines.add(curLine);
 
 		width = 0;
+		float wordOverlap = outline ? 0.667f : 0f;
 		for (int i = 0; i < words.size(); i++){
 			RenderedText word = words.get(i);
 			if (word == SPACE){
@@ -236,7 +243,7 @@ public class RenderedTextBlock extends Component {
 				while (Messages.lang() != Languages.CHI_SMPL && Messages.lang() != Languages.CHI_TRAD
 						&& Messages.lang() != Languages.JAPANESE
 						&& j < words.size() && words.get(j) != SPACE && words.get(j) != NEWLINE){
-					fullWidth += words.get(j).width() - 0.667f;
+					fullWidth += words.get(j).width() - wordOverlap;
 					j++;
 				}
 
@@ -258,7 +265,7 @@ public class RenderedTextBlock extends Component {
 				
 				//Note that spacing currently doesn't factor in halfwidth and fullwidth characters
 				//(e.g. Ideographic full stop)
-				x -= 0.667f;
+				x -= wordOverlap;
 
 			}
 		}

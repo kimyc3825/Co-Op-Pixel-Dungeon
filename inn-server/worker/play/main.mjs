@@ -1284,8 +1284,11 @@ for (const close of document.querySelectorAll('[data-close-window]')) {
 }
 fields['hud-scrim'].addEventListener('click', () => { closeGameWindows(); focusBoard(); });
 document.addEventListener('keydown', (event) => {
-  const close = event.key === 'Escape' || event.key === 'Backspace' && !typing(event.target);
+  const editing = typing(event.target);
+  const close = event.code === 'Escape' || event.key === 'Escape' ||
+    (event.code === 'Backspace' || event.key === 'Backspace') && !editing;
   if (!close || profileCard.open || !gameUiBlocksMovement()) return;
+  if (editing && (event.isComposing || event.keyCode === 229 || composingChat.has(event.target))) return;
   event.preventDefault();
   event.stopPropagation();
   closeGameWindows();
@@ -1489,10 +1492,12 @@ function typing(target) { return target instanceof HTMLElement && (target.matche
 window.addEventListener('keydown', (event) => {
   if (original.active || event.defaultPrevented) return;
   const enter = event.key === 'Enter' || event.code === 'Enter' || event.code === 'NumpadEnter';
-  const escape = event.key === 'Escape' || event.code === 'Escape' || event.code === 'Backspace' && !typing(event.target);
+  const escape = event.key === 'Escape' || event.code === 'Escape' ||
+    (event.key === 'Backspace' || event.code === 'Backspace') && !typing(event.target);
   const chatInput = chatInputs.has(event.target) ? event.target : null;
-  if (event.isComposing || event.keyCode === 229 || composingChat.has(chatInput)) {
-    if (chatInput && enter) {
+  // Only the text editor needs IME events. Game controls use the physical key code.
+  if (chatInput && (event.isComposing || event.keyCode === 229 || composingChat.has(chatInput))) {
+    if (enter) {
       skipChatSubmit.add(chatInput);
       setTimeout(() => skipChatSubmit.delete(chatInput), 0);
     }
