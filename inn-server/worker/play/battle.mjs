@@ -1,21 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { dungeonLayout, PRISON, SEWERS } from './layout.mjs';
+import { dungeonLayout } from './layout.mjs';
+import { actionGate, BattleRules, offensive, PRISON, SEWERS } from './rules.mjs';
 
-const ENERGY_CAP = 10;
-const MOVE_COST = 1;
-const ATTACK_COST = 1;
-const EAT_COST = 3;
-const MOVE_COOLDOWN_MS = 180;
-const ATTACK_COOLDOWN_MS = 800;
-const REGEN_DELAY_MS = 500;
-const REGEN_POINT_MS = 800;
-const RATION_HEAL = 6;
+export { BattleRules };
+
+const { ENERGY_CAP, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS, SHOOT_RANGE, SHOOT_DAMAGE, PROJECTILE_STEP_MS,
+  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS, CHAT_LIMIT, cost } = BattleRules;
 const RAT_MOVE_COOLDOWN_MS = 380;
 const AWARENESS = 4;
-const PAUSE_LIMIT_MS = 60_000;
-const PAUSE_COOLDOWN_MS = 60_000;
-const CHAT_LIMIT = 160;
 const CHAT_HISTORY = 16;
+const ATTACK_HISTORY = 16;
 const ENERGY_CAP_UNITS = ENERGY_CAP * REGEN_POINT_MS;
 
 const DIRECTIONS = [
@@ -24,46 +18,39 @@ const DIRECTIONS = [
 ];
 const DAMAGE = { player: 4, guide: 3, enemy: 2 };
 
-function cost(type, inCombat) {
-  switch (type) {
-    case 'move': return inCombat ? MOVE_COST : 0;
-    case 'attack': return ATTACK_COST;
-    case 'eat': return EAT_COST;
-    default: throw new TypeError('Unknown battle action');
-  }
-}
-
-function actionGate(actor, type) {
-  if (type === 'move') return actor.moveReadyAt;
-  if (type === 'attack') return actor.attackReadyAt;
-  return 0;
-}
-
-function energyAt(actor, snapshotNow, displayNow) {
-  const elapsed = Math.max(0, displayNow - Math.max(snapshotNow, actor.energyAt));
-  return Math.min(ENERGY_CAP, actor.energy + elapsed / REGEN_POINT_MS);
-}
-
-function readyAt(actor, type, snapshotNow, inCombat) {
-  const gate = actionGate(actor, type);
-  const missing = cost(type, inCombat) - actor.energy;
-  if (missing <= 0) return gate;
-  // Convert the displayed fraction back to the host's whole milliseconds.
-  const refill = Math.max(snapshotNow, actor.energyAt) + Math.ceil(missing * REGEN_POINT_MS - 0.000001);
-  return Math.max(gate, refill);
-}
-
-export const BattleRules = Object.freeze({
-  ENERGY_CAP, MOVE_COST, ATTACK_COST, EAT_COST, MOVE_COOLDOWN_MS, ATTACK_COOLDOWN_MS,
-  REGEN_DELAY_MS, REGEN_POINT_MS, RATION_HEAL, PAUSE_LIMIT_MS, PAUSE_COOLDOWN_MS, CHAT_LIMIT, cost, energyAt, readyAt,
-});
-
 function move(dx, dy) {
   return { type: 'move', dx, dy, target: null };
 }
 
 function attack(target) {
   return { type: 'attack', dx: 0, dy: 0, target };
+}
+
+function shotCell(target) {
+  const parts = typeof target === 'string' && /^([0-9]{1,3}),([0-9]{1,3})$/.exec(target);
+  return parts ? { x: Number(parts[1]), y: Number(parts[2]) } : null;
+}
+
+function projectilePath(x, y, aim) {
+  const path = [];
+  const dx = Math.abs(aim.x - x);
+  const dy = -Math.abs(aim.y - y);
+  const sx = x < aim.x ? 1 : -1;
+  const sy = y < aim.y ? 1 : -1;
+  let error = dx + dy;
+  while (x !== aim.x || y !== aim.y) {
+    const doubled = error * 2;
+    if (doubled >= dy) {
+      error += dy;
+      x += sx;
+    }
+    if (doubled <= dx) {
+      error += dx;
+      y += sy;
+    }
+    path.push({ x, y });
+  }
+  return path;
 }
 
 function normalize(action) {
@@ -74,6 +61,8 @@ function normalize(action) {
     }
   } else if (action?.type === 'attack' && typeof action.target === 'string') {
     return attack(action.target);
+  } else if (action?.type === 'shoot' && shotCell(action.target)) {
+    return { type: 'shoot', dx: 0, dy: 0, target: action.target };
   } else if (action?.type === 'eat') {
     return { type: 'eat', dx: 0, dy: 0, target: null };
   } else if (action?.type === 'pause' && (action.target === 'begin' || action.target === 'resume')) {
@@ -151,8 +140,11 @@ export class HostBattle {
   #seed;
   #layout;
   #actors;
+  #friendlyFire;
   #drops = [];
   #messages = [];
+  #attackEvents = [];
+  #projectiles = [];
   #battleAt;
   #gameObservedAt;
   #wallObservedAt;
@@ -161,14 +153,17 @@ export class HostBattle {
   #pausedUntil = 0;
   #pauseReadyAt = 0;
   #nextMessageId = 0;
+  #nextAttackEventId = 0;
+  #nextProjectileId = 0;
   #status = 'active';
   #inCombat = false;
   #revision = 1;
 
-  constructor(id, host, guest, now, seed, theme = SEWERS) {
+  constructor(id, host, guest, now, seed, theme = SEWERS, friendlyFire = false) {
     this.#id = id;
     this.#seed = seed;
     this.#layout = dungeonLayout(theme, seed);
+    this.#friendlyFire = friendlyFire === true;
     const { host: entrance, partner, enemy1, enemy2 } = this.#layout;
     const ratName = this.#layout.theme === PRISON ? '감옥 쥐' : '하수도 쥐';
     this.#battleAt = this.#gameObservedAt = this.#wallObservedAt = Math.trunc(now);
@@ -203,10 +198,16 @@ export class HostBattle {
     this.#gameObservedAt = now;
     while (this.#status === 'active' || this.#status === 'won') {
       const turn = this.#nextTurn(this.#gameObservedAt);
-      if (!turn) break;
-      turn.actor.queued = null;
-      this.#battleAt = turn.at;
-      this.#resolve(turn.actor, turn.action, turn.at);
+      const projectile = this.#nextProjectile(this.#gameObservedAt);
+      if (!turn && !projectile) break;
+      if (projectile && (!turn || projectile.stepAt < turn.at)) {
+        this.#battleAt = projectile.stepAt;
+        this.#stepProjectile(projectile);
+      } else {
+        turn.actor.queued = null;
+        this.#battleAt = turn.at;
+        this.#resolve(turn.actor, turn.action, turn.at);
+      }
       this.#revision++;
     }
   }
@@ -231,9 +232,9 @@ export class HostBattle {
     }
     if (this.#pausedUntil > 0 || actor.hp === 0 || !this.#accepts(normalized)) return;
     const queued = this.#readyAt(actor, normalized) > this.#gameObservedAt;
-    if (!this.#actionAllowed(actor, normalized, queued)) return;
     if (queued) {
-      if (normalized.type === 'move' && actor.queued?.type === 'attack') return;
+      if (!this.#actionAllowed(actor, normalized, this.#gameObservedAt, true)) return;
+      if (normalized.type === 'move' && offensive(actor.queued?.type)) return;
       actor.queued = normalized;
       this.#battleAt = this.#gameObservedAt;
       return;
@@ -255,6 +256,11 @@ export class HostBattle {
       commandAck: self.commandAck, inCombat: this.#inCombat, theme: this.#layout.theme,
       wallNow, pausedUntil: this.#pausedUntil, pauseReadyAt: this.#pauseReadyAt,
       messages: this.#messages.map((message) => ({ ...message })),
+      friendlyFire: this.#friendlyFire,
+      attackEvents: this.#attackEvents.map((event) => ({ ...event })),
+      projectiles: this.#projectiles.map(({ id, owner, x, y, path, index, stepAt }) => ({
+        id, ownerId: owner.id, x, y, nextX: path[index].x, nextY: path[index].y, stepAt,
+      })),
     };
   }
 
@@ -266,6 +272,7 @@ export class HostBattle {
     this.#status = 'closed';
     this.#inCombat = false;
     this.#clearQueue();
+    this.#projectiles.length = 0;
     this.#revision++;
   }
 
@@ -302,17 +309,38 @@ export class HostBattle {
   }
 
   #accepts(action) {
-    return this.#status === 'active' || (this.#status === 'won' && action.type !== 'attack');
+    return this.#status === 'active' || (this.#status === 'won' && !offensive(action.type));
   }
 
-  #actionAllowed(actor, action, queued) {
+  #actionAllowed(actor, action, at, queued) {
     if (action.type === 'move') {
       const { dx, dy } = action;
       return queued ? stepAllowed(this.#layout.map, actor.x, actor.y, dx, dy) : this.#canMove(actor.x, actor.y, dx, dy);
     }
     if (action.type === 'eat') return actor.rations > 0 && actor.hp < actor.maxHp;
+    if (action.type === 'shoot') {
+      const aim = shotCell(action.target);
+      const inBounds = this.#layout.map[aim.y]?.[aim.x] !== undefined;
+      const range = distance(actor.x, actor.y, aim);
+      if (inBounds && range >= 1 && range <= SHOOT_RANGE) return true;
+      this.#recordAttack(actor, 'shoot', 'out_of_reach', at, inBounds ? aim : actor);
+      return false;
+    }
     const target = this.#find(action.target);
-    return target && target.hp > 0 && opponents(actor, target) && inReach(this.#layout.map, actor.x, actor.y, target);
+    const result = this.#meleeRejection(actor, target);
+    if (result && actor.kind === 'player') {
+      this.#recordAttack(actor, 'attack', result, at, target ?? actor, target?.id);
+    }
+    return !result;
+  }
+
+  #meleeRejection(actor, target) {
+    if (!target || target.hp === 0) return 'target_gone';
+    if (actor === target || (!opponents(actor, target) && (!this.#friendlyFire || actor.kind !== 'player'))) {
+      return 'ally_blocked';
+    }
+    if (distance(actor.x, actor.y, target) !== 1) return 'out_of_reach';
+    return inReach(this.#layout.map, actor.x, actor.y, target) ? null : 'blocked';
   }
 
   #costUnits(actor, action) {
@@ -326,7 +354,7 @@ export class HostBattle {
   }
 
   #resolve(actor, action, at) {
-    if (!this.#actionAllowed(actor, action, false)) return;
+    if (!this.#actionAllowed(actor, action, at, false)) return;
     const units = this.#costUnits(actor, action);
     if (units > 0) {
       actor.energyUnits = energyUnitsAt(actor, at) - units;
@@ -341,12 +369,15 @@ export class HostBattle {
       if (actor.kind === 'player') this.#pickUp(actor);
     } else if (action.type === 'attack') {
       const target = this.#find(action.target);
-      target.hp = Math.max(0, target.hp - DAMAGE[actor.kind]);
-      if (target.hp === 0) {
-        target.queued = null;
-        if (target.kind === 'enemy') this.#drop(target);
-      }
+      this.#hit(actor, 'attack', target, DAMAGE[actor.kind], at);
       actor.targetId = target.id;
+      actor.attackReadyAt = at + ATTACK_COOLDOWN_MS;
+    } else if (action.type === 'shoot') {
+      this.#projectiles.push({
+        id: ++this.#nextProjectileId, owner: actor, x: actor.x, y: actor.y,
+        path: projectilePath(actor.x, actor.y, shotCell(action.target)), index: 0, stepAt: at + PROJECTILE_STEP_MS,
+      });
+      actor.targetId = null;
       actor.attackReadyAt = at + ATTACK_COOLDOWN_MS;
     } else {
       actor.rations--;
@@ -359,6 +390,56 @@ export class HostBattle {
     actor.lastAction = action.type;
     this.#updateOutcome();
     this.#inCombat = this.#status === 'active' && this.#engaged();
+  }
+
+  #recordAttack(actor, action, result, at, { x, y }, targetId = null, amount = 0) {
+    if (this.#attackEvents.length === ATTACK_HISTORY) this.#attackEvents.shift();
+    this.#attackEvents.push({ id: ++this.#nextAttackEventId, action, result, actorId: actor.id, targetId, x, y, amount, at });
+  }
+
+  #hit(actor, action, target, damage, at) {
+    const amount = Math.min(target.hp, damage);
+    target.hp -= amount;
+    if (target.hp === 0) {
+      target.queued = null;
+      if (target.kind === 'enemy') this.#drop(target);
+    }
+    this.#recordAttack(actor, action, 'hit', at, target, target.id, amount);
+  }
+
+  #nextProjectile(now) {
+    let next = null;
+    for (const projectile of this.#projectiles) {
+      if (projectile.stepAt <= now && (!next || projectile.stepAt < next.stepAt ||
+          (projectile.stepAt === next.stepAt && projectile.id < next.id))) next = projectile;
+    }
+    return next;
+  }
+
+  #stepProjectile(projectile) {
+    const { owner, stepAt, path, index } = projectile;
+    const cell = path[index];
+    const clear = stepAllowed(this.#layout.map, projectile.x, projectile.y, cell.x - projectile.x, cell.y - projectile.y);
+    const target = clear && this.#actors.find((actor) => actor !== owner && actor.hp > 0 && actor.x === cell.x && actor.y === cell.y);
+    if (clear && !target && index + 1 < path.length) {
+      projectile.x = cell.x;
+      projectile.y = cell.y;
+      projectile.index++;
+      projectile.stepAt += PROJECTILE_STEP_MS;
+      return;
+    }
+    this.#projectiles.splice(this.#projectiles.indexOf(projectile), 1);
+    if (!clear) {
+      this.#recordAttack(owner, 'shoot', 'blocked', stepAt, cell);
+    } else if (!target) {
+      this.#recordAttack(owner, 'shoot', 'miss', stepAt, cell);
+    } else if (!this.#friendlyFire && !opponents(owner, target)) {
+      this.#recordAttack(owner, 'shoot', 'ally_blocked', stepAt, cell, target.id);
+    } else {
+      this.#hit(owner, 'shoot', target, SHOOT_DAMAGE, stepAt);
+      this.#updateOutcome();
+      this.#inCombat = this.#status === 'active' && this.#engaged();
+    }
   }
 
   #drop(enemy) {
@@ -391,7 +472,10 @@ export class HostBattle {
     } else if (!this.#actors.some((actor) => actor.kind === 'enemy' && actor.hp > 0)) {
       this.#status = 'won';
     }
-    if (this.#status !== 'active') this.#clearQueue();
+    if (this.#status !== 'active') {
+      this.#clearQueue();
+      this.#projectiles.length = 0;
+    }
   }
 
   #clearQueue() {

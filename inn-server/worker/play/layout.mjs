@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-export const SEWERS = 'sewers';
-export const PRISON = 'prison';
+import { PRISON, SEWERS } from './rules.mjs';
+
+export { PRISON, SEWERS };
 const COLUMNS = 3;
 const ROWS = 2;
 const BAY_SIZE = 6;

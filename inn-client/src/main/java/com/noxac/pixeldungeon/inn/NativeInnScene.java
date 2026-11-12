@@ -6,10 +6,12 @@ import com.badlogic.gdx.Input;
 import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Button;
+import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndTextInput;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndTitledMessage;
 import com.watabou.input.KeyEvent;
 import com.watabou.input.PointerEvent;
 import com.watabou.noosa.Camera;
@@ -53,6 +55,7 @@ public final class NativeInnScene extends PixelScene {
     private FlatButton nick;
     private FlatButton match;
     private FlatButton theme;
+    private FlatButton friendlyFire;
     private FlatButton drink;
     private FlatButton compose;
     private FlatButton send;
@@ -94,13 +97,13 @@ public final class NativeInnScene extends PixelScene {
         float panelHeight = bottom - top;
         panel(EDGE, top, boardWidth, panelHeight);
         board = new NativeInnBoard(EDGE + 1, top + 1, boardWidth - 2, panelHeight - 18,
-            cell -> destination = cell, this::joinSeeking);
+            cell -> destination = cell, this::joinSeeking, this::speakToNpc);
         add(board);
         drink = button("술 한 잔", EDGE + boardWidth - 40, bottom - 15, 36, 12, false, () -> {
             LobbySession session = NativeClient.inn();
             if (session != null) session.drink();
         });
-        add(label("8방향 이동 · F1", 6, MUTED, EDGE + 4, bottom - 12));
+        add(label("이동 · 휠 확대/축소 · F1", 6, MUTED, EDGE + 4, bottom - 12));
 
         panel(sideX, top, sidebar, panelHeight);
         float panelX = sideX + 5;
@@ -110,9 +113,10 @@ public final class NativeInnScene extends PixelScene {
         button("길잡이 연습", panelX + panelWidth / 2 + 1, top + 22, panelWidth / 2 - 1, 14,
             false, NativeClient::enterPractice);
         theme = button(themeCaption(), panelX, top + 39, panelWidth, 14, false, this::chooseTheme);
-        add(label("여관 대화", 7, GOLD, panelX, top + 57));
+        friendlyFire = button(friendlyFireCaption(), panelX, top + 55, panelWidth, 14, false, this::toggleFriendlyFire);
+        add(label("여관 대화", 7, GOLD, panelX, top + 73));
 
-        float chatY = top + 67;
+        float chatY = top + 83;
         float chatHeight = Math.max(13, bottom - chatY - 20);
         add(block(panelX, chatY, panelWidth, chatHeight, FIELD));
         chatRows = new ChatRows(panelWidth - 5);
@@ -175,6 +179,7 @@ public final class NativeInnScene extends PixelScene {
         LobbySession.Snapshot snapshot = NativeClient.innSnapshot();
         boolean testMode = NativeClient.isTestMode();
         theme.enabled(NativeClient.canChooseExpeditionTheme());
+        friendlyFire.enabled(NativeClient.canChooseExpeditionTheme());
         if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode) {
             boolean online = snapshot != null && snapshot.online() && snapshot.state() != null;
             InnApi.State state = snapshot == null ? null : snapshot.state();
@@ -313,6 +318,30 @@ public final class NativeInnScene extends PixelScene {
         return "원정 지역 · " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme());
     }
 
+    private static String friendlyFireCaption() {
+        return NativeClient.friendlyFire() ? "아군 피해 · 켜짐" : "아군 피해 · 꺼짐";
+    }
+
+    private void toggleFriendlyFire() {
+        NativeClient.toggleFriendlyFire();
+        friendlyFire.caption(friendlyFireCaption());
+    }
+
+    private void speakToNpc(InnApi.Npc npc) {
+        if (modalOpen) return;
+        closeComposer();
+        destination = null;
+        keyboard.reset();
+        modalOpen = true;
+        add(new WndTitledMessage(Icons.INFO.get(), npc.name(), npc.dialogue()) {
+            @Override
+            public void destroy() {
+                modalOpen = false;
+                super.destroy();
+            }
+        });
+    }
+
     private void chooseTheme() {
         if (modalOpen || !NativeClient.canChooseExpeditionTheme()) return;
         closeComposer();
@@ -347,12 +376,13 @@ public final class NativeInnScene extends PixelScene {
 
     private Group buildHelp(float x, float y, float w) {
         Group overlay = new Group();
-        overlay.add(block(x, y, w, 51, 0xe96b4b3d));
-        overlay.add(block(x + 1, y + 1, w - 2, 49, 0xe6211918));
+        overlay.add(block(x, y, w, 61, 0xe96b4b3d));
+        overlay.add(block(x + 1, y + 1, w - 2, 59, 0xe6211918));
         overlay.add(label("조작 방법", 8, GOLD, x + 5, y + 4));
         overlay.add(label("이동  WASD / 방향키 / 숫자패드", 6, CREAM, x + 5, y + 16));
         overlay.add(label("대화  Enter", 6, CREAM, x + 5, y + 26));
         overlay.add(label("동료 찾기  동료 구함 표지 클릭", 6, CREAM, x + 5, y + 36));
+        overlay.add(label("확대/축소  휠 · NPC 대화  클릭", 6, CREAM, x + 5, y + 46));
         return overlay;
     }
 

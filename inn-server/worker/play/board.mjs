@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { PRISON } from './layout.mjs';
+import { BattleRules, PRISON } from './rules.mjs';
+import { runtimeImage } from './runtime-loader.mjs';
 
 const TILE = 32;
 const ATLAS_TILE = 16;
 const WALL_SOURCE_Y = 12 * ATLAS_TILE + 8;
 const WALL_SOURCE_HEIGHT = 4;
 const WALL_HEIGHT = TILE * WALL_SOURCE_HEIGHT / ATLAS_TILE;
-const ASSETS = ['warrior', 'rogue', 'rat', 'looking-sign', 'items', 'tiles_sewers'];
+const IMPACT_MS = 590;
+const INN_VIEW_WIDTH = 15 * TILE;
+const INN_VIEW_HEIGHT = 10 * TILE;
+const INN_ZOOM = [.55, .75, 1, 1.25, 1.5, 2];
+const DEFAULT_ZOOM = INN_ZOOM.indexOf(1);
+const INN_ASSETS = ['warrior', 'rogue', 'looking-sign', 'inn-npcs'];
+const DUNGEON_ASSETS = ['rat', 'items', 'tiles_sewers', 'tiles_prison'];
+const NPC_ROLES = ['guard', 'innkeeper', 'vendor', 'bard', 'adventurer'];
+const NPC_COLORS = ['#9a8a73', '#ba8452', '#74997a', '#a982a3', '#b9986e'];
 const INN = ['############', '#BBBBBBBB..#', '#..........#', '#..TT..TT..#', '#..........#',
   '#..TT..TT..#', '#..........#', '#....DD....#', '############'];
 export const DIRECTIONS = [[1, 0], [-1, 0], [0, -1], [0, 1], [1, -1], [-1, -1], [1, 1], [-1, 1]];
@@ -42,6 +51,10 @@ export function nextToward(map, x, y, targetX, targetY) {
     }
   }
   return null;
+}
+
+function assetPath(name, version) {
+  return `/play/${version ? `runtime/${version}/` : ''}assets/${name}.png`;
 }
 
 function paint(context, color, x, y, width, height) {
@@ -157,19 +170,24 @@ class Figure {
     this.move(this.actor.x, this.actor.y, now, interval);
   }
 
-  accept(actor, target, now, interval) {
+  attack(x, y, now) {
+    this.attackUntil = now + 265;
+    this.attackX = Math.sign(x - this.actor.x);
+    this.attackY = Math.sign(y - this.actor.y);
+    if (this.attackX) this.left = this.attackX < 0;
+  }
+
+  accept(actor, target, now, interval, attackFeedback) {
     this.advance(now);
     if (actor.x !== this.actor.x || actor.y !== this.actor.y) {
       this.prediction = null;
       this.move(actor.x, actor.y, now, interval);
     }
-    if (actor.actionSeq !== this.actor.actionSeq && actor.lastAction === 'attack') {
-      this.attackUntil = now + 265;
-      this.attackX = Math.sign((target?.x ?? actor.x) - actor.x);
-      this.attackY = Math.sign((target?.y ?? actor.y) - actor.y);
-      if (this.attackX) this.left = this.attackX < 0;
+    if (!attackFeedback && actor.actionSeq !== this.actor.actionSeq && actor.lastAction === 'attack') {
+      this.attack(target?.x ?? actor.x, target?.y ?? actor.y, now);
     }
-    if (actor.hp !== this.actor.hp && Number.isFinite(actor.hp) && Number.isFinite(this.actor.hp)) {
+    if (actor.hp !== this.actor.hp && (!attackFeedback || actor.hp > this.actor.hp) &&
+        Number.isFinite(actor.hp) && Number.isFinite(this.actor.hp)) {
       this.hurtUntil = now + 590;
       this.hpChange = actor.hp - this.actor.hp;
     }
@@ -186,40 +204,57 @@ export class Board {
     this.canvas = canvas;
     this.context = canvas.getContext('2d');
     this.figures = new Map();
-    this.images = Object.fromEntries(ASSETS.map((name) => [name, this.loadImage(name)]));
+    this.impacts = [];
+    this.zoom = DEFAULT_ZOOM;
+    this.viewX = this.viewY = 0;
+    this.images = Object.fromEntries(INN_ASSETS.map((name) => [name, this.loadImage(name)]));
     this.set(null, false);
   }
 
-  loadImage(name) {
+  loadImage(name, version) {
     const image = new Image();
     if (name.startsWith('tiles_')) image.addEventListener('load', () => {
       if (this.textureName === name) this.terrain = null;
     });
-    image.src = `/play/assets/${name}.png`;
+    image.src = assetPath(name, version);
     return image;
   }
 
-  set(snapshot, dungeon, now = performance.now()) {
+  set(snapshot, dungeon, now = performance.now(), version) {
     const scene = dungeon ? snapshot?.id : snapshot?.selfId;
     const textureName = dungeon ? (snapshot?.theme === PRISON ? 'tiles_prison' : 'tiles_sewers') : null;
-    if (scene !== this.scene || dungeon !== this.dungeon || textureName !== this.textureName) {
+    const sceneChanged = scene !== this.scene || dungeon !== this.dungeon || textureName !== this.textureName;
+    if (sceneChanged) {
       this.figures.clear();
+      this.impacts.length = 0;
       this.lastEvent = 0;
       this.terrain = null;
       this.scene = scene;
+      this.zoom = DEFAULT_ZOOM;
+      this.cameraAt = null;
     }
     this.textureName = textureName;
-    if (textureName && !this.images[textureName]) this.images[textureName] = this.loadImage(textureName);
+    if (dungeon) {
+      if (this.assetVersion !== version) {
+        for (const name of DUNGEON_ASSETS) delete this.images[name];
+        this.assetVersion = version;
+        this.terrain = null;
+      }
+      for (const name of ['rat', 'items', textureName]) {
+        this.images[name] ??= runtimeImage(version, name) ?? this.loadImage(name, version);
+      }
+    }
     this.dungeon = dungeon;
     this.snapshot = snapshot;
     const map = snapshot?.map ?? INN;
     const mapKey = map.join('|');
-    if (mapKey !== this.mapKey) {
+    if (mapKey !== this.mapKey || sceneChanged) {
       this.map = map;
       this.mapKey = mapKey;
       this.terrain = null;
-      this.canvas.width = map[0].length * TILE;
-      this.canvas.height = map.length * TILE;
+      this.worldWidth = map[0].length * TILE;
+      this.worldHeight = map.length * TILE;
+      this.resizeViewport();
     }
     const actors = (dungeon ? snapshot?.actors : snapshot?.people) ?? [];
     const present = new Set(actors.map((actor) => actor.id));
@@ -227,9 +262,11 @@ export class Board {
     for (const actor of actors) {
       const figure = this.figures.get(actor.id);
       const interval = dungeon ? (actor.kind === 'enemy' ? 270 : 180) : 145;
-      if (figure) figure.accept(actor, actors.find((other) => other.id === actor.targetId), now, interval);
+      if (figure) figure.accept(actor, actors.find((other) => other.id === actor.targetId), now, interval,
+        Array.isArray(snapshot.attackEvents));
       else this.figures.set(actor.id, new Figure(actor, now));
     }
+    if (sceneChanged) this.updateCamera(now);
     if (!dungeon) {
       for (const event of snapshot?.events ?? []) {
         if (event.id <= this.lastEvent) continue;
@@ -242,6 +279,59 @@ export class Board {
     }
   }
 
+  hasInnCamera() {
+    return !this.dungeon && (this.worldWidth > INN_VIEW_WIDTH || this.worldHeight > INN_VIEW_HEIGHT);
+  }
+
+  resizeViewport() {
+    const zoom = INN_ZOOM[this.zoom];
+    const width = this.hasInnCamera() ? Math.round(INN_VIEW_WIDTH / zoom) : this.worldWidth;
+    const height = this.hasInnCamera() ? Math.round(INN_VIEW_HEIGHT / zoom) : this.worldHeight;
+    if (this.canvas.width !== width) this.canvas.width = width;
+    if (this.canvas.height !== height) this.canvas.height = height;
+  }
+
+  zoomInn(direction, now) {
+    if (!this.hasInnCamera()) return false;
+    const index = Math.max(0, Math.min(INN_ZOOM.length - 1, this.zoom + direction));
+    if (index !== this.zoom) {
+      this.zoom = index;
+      this.resizeViewport();
+      this.cameraAt = null;
+      this.updateCamera(now);
+    }
+    return true;
+  }
+
+  updateCamera(now) {
+    if (!this.hasInnCamera()) {
+      this.viewX = this.viewY = 0;
+      return;
+    }
+    const self = this.figures.get(this.snapshot?.selfId);
+    const focusX = self ? (self.x + .5) * TILE : this.worldWidth / 2;
+    const focusY = self ? (self.y + .5) * TILE : this.worldHeight / 2;
+    const x = cameraOffset(focusX, this.worldWidth, this.canvas.width);
+    const y = cameraOffset(focusY, this.worldHeight, this.canvas.height);
+    const fraction = this.cameraAt == null ? 1 : 1 - Math.exp(-Math.min(100, now - this.cameraAt) / 65);
+    this.cameraAt = now;
+    this.cameraX = fraction === 1 ? x : this.cameraX + (x - this.cameraX) * fraction;
+    this.cameraY = fraction === 1 ? y : this.cameraY + (y - this.cameraY) * fraction;
+    this.viewX = Math.round(this.cameraX);
+    this.viewY = Math.round(this.cameraY);
+  }
+
+  showAttackEvents(events, now) {
+    for (const event of events) {
+      const hit = event.result === 'hit';
+      if (hit && event.action === 'attack') this.figures.get(event.actorId)?.attack(event.x, event.y, now);
+      if (hit || event.action === 'shoot' && ['blocked', 'ally_blocked'].includes(event.result)) {
+        this.impacts.push({ x: event.x, y: event.y, amount: hit ? event.amount : 0, since: now });
+      }
+    }
+    this.impacts = this.impacts.slice(-16);
+  }
+
   predict(dx, dy, now) {
     this.figures.get(this.snapshot?.selfId)?.predict(dx, dy, now, this.dungeon ? 180 : 145, now + 550);
   }
@@ -251,8 +341,8 @@ export class Board {
   getTerrain() {
     if (this.terrain) return this.terrain;
     const image = document.createElement('canvas');
-    image.width = this.canvas.width;
-    image.height = this.canvas.height;
+    image.width = this.worldWidth;
+    image.height = this.worldHeight;
     const context = image.getContext('2d');
     context.imageSmoothingEnabled = false;
     const tiles = this.images[this.textureName];
@@ -262,7 +352,7 @@ export class Board {
     const foreground = this.dungeon ? document.createElement('canvas') : null;
     let foregroundContext;
     if (foreground) {
-      foreground.width = this.canvas.width;
+      foreground.width = this.worldWidth;
       foreground.height = this.map.length * WALL_HEIGHT;
       foregroundContext = foreground.getContext('2d');
       foregroundContext.imageSmoothingEnabled = false;
@@ -295,24 +385,43 @@ export class Board {
     return image;
   }
 
-  draw(now, selected, destination) {
+  draw(now, selected, destination, aim, gameNow) {
     const context = this.context;
+    for (const figure of this.figures.values()) figure.advance(now);
+    this.updateCamera(now);
+    paint(context, '#121611', 0, 0, this.canvas.width, this.canvas.height);
+    context.save();
+    context.translate(-this.viewX, -this.viewY);
     context.imageSmoothingEnabled = false;
     context.drawImage(this.getTerrain(), 0, 0);
     const snapshot = this.snapshot;
     const self = this.figures.get(snapshot?.selfId)?.actor;
     const target = this.figures.get(selected)?.actor;
-    if (target?.hp > 0) this.marker(target.x, target.y, '#f4876b');
+    if (target?.hp > 0 && !aim) this.marker(target.x, target.y, '#f4876b');
     const queued = snapshot?.queued;
     if (this.dungeon && self && queued?.type === 'move') this.marker(self.x + queued.dx, self.y + queued.dy, '#89d1b2');
+    if (this.dungeon && queued?.type === 'shoot') {
+      const [x, y] = queued.target.split(',').map(Number);
+      this.marker(x, y, '#f0c979');
+    }
     if (!this.dungeon && destination) this.marker(destination[0], destination[1], '#edb776');
     const objects = [];
     for (const figure of this.figures.values()) {
-      figure.advance(now);
       objects.push({ depth: (figure.y + .87) * TILE, figure });
+    }
+    if (!this.dungeon) {
+      for (const npc of snapshot?.npcs ?? []) objects.push({ depth: (npc.y + .87) * TILE, npc });
     }
     for (const drop of snapshot?.drops ?? []) {
       if (drop.pickedBy == null) objects.push({ depth: (drop.y + .84) * TILE, drop });
+    }
+    for (const projectile of snapshot?.projectiles ?? []) {
+      const fraction = Math.min(1, Math.max(0, 1 - (projectile.stepAt - gameNow) / BattleRules.PROJECTILE_STEP_MS));
+      const dx = projectile.nextX - projectile.x;
+      const dy = projectile.nextY - projectile.y;
+      const x = projectile.x + dx * fraction;
+      const y = projectile.y + dy * fraction;
+      objects.push({ depth: (y + .61) * TILE, flight: { x, y, dx, dy } });
     }
     objects.sort((left, right) => left.depth - right.depth);
     const rows = this.wallEdges.rows;
@@ -320,17 +429,83 @@ export class Board {
     for (const object of objects) {
       while (rowIndex < rows.length && rows[rowIndex] * TILE <= object.depth) this.drawWallRow(rows[rowIndex++]);
       if (object.figure) this.drawFigure(object.figure, now);
-      else this.drawDrop(object.drop);
+      else if (object.drop) this.drawDrop(object.drop);
+      else if (object.npc) this.drawNpc(object.npc, now);
+      else this.drawProjectile(object.flight);
     }
     while (rowIndex < rows.length) this.drawWallRow(rows[rowIndex++]);
-    for (const { figure } of objects) if (figure) this.drawFigureLabels(figure, now);
+    for (const { figure, npc } of objects) {
+      if (figure) this.drawFigureLabels(figure, now);
+      if (npc) this.caption(npc.name, (npc.x + .5) * TILE, Math.max(9, npc.y * TILE - 5), '#f5d9a9');
+    }
+    this.impacts = this.impacts.filter((impact) => now - impact.since < IMPACT_MS);
+    for (const impact of this.impacts) this.drawImpact(impact, now);
+    if (aim) this.drawAim(...aim);
     if (!this.dungeon) {
       for (const { figure } of objects) if (figure?.actor.queued) this.drawSign(figure);
     }
+    context.restore();
+  }
+
+  drawNpc(npc, now) {
+    const role = NPC_ROLES.indexOf(npc.role);
+    const x = npc.x * TILE;
+    const y = Math.round((npc.y + .87) * TILE);
+    const image = this.images['inn-npcs'];
+    const frame = Math.floor((now + npc.x * 179 + npc.y * 71) / 660) % 4 === 3 ? 1 : 0;
+    paint(this.context, '#231a15a6', x + 7, y - 3, 18, 5);
+    if (role >= 0 && image.naturalWidth) {
+      tileArt(this.context, image, role, frame, x, y - TILE, TILE);
+    } else {
+      paint(this.context, NPC_COLORS[role] ?? '#a98b6c', x + 10, y - 22, 12, 22);
+    }
+  }
+
+  drawProjectile({ x, y, dx, dy }) {
+    const context = this.context;
+    context.save();
+    context.translate(Math.round((x + .5) * TILE), Math.round((y + .61) * TILE));
+    context.rotate(Math.atan2(dy, dx));
+    paint(context, '#171612', -9, -2, 16, 4);
+    paint(context, '#edc77a', -8, -1, 12, 2);
+    paint(context, '#fff0bf', 3, -2, 4, 4);
+    context.restore();
+  }
+
+  drawImpact({ x, y, amount, since }, now) {
+    const fraction = (now - since) / IMPACT_MS;
+    const px = (x + .5) * TILE;
+    const py = (y + .58) * TILE;
+    const context = this.context;
+    context.save();
+    context.globalAlpha = 1 - fraction;
+    const radius = 2 + Math.round(fraction * 10);
+    const color = amount > 0 ? '#ffa68b' : '#f1bd71';
+    for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      paint(context, color, px + dx * radius, py + dy * radius, 2, 2);
+    }
+    if (amount > 0) this.caption(`-${amount}`, px, py - 15 - fraction * 14, color);
+    context.restore();
+  }
+
+  drawAim(x, y) {
+    const px = (x + .5) * TILE;
+    const py = (y + .5) * TILE;
+    const context = this.context;
+    context.save();
+    context.strokeStyle = '#171612';
+    context.lineWidth = 3;
+    context.strokeRect(px - 12, py - 12, 24, 24);
+    context.strokeStyle = '#ffe1a3';
+    context.lineWidth = 1;
+    context.strokeRect(px - 12, py - 12, 24, 24);
+    paint(context, '#ffe1a3', px - 4, py, 9, 1);
+    paint(context, '#ffe1a3', px, py - 4, 1, 9);
+    context.restore();
   }
 
   drawWallRow(row) {
-    const width = this.canvas.width;
+    const width = this.worldWidth;
     this.context.drawImage(this.wallEdges.image, 0, row * WALL_HEIGHT, width, WALL_HEIGHT,
       0, row * TILE - WALL_HEIGHT, width, WALL_HEIGHT);
   }
@@ -449,9 +624,14 @@ export class Board {
 
   point(event) {
     const rect = this.canvas.getBoundingClientRect();
-    const x = (event.clientX - rect.left) * this.canvas.width / rect.width;
-    const y = (event.clientY - rect.top) * this.canvas.height / rect.height;
+    const x = (event.clientX - rect.left) * this.canvas.width / rect.width + this.viewX;
+    const y = (event.clientY - rect.top) * this.canvas.height / rect.height + this.viewY;
     return [x, y];
+  }
+
+  npcAt(px, py) {
+    return (this.snapshot?.npcs ?? []).find(({ x, y }) =>
+      px >= x * TILE && px < (x + 1) * TILE && py >= (y - .13) * TILE && py < (y + 1) * TILE);
   }
 
   signAt(x, y) {
@@ -463,4 +643,8 @@ export class Board {
   }
 
   cellAt(x, y) { return [Math.floor(x / TILE), Math.floor(y / TILE)]; }
+}
+
+function cameraOffset(focus, world, view) {
+  return view >= world ? (world - view) / 2 : Math.min(world - view, Math.max(0, focus - view / 2));
 }

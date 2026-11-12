@@ -7,10 +7,12 @@ import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.watabou.gltextures.TextureCache;
 import com.watabou.input.PointerEvent;
+import com.watabou.input.ScrollEvent;
+import com.watabou.noosa.Camera;
 import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.Group;
 import com.watabou.noosa.Image;
-import com.watabou.noosa.PointerArea;
+import com.watabou.noosa.ScrollArea;
 import com.watabou.utils.PointF;
 
 import java.util.Comparator;
@@ -24,17 +26,21 @@ final class NativeInnBoard extends Group {
     private static final int BLUE = 0x98d4eb;
     private static final int CREAM = 0xf9e5c8;
     private static final int TILE = 16;
+    private static final int MAX_ZOOM_STEPS = 4;
     private static final String SIGN = "inn/looking-sign.png";
+    private static final String NPC_SPRITES = "inn/inn-npcs.png";
     private static final int[] FLOOR = {0x72503b, 0x79543e, 0x805840, 0x754b36};
 
-    private final float left;
-    private final float top;
-    private final float width;
-    private final float height;
     private final Consumer<InnMotion.Cell> goTo;
     private final Consumer<String> join;
+    private final Consumer<InnApi.Npc> speak;
+    private final Camera boardCamera;
+    private final int viewportWidth;
+    private final int viewportHeight;
+    private final Group world = new Group();
     private final Group figures = new Group();
     private final Map<String, Figure> guests = new HashMap<>();
+    private final Map<String, Figure> npcs = new HashMap<>();
 
     private Image floor;
     private Pixmap floorKey;
@@ -43,33 +49,69 @@ final class NativeInnBoard extends Group {
     private Figure guide;
     private InnMotion.Cell lastPlayer;
     private long lastEvent;
-    private float tile;
-    private float boardX;
-    private float boardY;
+    private int mapWidth;
+    private int mapHeight;
+    private int zoomStep;
+    private float fitZoom;
+    private float wheelDelta;
 
     NativeInnBoard(float left, float top, float width, float height,
                    Consumer<InnMotion.Cell> goTo, Consumer<String> join) {
-        this.left = left;
-        this.top = top;
-        this.width = width;
-        this.height = height;
+        this(left, top, width, height, goTo, join, npc -> {});
+    }
+
+    NativeInnBoard(float left, float top, float width, float height,
+                   Consumer<InnMotion.Cell> goTo, Consumer<String> join, Consumer<InnApi.Npc> speak) {
         this.goTo = goTo;
         this.join = join;
-        add(figures);
-        add(new PointerArea(left, top, width, height) {
+        this.speak = speak;
+        Camera main = Camera.main;
+        float screenLeft = main.x + (left - main.scroll.x) * main.zoom;
+        float screenTop = main.y + (top - main.scroll.y) * main.zoom;
+        int x = (int) Math.ceil(screenLeft);
+        int y = (int) Math.ceil(screenTop);
+        viewportWidth = Math.max(1, (int) Math.floor(screenLeft + width * main.zoom) - x);
+        viewportHeight = Math.max(1, (int) Math.floor(screenTop + height * main.zoom) - y);
+        boardCamera = Camera.add(new Camera(x, y, viewportWidth, viewportHeight, 1));
+        world.camera = boardCamera;
+        add(world);
+        world.add(figures);
+        add(new ScrollArea(left, top, width, height) {
+            @Override
+            protected void onScroll(ScrollEvent event) {
+                if (state == null || event.amount == 0 || !boardCamera.hitTest(event.pos.x, event.pos.y)) return;
+                wheelDelta += event.amount;
+                int steps = (int) wheelDelta;
+                wheelDelta -= steps;
+                int step = Math.max(0, Math.min(MAX_ZOOM_STEPS, zoomStep - steps));
+                if (step == zoomStep) return;
+                zoomStep = step;
+                applyZoom();
+                followPlayer();
+            }
+
             @Override
             protected void onClick(PointerEvent event) {
                 if (state == null || event.button != PointerEvent.LEFT) return;
-                PointF point = camera().screenToCamera((int) event.current.x, (int) event.current.y);
+                if (!boardCamera.hitTest(event.current.x, event.current.y)) return;
+                PointF point = boardCamera.screenToCamera((int) event.current.x, (int) event.current.y);
                 for (Map.Entry<String, Figure> entry : guests.entrySet()) {
                     if (!entry.getKey().equals(state.selfId()) && entry.getValue().hitsSign(point)) {
                         join.accept(entry.getKey());
                         return;
                     }
                 }
-                int x = (int) Math.floor((point.x - boardX) / tile);
-                int y = (int) Math.floor((point.y - boardY) / tile);
-                if (state.walkable(x, y)) goTo.accept(new InnMotion.Cell(x, y));
+                int column = (int) Math.floor(point.x / TILE);
+                int row = (int) Math.floor(point.y / TILE);
+                for (InnApi.Npc npc : state.npcs()) {
+                    Figure figure = npcs.get(npc.id());
+                    if ((npc.x() == column && npc.y() == row) ||
+                            (figure != null && figure.sprite.overlapsPoint(point.x, point.y))) {
+                        speak.accept(npc);
+                        return;
+                    }
+                }
+                if (state.walkable(column, row)) goTo.accept(new InnMotion.Cell(column, row));
             }
         });
     }
@@ -79,11 +121,14 @@ final class NativeInnBoard extends Group {
                 !next.map().equals(map)) {
             for (Figure guest : guests.values()) removeFigure(guest);
             guests.clear();
+            for (Figure npc : npcs.values()) removeFigure(npc);
+            npcs.clear();
             removeFigure(guide);
             guide = null;
             lastPlayer = null;
             lastEvent = 0;
         }
+        boolean npcsChanged = state == null || next == null || !next.npcs().equals(state.npcs());
         state = next;
         if (state == null) {
             if (floor != null) floor.visible = false;
@@ -92,6 +137,17 @@ final class NativeInnBoard extends Group {
         if (!state.map().equals(map)) rebuildFloor(state.map());
         floor.visible = true;
         long now = System.nanoTime();
+        if (npcsChanged || npcs.size() != state.npcs().size()) {
+            for (Figure npc : npcs.values()) removeFigure(npc);
+            npcs.clear();
+            for (InnApi.Npc npc : state.npcs()) {
+                InnMotion.Cell cell = new InnMotion.Cell(npc.x(), npc.y());
+                Figure figure = new Figure(new InnMotion(cell, npc.id().hashCode()), npc.name(),
+                    false, false, npcColumn(npc.role()));
+                figures.add(figure);
+                npcs.put(npc.id(), figure);
+            }
+        }
         List<String> ids = state.people().stream().map(InnApi.Person::id).toList();
         guests.entrySet().removeIf(entry -> {
             if (ids.contains(entry.getKey())) return false;
@@ -145,8 +201,10 @@ final class NativeInnBoard extends Group {
         if (state != null) {
             long now = System.nanoTime();
             for (Figure guest : guests.values()) guest.pose(guest.motion.pose(now));
+            for (Figure npc : npcs.values()) npc.pose(npc.motion.pose(now));
             if (guide != null) guide.pose(guide.motion.pose(now));
             figures.sort(Comparator.nullsLast(Comparator.comparingDouble(g -> ((Figure) g).depth)));
+            followPlayer();
         }
         super.update();
     }
@@ -154,11 +212,12 @@ final class NativeInnBoard extends Group {
     @Override
     public void destroy() {
         super.destroy();
+        Camera.remove(boardCamera);
         if (floorKey != null) TextureCache.remove(floorKey);
     }
 
     private Figure addFigure(InnMotion.Cell cell, int phase, String name, boolean own, boolean companion) {
-        Figure figure = new Figure(new InnMotion(cell, phase), name, own, companion);
+        Figure figure = new Figure(new InnMotion(cell, phase), name, own, companion, -1);
         figures.add(figure);
         return figure;
     }
@@ -188,24 +247,57 @@ final class NativeInnBoard extends Group {
 
     private void rebuildFloor(List<String> rows) {
         if (floor != null) {
-            erase(floor);
+            world.erase(floor);
             floor.destroy();
             TextureCache.remove(floorKey);
         }
         map = rows;
         int columns = rows.getFirst().length();
-        tile = Math.max(1, (float) Math.floor(Math.min((width - 4) / columns, (height - 8) / rows.size())));
-        boardX = PixelScene.align(left + (width - columns * tile) / 2);
-        boardY = PixelScene.align(top + (height - rows.size() * tile) / 2);
-        floorKey = new Pixmap(columns * TILE, rows.size() * TILE, Pixmap.Format.RGBA8888);
+        mapWidth = columns * TILE;
+        mapHeight = rows.size() * TILE;
+        float fit = Math.min((float) viewportWidth / mapWidth, (float) viewportHeight / mapHeight);
+        fitZoom = fit < 1f ? fit : (float) Math.floor(fit);
+        applyZoom();
+        floorKey = new Pixmap(mapWidth, mapHeight, Pixmap.Format.RGBA8888);
         for (int y = 0; y < rows.size(); y++) {
             for (int x = 0; x < columns; x++) paintTile(floorKey, x, y, rows.get(y).charAt(x));
         }
         floor = new Image(floorKey);
-        floor.x = boardX;
-        floor.y = boardY;
-        floor.scale.set(tile / TILE);
-        addToBack(floor);
+        world.addToBack(floor);
+    }
+
+    private void applyZoom() {
+        float zoom = zoomStep == 0 ? fitZoom : (float) Math.floor(fitZoom) + zoomStep;
+        // Keep the physical scissor rectangle fixed while the visible world area changes.
+        boardCamera.zoom = zoom;
+        boardCamera.width = (int) Math.ceil(viewportWidth / zoom);
+        boardCamera.height = (int) Math.ceil(viewportHeight / zoom);
+    }
+
+    private void followPlayer() {
+        Figure player = guests.get(state.selfId());
+        if (player == null) return;
+        float zoom = boardCamera.zoom;
+        boardCamera.scroll.set(
+            cameraScroll(player.sprite.x + player.sprite.width() / 2, mapWidth, viewportWidth, zoom),
+            cameraScroll(player.depth + 2 - TILE / 2f, mapHeight, viewportHeight, zoom));
+    }
+
+    private static float cameraScroll(float target, int mapSize, int viewportSize, float zoom) {
+        float visible = viewportSize / zoom;
+        if (visible >= mapSize) return Math.round((mapSize - visible) * zoom / 2) / zoom;
+        float aligned = Math.round((target - visible / 2) * zoom) / zoom;
+        return Math.max(0, Math.min(mapSize - visible, aligned));
+    }
+
+    private static int npcColumn(String role) {
+        return switch (role) {
+            case "guard" -> 0;
+            case "innkeeper" -> 1;
+            case "vendor" -> 2;
+            case "bard" -> 3;
+            default -> 4;
+        };
     }
 
     private static void paintTile(Pixmap map, int column, int row, char kind) {
@@ -253,8 +345,8 @@ final class NativeInnBoard extends Group {
 
     private final class Figure extends Group {
         private final InnMotion motion;
-        private final boolean own;
         private final boolean companion;
+        private final int npcColumn;
         private final Image sprite;
         private final ColorBlock marker;
         private final ColorBlock nameplate = new ColorBlock(1, 1, 0xe1231817);
@@ -266,11 +358,11 @@ final class NativeInnBoard extends Group {
         private int frame = -1;
         private float depth;
 
-        Figure(InnMotion motion, String name, boolean own, boolean companion) {
+        Figure(InnMotion motion, String name, boolean own, boolean companion, int npcColumn) {
             this.motion = motion;
-            this.own = own;
             this.companion = companion;
-            sprite = new Image(own ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE);
+            this.npcColumn = npcColumn;
+            sprite = new Image(npcColumn >= 0 ? NPC_SPRITES : own ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE);
             marker = new ColorBlock(1, 1, own ? 0xffefbb77 : companion ? 0xff98d4eb : 0x99231613);
             add(marker);
             add(sprite);
@@ -309,33 +401,32 @@ final class NativeInnBoard extends Group {
         }
 
         void pose(InnMotion.Pose pose) {
-            float scale = tile / TILE;
-            float center = boardX + ((float) pose.x() + .5f) * tile;
-            depth = boardY + ((float) pose.y() + 1f) * tile - 2f * scale;
+            float center = ((float) pose.x() + .5f) * TILE;
+            depth = ((float) pose.y() + 1f) * TILE - 2f;
             if (frame != pose.frame() || sprite.flipHorizontal != pose.facingLeft()) {
                 frame = pose.frame();
                 sprite.flipHorizontal = pose.facingLeft();
-                sprite.frame(frame * 12, 0, 12, 15);
+                if (npcColumn >= 0) sprite.frame(npcColumn * TILE, frame * TILE, TILE, TILE);
+                else sprite.frame(frame * 12, 0, 12, 15);
             }
-            sprite.scale.set(scale);
             sprite.x = center - sprite.width() / 2;
             sprite.y = depth - sprite.height();
-            marker.size(10 * scale, Math.max(1f, scale * 2));
+            marker.size(10, 2);
             marker.x = center - marker.width() / 2;
             marker.y = depth;
-            float labelX = Math.max(left + 2, Math.min(left + width - label.width() - 2, center - label.width() / 2));
-            float labelY = Math.max(top + 1, sprite.y - label.height() - (companion ? 8 : 2));
+            float labelX = Math.max(2, Math.min(mapWidth - label.width() - 2, center - label.width() / 2));
+            float labelY = Math.max(1, sprite.y - label.height() - (companion ? 8 : 2));
             label.setPos(labelX, labelY);
             nameplate.size(label.width() + 2, label.height() + 2);
             nameplate.x = labelX - 1;
             nameplate.y = labelY - 1;
             mug.visible = pose.drinkSeconds() >= 0;
-            mug.x = center + (pose.facingLeft() ? -6 : 4) * scale;
-            mug.y = sprite.y + (float) Math.min(pose.drinkSeconds() * 8, 6) * scale;
+            mug.x = center + (pose.facingLeft() ? -6 : 4);
+            mug.y = sprite.y + (float) Math.min(pose.drinkSeconds() * 8, 6);
             if (sign != null && sign.visible) {
                 sign.scale.set(.72f);
-                sign.x = Math.max(left + 1, Math.min(left + width - sign.width() - 1, center - sign.width() / 2));
-                sign.y = Math.max(top, labelY - sign.height() + 2);
+                sign.x = Math.max(1, Math.min(mapWidth - sign.width() - 1, center - sign.width() / 2));
+                sign.y = Math.max(0, labelY - sign.height() + 2);
                 if (sign.y + sign.height() >= labelY + 2) {
                     label.visible = false;
                     nameplate.visible = false;

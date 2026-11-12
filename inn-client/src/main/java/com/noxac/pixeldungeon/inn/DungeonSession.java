@@ -55,6 +55,7 @@ final class DungeonSession implements AutoCloseable {
     private final String matchId;
     private final InnApi.Person practicePlayer;
     private final String theme;
+    private final boolean friendlyFire;
     private final BiConsumer<DungeonSession, Frame> listener;
     private final ScheduledThreadPoolExecutor network = new ScheduledThreadPoolExecutor(1,
         task -> new Thread(task, "dungeon-link"));
@@ -98,11 +99,17 @@ final class DungeonSession implements AutoCloseable {
 
     DungeonSession(InnApi api, String key, String matchId, InnApi.Person practicePlayer, String theme,
                    BiConsumer<DungeonSession, Frame> listener) {
+        this(api, key, matchId, practicePlayer, theme, false, listener);
+    }
+
+    DungeonSession(InnApi api, String key, String matchId, InnApi.Person practicePlayer, String theme,
+                   boolean friendlyFire, BiConsumer<DungeonSession, Frame> listener) {
         this.api = api;
         this.key = key;
         this.matchId = matchId;
         this.practicePlayer = practicePlayer;
         this.theme = DungeonLayout.themeOrDefault(theme);
+        this.friendlyFire = friendlyFire;
         this.listener = listener;
         network.execute(this::enter);
         network.scheduleAtFixedRate(this::tick, 0, 25, TimeUnit.MILLISECONDS);
@@ -112,7 +119,7 @@ final class DungeonSession implements AutoCloseable {
         if (closed) return;
         if (practicePlayer != null) {
             host = true;
-            battle = new HostBattle(UUID.randomUUID().toString(), practicePlayer, null, now(), seed(), theme);
+            battle = new HostBattle(UUID.randomUUID().toString(), practicePlayer, null, now(), seed(), theme, friendlyFire);
             tick();
             return;
         }
@@ -245,7 +252,7 @@ final class DungeonSession implements AutoCloseable {
             host = "host".equals(next.role());
             if (host) {
                 battle = new HostBattle(next.id(), person(next.selfId(), next.selfName()),
-                    person(next.partnerId(), next.partnerName()), now(), seed(), theme);
+                    person(next.partnerId(), next.partnerName()), now(), seed(), theme, friendlyFire);
             }
             openPeer();
         }
@@ -350,7 +357,8 @@ final class DungeonSession implements AutoCloseable {
 
     private boolean validSnapshot(InnApi.DungeonState state) {
         return state != null && matchId.equals(state.id()) && link.selfId().equals(state.selfId()) &&
-            (frame == null || state.revision() >= frame.state().revision() && state.theme().equals(frame.state().theme())) &&
+            (frame == null || state.revision() >= frame.state().revision() &&
+                state.theme().equals(frame.state().theme()) && state.friendlyFire() == frame.state().friendlyFire()) &&
             state.map() != null && !state.map().isEmpty() && state.map().getFirst() != null &&
             !state.map().getFirst().isEmpty() &&
             state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
@@ -362,7 +370,27 @@ final class DungeonSession implements AutoCloseable {
                 drop != null && drop.id() != null && drop.item() != null) &&
             state.messages().size() <= 16 && state.messages().stream().allMatch(message ->
                 message != null && message.actorId() != null && message.name() != null && message.text() != null) &&
+            state.attackEvents().size() <= 16 && state.attackEvents().stream().allMatch(event ->
+                event != null && event.id() > 0 && event.at() >= 0 && event.actorId() != null && event.amount() >= 0 &&
+                    ("attack".equals(event.action()) || "shoot".equals(event.action())) &&
+                    validAttackResult(event.result()) && mapCell(state, event.x(), event.y())) &&
+            state.projectiles().size() <= 8 && state.projectiles().stream().allMatch(projectile ->
+                projectile != null && projectile.id() > 0 && projectile.ownerId() != null && projectile.stepAt() >= 0 &&
+                    mapCell(state, projectile.x(), projectile.y()) &&
+                    mapCell(state, projectile.nextX(), projectile.nextY()) &&
+                    Math.max(Math.abs(projectile.nextX() - projectile.x()), Math.abs(projectile.nextY() - projectile.y())) == 1) &&
             ("active".equals(state.status()) || "won".equals(state.status()) || "lost".equals(state.status()));
+    }
+
+    private static boolean validAttackResult(String result) {
+        return result != null && switch (result) {
+            case "hit", "out_of_reach", "blocked", "target_gone", "miss", "ally_blocked" -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean mapCell(InnApi.DungeonState state, int x, int y) {
+        return y >= 0 && y < state.map().size() && x >= 0 && x < state.map().get(y).length();
     }
 
     private void acceptSnapshot(InnApi.DungeonState next) {
@@ -386,7 +414,7 @@ final class DungeonSession implements AutoCloseable {
                 long time = frame.serverTime();
                 state = new InnApi.DungeonState(state.id(), state.selfId(), time, state.map(), state.actors(),
                     null, "closed", false, state.revision(), state.drops(), state.commandAck(), false, state.theme(),
-                    frame.wallTime(), 0, state.pauseReadyAt(), state.messages());
+                    frame.wallTime(), 0, state.pauseReadyAt(), state.messages(), state.friendlyFire(), state.attackEvents(), List.of());
             }
             publish(state, frame.hostAtReceipt(), frame.receivedAt(), notice);
         }

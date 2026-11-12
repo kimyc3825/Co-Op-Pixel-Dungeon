@@ -32,15 +32,32 @@
             <dl>
               <div><dt>이동</dt><dd>WASD · 방향키 · 칸 클릭</dd></div>
               <div><dt>대각선</dt><dd>방향 조합 · 숫자패드</dd></div>
+              <div><dt>여관</dt><dd>휠로 확대 · 주민 클릭 또는 근처에서 Enter</dd></div>
               <div><dt>평타</dt><dd>Space · 적 클릭</dd></div>
+              <div><dt>사격</dt><dd>R · 칸 선택 · 행동력 2</dd></div>
               <div><dt>식량</dt><dd>E · 행동력 3</dd></div>
               <div><dt>일시정지</dt><dd>P · 파티 공유</dd></div>
             </dl>
           </aside>
+          <aside id="inn-dialogue" class="inn-dialogue" aria-labelledby="npc-name" hidden>
+            <div><h3 id="npc-name"></h3><p id="npc-dialogue" aria-live="polite"></p></div>
+            <button id="npc-close" type="button">닫기</button>
+          </aside>
           <p id="battle-overlay" class="battle-overlay" hidden></p>
+          <aside id="loading-overlay" class="loading-overlay" aria-labelledby="loading-phase" hidden>
+            <div id="loading-ember" class="loading-ember" aria-hidden="true"></div>
+            <p id="loading-phase" role="status"></p>
+            <p id="loading-tip" aria-hidden="true"></p>
+            <div class="loading-actions">
+              <button id="loading-retry" class="primary" type="button" hidden>다시 시도</button>
+              <button id="loading-close" type="button" hidden>닫기</button>
+            </div>
+          </aside>
         </div>
         <footer class="stage-footer">
           <p id="notice" class="notice" role="status" aria-live="polite"></p>
+          <p id="aim-hint" class="aim-hint" role="status" hidden>최대 5칸. 쏠 칸을 누르거나 방향키로 조준하고 Enter를 누르세요.</p>
+          <ol id="attack-log" class="attack-log" role="log" aria-label="공격 결과" aria-live="polite" aria-relevant="additions" hidden></ol>
           <div id="touch-controls" class="touch-controls" aria-label="터치 조작" hidden>
             <div class="dpad" aria-label="이동 방향">
               <button data-direction="-1,-1" type="button" aria-label="왼쪽 위">↖</button>
@@ -55,6 +72,7 @@
             </div>
             <div id="touch-battle" class="touch-battle" hidden>
               <button class="primary" id="touch-attack" type="button">평타</button>
+              <button id="touch-shoot" type="button" aria-pressed="false">사격</button>
               <button id="touch-eat" type="button">식량</button>
             </div>
           </div>
@@ -77,12 +95,13 @@
             <h2 id="expedition-heading">던전 입장</h2>
             <div class="theme-choice">
               <label for="dungeon-theme">던전 테마</label>
-              <select id="dungeon-theme" aria-describedby="theme-hint">
+              <select id="dungeon-theme" aria-describedby="party-rules-hint">
                 <option value="sewers">하수도</option>
                 <option value="prison">버려진 감옥</option>
               </select>
-              <p id="theme-hint">파티 원정은 파티장이 고른 테마로 진행합니다.</p>
             </div>
+            <label class="party-option"><input id="friendly-fire" type="checkbox" aria-describedby="party-rules-hint"> 아군 공격 허용</label>
+            <p id="party-rules-hint" class="party-rules-hint">파티장이 던전 테마와 아군 공격 규칙을 정합니다.</p>
             <button class="primary wide" id="match" type="button" disabled>동료 찾기</button>
             <ul id="seekers" class="seekers" aria-label="동료를 찾는 모험가" hidden></ul>
             <button id="guide" class="wide" type="button" disabled>연습 모드 · 길잡이</button>
@@ -107,12 +126,14 @@
         <div id="dungeon-panel" hidden>
           <section class="card" aria-labelledby="party-heading">
             <h2 id="party-heading">파티</h2>
+            <p id="party-rules" class="party-rules"></p>
             <div id="party" class="party"></div>
             <p id="queued" class="queue" hidden></p>
           </section>
           <section class="card actions-card" aria-labelledby="actions-heading">
             <h2 id="actions-heading">행동</h2>
             <button class="primary wide" id="attack" type="button">평타 <kbd>Space</kbd></button>
+            <button class="wide" id="shoot" type="button" aria-pressed="false">사격 <kbd>R</kbd></button>
             <button class="wide" id="eat" type="button">식량 <kbd>E</kbd></button>
             <button class="wide return" id="return" type="button">여관으로</button>
           </section>

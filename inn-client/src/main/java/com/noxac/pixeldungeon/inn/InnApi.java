@@ -17,6 +17,7 @@ import java.util.concurrent.CompletionException;
 
 final class InnApi {
     record Person(String id, String name, int x, int y, boolean queued) {}
+    record Npc(String id, String name, String role, int x, int y, String dialogue) {}
     record Event(long id, String playerId, String name, String kind, String text, long time) {}
     record Match(String id, String role, String partnerName) {}
     record Action(String type, int dx, int dy, String target) {}
@@ -25,14 +26,29 @@ final class InnApi {
                      double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations) {}
     record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
     record PartyChat(long id, String actorId, String name, String text) {}
+    record BattleEvent(long id, String action, String result, String actorId, String targetId,
+                       int x, int y, int amount, long at) {}
+    record Projectile(long id, String ownerId, int x, int y, int nextX, int nextY, long stepAt) {}
     record DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
                         Action queued, String status, boolean waitingForPartner, int revision,
                         List<Drop> drops, long commandAck, boolean inCombat, String theme,
-                        long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages) {
+                        long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
+                        boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles) {
         DungeonState {
             theme = DungeonLayout.themeOrDefault(theme);
             if (wallNow == 0) wallNow = now;
             if (messages == null) messages = List.of();
+            if (attackEvents == null) attackEvents = List.of();
+            if (projectiles == null) projectiles = List.of();
+        }
+
+        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
+                     Action queued, String status, boolean waitingForPartner, int revision,
+                     List<Drop> drops, long commandAck, boolean inCombat, String theme,
+                     long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages) {
+            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
+                drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt, messages,
+                false, List.of(), List.of());
         }
 
         DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
@@ -55,7 +71,15 @@ final class InnApi {
                      String message, long messageSeq) {}
 
     record State(String selfId, List<Person> people, List<String> map, List<Event> events,
-                 long after, long now, boolean queued, Match match) {
+                 long after, long now, boolean queued, Match match, List<Npc> npcs) {
+        State {
+            if (npcs == null) npcs = List.of();
+        }
+
+        State(String selfId, List<Person> people, List<String> map, List<Event> events,
+              long after, long now, boolean queued, Match match) {
+            this(selfId, people, map, events, after, now, queued, match, List.of());
+        }
         Person self() {
             return people.stream().filter(person -> person.id().equals(selfId)).findFirst().orElseThrow();
         }
@@ -64,7 +88,7 @@ final class InnApi {
             List<Person> updated = people.stream()
                 .map(person -> person.id().equals(selfId) ? new Person(selfId, person.name(), x, y, person.queued()) : person)
                 .toList();
-            return new State(selfId, updated, map, events, after, now, queued, match);
+            return new State(selfId, updated, map, events, after, now, queued, match, npcs);
         }
 
         boolean walkable(int x, int y) {
@@ -119,7 +143,7 @@ final class InnApi {
     }
 
     State enter(String name, String key, long after) throws IOException, InterruptedException {
-        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 6)));
+        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 7)));
     }
 
     State sync(String key, long after) throws IOException, InterruptedException {
@@ -182,6 +206,11 @@ final class InnApi {
                 state.events() != null && state.map() != null && !state.map().isEmpty() &&
                 state.map().getFirst() != null && !state.map().getFirst().isEmpty() &&
                 state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
+                state.npcs().size() <= 16 && state.npcs().stream().allMatch(npc ->
+                    npc != null && npc.id() != null && npc.name() != null && npc.role() != null && npc.dialogue() != null &&
+                    npc.y() >= 0 && npc.y() < state.map().size() &&
+                    npc.x() >= 0 && npc.x() < state.map().get(npc.y()).length() &&
+                    state.map().get(npc.y()).charAt(npc.x()) == 'N') &&
                 state.people().stream().allMatch(person -> person != null && person.id() != null &&
                     person.name() != null && state.walkable(person.x(), person.y())) &&
                 state.people().stream().anyMatch(person -> person.id().equals(state.selfId()))) {

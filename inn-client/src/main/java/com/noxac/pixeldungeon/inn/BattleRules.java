@@ -5,6 +5,10 @@ final class BattleRules {
     static final int ENERGY_CAP = 10;
     static final int MOVE_COST = 1;
     static final int ATTACK_COST = 1;
+    static final int SHOOT_COST = 2;
+    static final int SHOOT_RANGE = 5;
+    static final int SHOOT_DAMAGE = 3;
+    static final int PROJECTILE_STEP_MS = 100;
     static final int EAT_COST = 3;
     static final int MOVE_COOLDOWN_MS = 180;
     static final int ATTACK_COOLDOWN_MS = 800;
@@ -18,6 +22,7 @@ final class BattleRules {
         return switch (type) {
             case "move" -> inCombat ? MOVE_COST : 0;
             case "attack" -> ATTACK_COST;
+            case "shoot" -> SHOOT_COST;
             case "eat" -> EAT_COST;
             default -> throw new IllegalArgumentException("Unknown battle action");
         };
@@ -31,7 +36,7 @@ final class BattleRules {
     static long readyAt(InnApi.Combatant actor, String type, long snapshotNow, boolean inCombat) {
         long gate = switch (type) {
             case "move" -> actor.moveReadyAt();
-            case "attack" -> actor.attackReadyAt();
+            case "attack", "shoot" -> actor.attackReadyAt();
             default -> 0;
         };
         double missing = cost(type, inCombat) - actor.energy();

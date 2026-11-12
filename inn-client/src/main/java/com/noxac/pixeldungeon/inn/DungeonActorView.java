@@ -16,7 +16,6 @@ final class DungeonActorView extends Group {
     private static final float PREDICTION_TIMEOUT = 0.55f;
     private static final float STRIDE_GRACE = 0.065f;
     private static final float ATTACK_DURATION = 0.28f;
-    private static final float WINDUP_DURATION = 0.13f;
     private static final float DAMAGE_DURATION = 0.62f;
     private static final float FOOT_OFFSET = 0.89f;
 
@@ -51,9 +50,6 @@ final class DungeonActorView extends Group {
     private float attackTime = ATTACK_DURATION;
     private float attackX;
     private float attackY;
-    private float windupTime = WINDUP_DURATION;
-    private float windupX;
-    private float windupY;
     private float healthChangeTime = DAMAGE_DURATION;
     private boolean hurt;
     private float deadTime;
@@ -123,14 +119,6 @@ final class DungeonActorView extends Group {
         strideTo(actor.x() + dx, actor.y() + dy, dx);
     }
 
-    void previewAttack(int dx, int dy) {
-        if (actor.hp() <= 0 || attackTime < ATTACK_DURATION || windupTime < WINDUP_DURATION) return;
-        windupTime = 0;
-        windupX = dx;
-        windupY = dy;
-        face(dx);
-    }
-
     void cancelPreviewMove() {
         if (!predictedMove) return;
         predictedMove = false;
@@ -161,7 +149,6 @@ final class DungeonActorView extends Group {
             predictedMove = false;
         }
         if (actionChanged && "attack".equals(next.lastAction()) && age <= 1_200 && next.hp() > 0) {
-            windupTime = WINDUP_DURATION;
             attackTime = 0;
             attackX = target == null ? 0 : target.x() - next.x();
             attackY = target == null ? 0 : target.y() - next.y();
@@ -174,15 +161,16 @@ final class DungeonActorView extends Group {
         if (next.hp() != actor.hp()) {
             int change = next.hp() - actor.hp();
             hurt = change < 0;
-            healthChange.text(hurt ? String.valueOf(change) : "+" + change);
-            healthChange.hardlight(hurt ? NativeDungeonScene.ENEMY : NativeDungeonScene.ALLY);
+            if (!hurt) {
+                healthChange.text("+" + change);
+                healthChange.hardlight(NativeDungeonScene.ALLY);
+            }
             healthChangeTime = 0;
             if (hurt) Sample.INSTANCE.play(Assets.Sounds.HIT, 0.45f);
         }
         if (actor.hp() > 0 && next.hp() <= 0) {
             deadTime = 0;
             attackTime = ATTACK_DURATION;
-            windupTime = WINDUP_DURATION;
             predictedMove = false;
             strideTo(next.x(), next.y(), 0);
             sprite.play(death, true);
@@ -203,7 +191,6 @@ final class DungeonActorView extends Group {
         strideIdle = stepTime < stepDuration ? 0 : Math.min(STRIDE_GRACE, strideIdle + Game.elapsed);
         stepTime = Math.min(stepDuration, stepTime + Game.elapsed);
         attackTime = Math.min(ATTACK_DURATION, attackTime + Game.elapsed);
-        windupTime = Math.min(WINDUP_DURATION, windupTime + Game.elapsed);
         healthChangeTime = Math.min(DAMAGE_DURATION, healthChangeTime + Game.elapsed);
         if (actor.hp() > 0) {
             if (attackTime >= ATTACK_DURATION) {
@@ -224,12 +211,11 @@ final class DungeonActorView extends Group {
         float base = mapY + depth() * tile;
         float scale = tile / 16;
         float lunge = (float) Math.sin(Math.PI * attackTime / ATTACK_DURATION) * tile * 0.24f;
-        float windup = (float) Math.sin(Math.PI * windupTime / WINDUP_DURATION) * tile * 0.10f;
 
         sprite.scale.set(scale);
         sprite.flipHorizontal = facingLeft;
-        sprite.x = center - sprite.width() / 2 + lunge * attackX - windup * windupX;
-        sprite.y = base - sprite.height() + lunge * attackY - windup * windupY;
+        sprite.x = center - sprite.width() / 2 + lunge * attackX;
+        sprite.y = base - sprite.height() + lunge * attackY;
         sprite.resetColor();
         if (hurt && healthChangeTime < 0.19f) sprite.tint(0xF6A48A, (1 - healthChangeTime / 0.19f) * 0.8f);
         if (actor.hp() <= 0) sprite.alpha(Math.max(0.18f, 1 - Math.max(0, deadTime - 0.31f) * 1.8f));
@@ -247,7 +233,7 @@ final class DungeonActorView extends Group {
 
         name.visible = actor.hp() > 0 && !name.text().isBlank();
         if (name.visible) name.setPos(center - name.width() / 2, sprite.y - 7);
-        healthChange.visible = healthChangeTime < DAMAGE_DURATION;
+        healthChange.visible = !hurt && healthChangeTime < DAMAGE_DURATION;
         if (healthChange.visible) {
             healthChange.setPos(center - healthChange.width() / 2, sprite.y - 7 - 13 * healthChangeTime / DAMAGE_DURATION);
             healthChange.alpha(1 - healthChangeTime / DAMAGE_DURATION);

@@ -24,6 +24,7 @@ final class NativeClient {
     private static long noticeUntil;
     private static String nickname;
     private static String expeditionTheme = DungeonLayout.SEWERS;
+    private static boolean friendlyFire;
     private static boolean testMode;
     private static boolean leftInn;
     private static volatile boolean shuttingDown;
@@ -54,6 +55,11 @@ final class NativeClient {
     static void setTestMode(boolean enabled) { testMode = enabled; }
 
     static String expeditionTheme() { return expeditionTheme; }
+    static boolean friendlyFire() { return friendlyFire; }
+
+    static void toggleFriendlyFire() {
+        if (canChooseExpeditionTheme()) friendlyFire = !friendlyFire;
+    }
 
     static String expeditionThemeTitle(String theme) {
         return DungeonLayout.PRISON.equals(theme) ? "버려진 감옥" : "하수도";
@@ -97,9 +103,10 @@ final class NativeClient {
         view = View.ENTERING;
         leftInn = false;
         innNotice = matchId == null ? "길잡이와 던전에 들어가는 중…" : "파티 던전에 들어가는 중…";
-        dungeon = new DungeonSession(api, inn.sessionKey(), matchId, practicePlayer, expeditionTheme, (source, frame) -> {
-            if (!shuttingDown) Gdx.app.postRunnable(() -> onDungeon(source, frame));
-        });
+        dungeon = new DungeonSession(api, inn.sessionKey(), matchId, practicePlayer, expeditionTheme, friendlyFire,
+            (source, frame) -> {
+                if (!shuttingDown) Gdx.app.postRunnable(() -> onDungeon(source, frame));
+            });
     }
 
     private static void onDungeon(DungeonSession source, DungeonSession.Frame frame) {
@@ -135,6 +142,10 @@ final class NativeClient {
 
     static void dungeonAttack(String targetId) {
         if (view == View.DUNGEON && targetId != null) dungeon.action(new InnApi.Action("attack", 0, 0, targetId));
+    }
+
+    static void dungeonShoot(int x, int y) {
+        if (view == View.DUNGEON) dungeon.action(new InnApi.Action("shoot", 0, 0, x + "," + y));
     }
 
     static void dungeonEat() {

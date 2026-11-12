@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { BattleRules } from './battle.mjs';
+import { BattleRules, PRISON } from './rules.mjs';
 import { Board, canStep, canStrike, nextToward } from './board.mjs';
-import { PRISON } from './layout.mjs';
 import { PlaySession } from './session.mjs';
 
 const byId = (id) => document.getElementById(id);
 const board = new Board(byId('board'));
 const fields = Object.fromEntries([
   'scene-title', 'connection', 'board-title', 'board-status', 'help', 'help-toggle', 'pause', 'battle-overlay', 'notice',
-  'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'match', 'guide', 'drink', 'seekers',
-  'chat-form', 'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'queued', 'attack', 'eat', 'return',
-  'touch-controls', 'touch-battle', 'touch-attack', 'touch-eat', 'backpack', 'backpack-hint',
+  'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'friendly-fire', 'match', 'guide', 'drink', 'seekers',
+  'chat-form', 'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
+  'touch-controls', 'touch-battle', 'touch-attack', 'touch-shoot', 'touch-eat', 'backpack', 'backpack-hint', 'attack-log', 'aim-hint',
   'dungeon-chat-log', 'dungeon-chat-form', 'dungeon-chat-message', 'dungeon-chat-send',
+  'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
+  'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
 ].map((id) => [id, byId(id)]));
 
 const keys = new Map([
@@ -24,6 +25,20 @@ const keys = new Map([
 const MOVE_QUEUE_LEAD = 70;
 const ACK_WAIT = 550;
 const MOVE_RETRY = 60;
+const ATTACK_FEEDBACK_AGE = 1800;
+const ATTACK_RESULTS = {
+  out_of_reach: '사거리 벗어남',
+  blocked: '벽에 막힘',
+  target_gone: '대상 쓰러짐',
+  miss: '빗나감',
+  ally_blocked: '아군에 막힘',
+};
+const LOADING_TIPS = [
+  '대장장이가 무기를 제련하는 중…',
+  '길잡이가 맥주를 한 잔 더 주문하는 중…',
+  '하수도 쥐가 순찰 경로를 확인하는 중…',
+  '등불에 기름을 채우는 중…',
+];
 const held = new Map();
 const busy = new Set();
 const party = new Map();
@@ -34,6 +49,7 @@ let direction;
 let tap;
 let destination;
 let selected;
+let aimCell = null;
 let submitted;
 let queuedPreview;
 let lastMoveAt = 0;
@@ -41,11 +57,17 @@ let noticeUntil = 0;
 let localNotice = '';
 let connectionNotice = '';
 let lastBattle;
+let lastAttackEventId = 0;
 let seekersKey = '';
 let frozenAt = null;
 let frozenDuration = 0;
 let pauseRequest = null;
 let selectedSlot = -1;
+let wheelTotal = 0;
+let lastWheelAt = 0;
+let loading = null;
+let loadingTipIndex = 0;
+let loadingTipTimer = null;
 
 const play = new PlaySession({
   onInn(state) {
@@ -56,6 +78,8 @@ const play = new PlaySession({
   onBattle(frame) {
     if (!frame) {
       clearMovement();
+      setAim(null);
+      clearAttackLog();
       lastBattle = selected = submitted = queuedPreview = null;
       resetVisualClock();
       board.set(play.inn, false);
@@ -67,6 +91,9 @@ const play = new PlaySession({
     if (prior?.id !== state.id) {
       clearMovement();
       resetVisualClock();
+      clearAttackLog();
+      setAim(null);
+      showDialogue();
       selected = submitted = queuedPreview = null;
       selectedSlot = -1;
       party.clear();
@@ -75,9 +102,14 @@ const play = new PlaySession({
       fields['dungeon-chat-log'].replaceChildren();
       delete fields['dungeon-chat-log'].dataset.events;
     }
+    const artChanged = prior?.id !== state.id || board.assetVersion !== frame.assetVersion;
     const now = performance.now();
     syncVisualClock(isPaused(state), now);
-    board.set(state, true, visualTime(now));
+    board.set(state, true, visualTime(now), frame.assetVersion);
+    if (artChanged) fields.backpack.style.setProperty('--items-atlas', `url("${board.images.items.src}")`);
+    const attackEvents = recentAttackEvents(state, frame.serverTime());
+    board.showAttackEvents(attackEvents, visualTime(now));
+    showAttackResults(state, attackEvents);
     if (submitted && state.commandAck > submitted.ack) {
       const actor = ownActor(state);
       const old = ownActor(prior);
@@ -94,6 +126,7 @@ const play = new PlaySession({
     if (!play.frame) updateInn();
     updateNotice(performance.now());
   },
+  onLoading: updateLoading,
 });
 
 function text(element, value) {
@@ -159,6 +192,40 @@ function loadName() {
 
 function focusBoard() { board.canvas.focus({ preventScroll: true }); }
 
+function isRuntimeLoading() {
+  return loading?.phase === 'checking' || loading?.phase === 'loading';
+}
+
+function updateLoading(state) {
+  loading = state.phase === 'ready' || state.cancelled ? null : state;
+  const active = isRuntimeLoading();
+  const failed = loading?.phase === 'failed';
+  fields['loading-overlay'].hidden = !active && !failed;
+  fields['loading-ember'].hidden = !active;
+  fields['loading-retry'].hidden = fields['loading-close'].hidden = !failed;
+  board.canvas.setAttribute('aria-busy', String(active));
+  if (active) {
+    text(fields['loading-phase'], state.phase === 'checking' ? '게임 버전 확인 중' : '던전 불러오는 중');
+    if (loadingTipTimer === null) {
+      clearMovement();
+      text(fields['loading-tip'], LOADING_TIPS[loadingTipIndex]);
+      loadingTipTimer = setInterval(() => {
+        loadingTipIndex = (loadingTipIndex + 1) % LOADING_TIPS.length;
+        text(fields['loading-tip'], LOADING_TIPS[loadingTipIndex]);
+      }, 1800);
+    }
+  } else {
+    clearInterval(loadingTipTimer);
+    loadingTipTimer = null;
+    if (failed) {
+      text(fields['loading-phase'], '던전을 불러오지 못했습니다');
+      text(fields['loading-tip'], '');
+      text(fields['loading-retry'], state.practice ? '다시 시도' : '다시 매칭');
+    }
+  }
+  updateScene();
+}
+
 function updateScene() {
   const dungeon = Boolean(play.frame);
   const title = dungeon ? (play.frame.state.theme === PRISON ? '버려진 감옥' : '하수도') : '여관';
@@ -172,7 +239,7 @@ function updateScene() {
   const tabTitle = `${title} · Noxac Pixel Dungeon`;
   if (document.title !== tabTitle) document.title = tabTitle;
   board.canvas.setAttribute('aria-label', dungeon
-    ? `${title} 지도. 방향키로 이동하고 스페이스로 평타를 사용합니다.` : '여관 지도. 방향키나 WASD로 이동합니다.');
+    ? `${title} 지도. 방향키로 이동하고 스페이스로 평타, R로 사격을 조준합니다.` : '여관 지도. 방향키나 WASD로 이동합니다.');
   if (dungeon) updateBattle();
   else updateInn();
 }
@@ -180,7 +247,7 @@ function updateScene() {
 function updateInn() {
   const state = play.inn;
   const online = Boolean(play.online && state);
-  const entering = Boolean(play.battle || state?.match);
+  const entering = Boolean(play.battle || state?.match || isRuntimeLoading());
   const returning = busy.has('return');
   const ready = online && !entering && !returning;
   fields['touch-controls'].hidden = !ready;
@@ -194,8 +261,11 @@ function updateInn() {
   fields['name-button'].disabled = busy.has('name') || entering || returning;
   fields['player-name'].disabled = entering || returning;
   const queued = Boolean(state?.queued);
+  const rulesLocked = queued || entering || returning || busy.has('match');
   fields['dungeon-theme'].value = play.theme;
-  fields['dungeon-theme'].disabled = queued || entering || returning || busy.has('match');
+  fields['dungeon-theme'].disabled = rulesLocked;
+  fields['friendly-fire'].checked = play.friendlyFire === true;
+  fields['friendly-fire'].disabled = rulesLocked;
   text(fields.match, queued ? '동료 찾는 중 · 취소' : '동료 찾기');
   fields.match.dataset.waiting = String(queued);
   fields.match.disabled = !ready || busy.has('match');
@@ -203,8 +273,10 @@ function updateInn() {
   fields.guide.disabled = !ready;
   fields['chat-message'].disabled = !ready;
   fields['chat-send'].disabled = !ready || busy.has('chat');
-  fields['battle-overlay'].hidden = !entering && !returning;
+  fields['battle-overlay'].hidden = isRuntimeLoading() || !entering && !returning;
   if (entering || returning) text(fields['battle-overlay'], returning ? '여관으로 돌아가는 중…' : '던전에 들어가는 중…');
+  if (!ready) showDialogue();
+  fields['loading-retry'].disabled = !ready || busy.has('match');
   updateSeekers(state, ready);
   updateChat(fields['chat-log'], state?.events ?? []);
 }
@@ -233,6 +305,22 @@ function updateSeekers(state, ready) {
   }));
 }
 
+function showDialogue(npc) {
+  fields['inn-dialogue'].hidden = !npc;
+  if (!npc) return;
+  destination = null;
+  text(fields['npc-name'], npc.name);
+  text(fields['npc-dialogue'], npc.dialogue);
+}
+
+function talkNearby() {
+  const state = play.inn;
+  const self = state?.people.find((person) => person.id === state.selfId);
+  if (!self || !play.online || play.battle || state.match) return;
+  const npc = state.npcs?.find((person) => Math.max(Math.abs(person.x - self.x), Math.abs(person.y - self.y)) === 1);
+  if (npc) showDialogue(npc);
+}
+
 function updateChat(log, events) {
   const recent = events.slice(-24);
   const key = recent.map((event) => event.id).join(',');
@@ -259,6 +347,10 @@ function canAct(state, actor) {
     (state.status === 'active' || state.status === 'won');
 }
 
+function canAttack(state, actor) {
+  return canAct(state, actor) && state.status === 'active';
+}
+
 function canTogglePause(state) {
   return !busy.has('return') && !state?.waitingForPartner && ['active', 'won'].includes(state?.status);
 }
@@ -279,8 +371,11 @@ function updateBattle() {
   fields['battle-overlay'].hidden = !overlay;
   text(fields['battle-overlay'], overlay);
   const queued = state.queued;
+  if (!canAttack(state, player) && aimCell) setAim(null);
   fields.queued.hidden = !queued;
-  if (queued) text(fields.queued, `예약 · ${{ move: '이동', attack: '평타', eat: '식량' }[queued.type]}`);
+  if (queued) text(fields.queued, `예약 · ${{ move: '이동', attack: '평타', shoot: '사격', eat: '식량' }[queued.type]}`);
+  text(fields['party-rules'], state.friendlyFire ? '아군 공격 허용 · 동료를 클릭해 평타' : '아군 공격 차단');
+  fields['party-rules'].dataset.enabled = String(state.friendlyFire === true);
   fields.return.disabled = busy.has('return');
   fields['dungeon-chat-message'].disabled = fields['dungeon-chat-send'].disabled = !canChat(state);
   updateChat(fields['dungeon-chat-log'], state.messages ?? []);
@@ -327,7 +422,7 @@ function updateParty(state) {
       energyMeter.setAttribute('aria-label', '행동력');
       energyMeter.max = BattleRules.ENERGY_CAP;
       if (own) name.className = 'own';
-      for (const [key, title] of [['move', '이동'], ['attack', '평타'], ['rations', '식량']]) {
+      for (const [key, title] of [['move', '이동'], ['attack', '평타'], ['shoot', '사격'], ['rations', '식량']]) {
         const label = document.createElement('dt');
         const value = document.createElement('dd');
         label.textContent = title;
@@ -489,7 +584,7 @@ function updateCombatUi() {
     if (slot.energyMeter.value !== energy) slot.energyMeter.value = energy;
     text(slot.energy, actor.hp > 0 ? `행동력 ${Math.floor(energy + 1e-8)}/${BattleRules.ENERGY_CAP}` : '쓰러짐');
     if (!slot.details.hidden) {
-      for (const type of ['move', 'attack']) {
+      for (const type of ['move', 'attack', 'shoot']) {
         const wait = Math.max(0, BattleRules.readyAt(actor, type, state.now, state.inCombat) - now);
         text(slot.detailValues[type], actor.hp === 0 ? '—' : wait > 0 ? `${(Math.ceil(wait / 100) / 10).toFixed(1)}초` : '준비');
       }
@@ -498,7 +593,7 @@ function updateCombatUi() {
   }
   const player = ownActor(state);
   const active = canAct(state, player);
-  const attacking = active && state.status === 'active';
+  const attacking = canAttack(state, player);
   const remaining = attacking ? Math.max(0, player.attackReadyAt - now) : 0;
   const attackWait = attacking && BattleRules.readyAt(player, 'attack', state.now, state.inCombat) > now;
   const attackLabel = remaining > 0 ? `평타 ${(Math.ceil(remaining / 100) / 10).toFixed(1)}초` :
@@ -506,9 +601,49 @@ function updateCombatUi() {
   buttonLabel(fields.attack, attackLabel);
   fields.attack.dataset.waiting = String(attackWait);
   fields.attack.disabled = fields['touch-attack'].disabled = !attacking;
+  const shotWait = attacking && BattleRules.readyAt(player, 'shoot', state.now, state.inCombat) > now;
+  const shootLabel = aimCell ? '조준 취소' : remaining > 0 ? `사격 ${(Math.ceil(remaining / 100) / 10).toFixed(1)}초` :
+    shotWait ? `사격 · 행동력 ${BattleRules.SHOOT_COST}` : '사격';
+  buttonLabel(fields.shoot, shootLabel);
+  text(fields['touch-shoot'], aimCell ? '조준 취소' : '사격');
+  fields.shoot.disabled = fields['touch-shoot'].disabled = !attacking;
   buttonLabel(fields.eat, `식량 ${player?.rations ?? 0}`);
   fields.eat.disabled = fields['touch-eat'].disabled = !active || !player.rations || player.hp >= player.maxHp;
   updatePauseUi(frame);
+}
+
+function clearAttackLog() {
+  lastAttackEventId = 0;
+  fields['attack-log'].replaceChildren();
+  fields['attack-log'].hidden = true;
+}
+
+function recentAttackEvents(state, now) {
+  const recent = [];
+  for (const event of state.attackEvents ?? []) {
+    if (event.id <= lastAttackEventId) continue;
+    lastAttackEventId = event.id;
+    if (now - event.at <= ATTACK_FEEDBACK_AGE) recent.push(event);
+  }
+  return recent;
+}
+
+function showAttackResults(state, events) {
+  const log = fields['attack-log'];
+  const actorName = (id) => id === state.selfId ? '나' : state.actors.find((actor) => actor.id === id)?.name;
+  for (const event of events.slice(-4)) {
+    const action = event.action === 'shoot' ? '사격' : '평타';
+    const result = event.result === 'hit'
+      ? `${actorName(event.targetId) ?? '대상'}에게 피해 ${event.amount}`
+      : ATTACK_RESULTS[event.result];
+    if (!result) continue;
+    const row = document.createElement('li');
+    row.dataset.result = event.result;
+    row.textContent = `${actorName(event.actorId) ?? '모험가'} · ${action} · ${result}`;
+    if (log.childElementCount === 4) log.firstElementChild.remove();
+    log.hidden = false;
+    log.append(row);
+  }
 }
 
 function showDrops(state, prior) {
@@ -552,15 +687,51 @@ function requestAction(type, dx, dy, target, now) {
 function attack(targetId) {
   const state = play.frame?.state;
   const player = ownActor(state);
-  if (!canAct(state, player) || state.status !== 'active') return;
-  let target = state.actors.find((actor) => actor.id === (targetId ?? selected));
-  if (!inReach(state, player, target) && !targetId) target = state.actors.find((actor) => inReach(state, player, actor));
-  if (!inReach(state, player, target)) {
+  if (!canAttack(state, player)) return;
+  setAim(null);
+  const selectedTarget = state.actors.find((actor) => actor.id === (targetId ?? selected));
+  const target = targetId ? selectedTarget : inReach(state, player, selectedTarget) ? selectedTarget :
+    state.actors.find((actor) => inReach(state, player, actor));
+  if (!target || target.id === player.id || target.kind !== 'enemy' && !state.friendlyFire) {
     flash('가까운 적에게 평타를 쓸 수 있습니다.');
     return;
   }
   selected = target.id;
   requestAction('attack', 0, 0, target.id, performance.now());
+}
+
+function setAim(cell) {
+  const changed = Boolean(aimCell) !== Boolean(cell);
+  aimCell = cell;
+  if (!changed) return;
+  board.canvas.dataset.aiming = String(Boolean(cell));
+  fields['aim-hint'].hidden = !cell;
+  for (const button of [fields.shoot, fields['touch-shoot']]) button.setAttribute('aria-pressed', String(Boolean(cell)));
+}
+
+function toggleAim() {
+  const state = play.frame?.state;
+  const player = ownActor(state);
+  if (!canAttack(state, player)) return;
+  if (aimCell) {
+    setAim(null);
+    return;
+  }
+  clearMovement();
+  const target = state.actors.find((actor) => actor.id === selected && actor.kind === 'enemy' && actor.hp > 0) ?? player;
+  setAim([target.x, target.y]);
+}
+
+function aimAt(x, y) {
+  if (!aimCell || play.frame?.state.map[y]?.[x] == null) return false;
+  setAim([x, y]);
+  return true;
+}
+
+function shoot(x, y) {
+  const state = play.frame?.state;
+  if (!canAttack(state, ownActor(state)) || !aimAt(x, y)) return;
+  if (requestAction('shoot', 0, 0, `${x},${y}`, performance.now())) setAim(null);
 }
 
 function eat() {
@@ -618,7 +789,7 @@ function changeDirection(now, releasing = false) {
 }
 
 function movement(now) {
-  if (isPaused(play.frame?.state)) return;
+  if (aimCell || isRuntimeLoading() || isPaused(play.frame?.state)) return;
   const command = tap ?? (direction?.at <= now ? direction : null);
   if (command) {
     if (play.frame) moveDungeon(command.dx, command.dy, command.fresh, now);
@@ -660,6 +831,10 @@ fields['dungeon-theme'].addEventListener('change', () => {
   play.setTheme(fields['dungeon-theme'].value);
   updateInn();
 });
+fields['friendly-fire'].addEventListener('change', () => {
+  play.setFriendlyFire(fields['friendly-fire'].checked);
+  updateInn();
+});
 fields['name-form'].addEventListener('submit', (event) => {
   event.preventDefault();
   const name = fields['player-name'].value.trim();
@@ -692,26 +867,45 @@ fields.match.addEventListener('click', () => void match());
 fields.drink.addEventListener('click', () => void run('drink', async () => { await play.drink(); focusBoard(); }));
 fields.guide.addEventListener('click', () => { if (play.practice()) focusBoard(); });
 fields.attack.addEventListener('click', () => { attack(); focusBoard(); });
+fields.shoot.addEventListener('click', () => { toggleAim(); focusBoard(); });
 fields.eat.addEventListener('click', () => { eat(); focusBoard(); });
 fields['touch-attack'].addEventListener('click', () => attack());
+fields['touch-shoot'].addEventListener('click', () => { toggleAim(); focusBoard(); });
 fields['touch-eat'].addEventListener('click', eat);
 fields.return.addEventListener('click', () => void run('return', async () => { await play.returnToInn(); focusBoard(); }));
 fields['help-toggle'].addEventListener('click', toggleHelp);
 fields.pause.addEventListener('click', () => { togglePause(); focusBoard(); });
+fields['npc-close'].addEventListener('click', () => { showDialogue(); focusBoard(); });
+fields['loading-retry'].addEventListener('click', () => {
+  if (loading?.phase !== 'failed' || fields['loading-retry'].disabled) return;
+  const practice = loading.practice;
+  updateLoading({ phase: 'ready' });
+  if (practice) play.practice();
+  else void match();
+  focusBoard();
+});
+fields['loading-close'].addEventListener('click', () => { updateLoading({ phase: 'ready' }); focusBoard(); });
 board.canvas.addEventListener('click', (event) => {
   const [px, py] = board.point(event);
   const [x, y] = board.cellAt(px, py);
   focusBoard();
   if (!play.frame) {
     const id = board.signAt(px, py);
+    const npc = board.npcAt(px, py);
     if (id) void match(id);
+    else if (npc && play.online && !play.battle && !play.inn?.match) showDialogue(npc);
     else if (['.', 'D'].includes(play.inn?.map[y]?.[x])) destination = [x, y];
     return;
   }
   const state = play.frame.state;
   const player = ownActor(state);
   if (!canAct(state, player)) return;
-  const target = state.actors.find((actor) => actor.kind === 'enemy' && actor.hp > 0 && actor.x === x && actor.y === y);
+  if (aimCell) {
+    shoot(x, y);
+    return;
+  }
+  const target = state.actors.find((actor) => actor.id !== state.selfId && actor.hp > 0 &&
+    (actor.kind === 'enemy' || state.friendlyFire) && actor.x === x && actor.y === y);
   if (target) {
     selected = target.id;
     attack(target.id);
@@ -719,13 +913,46 @@ board.canvas.addEventListener('click', (event) => {
     moveDungeon(x - player.x, y - player.y, true, performance.now());
   }
 });
+board.canvas.addEventListener('pointermove', (event) => {
+  if (aimCell && event.pointerType !== 'touch') aimAt(...board.cellAt(...board.point(event)));
+});
+board.canvas.addEventListener('wheel', (event) => {
+  if (event.ctrlKey || event.metaKey || !event.deltaY || !board.hasInnCamera()) return;
+  event.preventDefault();
+  const now = performance.now();
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 80 : 1);
+  if (now - lastWheelAt > 140 || Math.sign(delta) !== Math.sign(wheelTotal)) wheelTotal = 0;
+  lastWheelAt = now;
+  wheelTotal += delta;
+  if (Math.abs(wheelTotal) >= 32) {
+    board.zoomInn(-Math.sign(wheelTotal), now);
+    wheelTotal = 0;
+  }
+}, { passive: false });
 
 function typing(target) { return target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable); }
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'F1' && !event.repeat) { event.preventDefault(); toggleHelp(); return; }
   if (event.altKey || event.ctrlKey || event.metaKey || typing(event.target)) return;
+  if (!play.frame && !event.repeat) {
+    if (event.code === 'Enter' && event.target === board.canvas) { event.preventDefault(); talkNearby(); return; }
+    if (event.code === 'Escape' && !fields['inn-dialogue'].hidden) { event.preventDefault(); showDialogue(); return; }
+  }
   const step = keys.get(event.code);
+  if (aimCell) {
+    if (event.code === 'Escape') { event.preventDefault(); setAim(null); return; }
+    if (event.code === 'Enter' && event.target === board.canvas && !event.repeat) {
+      event.preventDefault();
+      shoot(...aimCell);
+      return;
+    }
+    if (step) {
+      event.preventDefault();
+      aimAt(aimCell[0] + step[0], aimCell[1] + step[1]);
+      return;
+    }
+  }
   if (step) {
     event.preventDefault();
     if (!isPaused(play.frame?.state) && !event.repeat && !held.has(event.code)) {
@@ -734,6 +961,7 @@ window.addEventListener('keydown', (event) => {
     }
   } else if (play.frame && !event.repeat) {
     if (event.code === 'Space' && !event.target?.closest?.('button')) { event.preventDefault(); attack(); }
+    if (event.code === 'KeyR') { event.preventDefault(); toggleAim(); focusBoard(); }
     if (event.code === 'KeyE') { event.preventDefault(); eat(); }
     if (event.code === 'KeyP') { event.preventDefault(); togglePause(); }
   }
@@ -747,7 +975,7 @@ document.addEventListener('focusin', (event) => { if (typing(event.target)) clea
 for (const button of document.querySelectorAll('[data-direction]')) {
   const step = button.dataset.direction.split(',').map(Number);
   button.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || isPaused(play.frame?.state)) return;
+    if (event.button !== 0 || aimCell || isPaused(play.frame?.state)) return;
     event.preventDefault();
     button.setPointerCapture(event.pointerId);
     held.set(event.pointerId, step);
@@ -759,7 +987,7 @@ for (const button of document.querySelectorAll('[data-direction]')) {
     });
   }
   button.addEventListener('click', (event) => {
-    if (event.detail !== 0) return;
+    if (event.detail !== 0 || aimCell) return;
     if (play.frame) moveDungeon(...step, true, performance.now());
     else moveInn(...step, performance.now());
   });
@@ -767,7 +995,7 @@ for (const button of document.querySelectorAll('[data-direction]')) {
 
 function render(now) {
   movement(now);
-  board.draw(visualTime(now), selected, destination);
+  board.draw(visualTime(now), selected, destination, aimCell, play.frame?.serverTime());
   updateCombatUi();
   updateNotice(now);
   requestAnimationFrame(render);

@@ -5,7 +5,7 @@ plugins {
 apply from: '../gradle/game-platform.gradle'
 
 group = 'com.noxac.pixeldungeon'
-version = '0.8.0'
+version = '0.9.0'
 
 java {
     toolchain {
@@ -33,6 +33,10 @@ tasks.named('processResources') {
     // Package only the upstream images used by the lobby.
     from('../core/src/main/assets') {
         include 'sprites/warrior.png', 'sprites/rogue.png'
+    }
+    from('../inn-server/worker/play/assets') {
+        include 'inn-npcs.png'
+        into 'inn'
     }
 }
 
