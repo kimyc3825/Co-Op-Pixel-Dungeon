@@ -14,6 +14,17 @@ processResources {
 
 def osName = System.getProperty('os.name').toLowerCase(Locale.ROOT)
 
+def appMetadata = [
+    'Main-Class': appMainClass,
+    'Specification-Title': appName,
+    'Implementation-Title': appPackageName,
+    'Specification-Version': appVersionName,
+    'Implementation-Version': appVersionCode
+]
+tasks.named('jar') {
+    manifest.attributes(appMetadata)
+}
+
 tasks.register('debug', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
     ignoreExitValue = true
@@ -36,13 +47,7 @@ tasks.register('release', Jar) {
     dependsOn configurations.runtimeClasspath
     from { configurations.runtimeClasspath.findAll { it.name.endsWith('jar') }.collect { zipTree(it) } }
 
-    manifest {
-        attributes 'Main-Class': appMainClass
-        attributes 'Specification-Title': appName
-        attributes 'Implementation-Title': appPackageName
-        attributes 'Specification-Version': appVersionName
-        attributes 'Implementation-Version': appVersionCode
-    }
+    manifest.attributes(appMetadata)
 }
 installDist.dependsOn release
 startScripts.dependsOn release

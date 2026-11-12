@@ -28,6 +28,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
+import java.util.Collections;
 
 public class DesktopLaunchValidator {
 
@@ -63,6 +64,7 @@ public class DesktopLaunchValidator {
 			jvmArgs.add("-cp");
 			jvmArgs.add(System.getProperty("java.class.path"));
 			jvmArgs.add(DesktopLauncher.class.getName());
+			Collections.addAll(jvmArgs, args);
 
 			System.err.println("Error: ShatteredPD must start on the first thread in order to work on macOS.");
 			System.err.println("  To avoid this error, run the game with the \"-XstartOnFirstThread\" argument");

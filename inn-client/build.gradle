@@ -1,0 +1,98 @@
+plugins {
+    id 'application'
+}
+
+apply from: '../gradle/game-platform.gradle'
+
+group = 'com.noxac.pixeldungeon'
+version = '0.6.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+application {
+    mainClass = 'com.noxac.pixeldungeon.inn.InnLauncher'
+}
+
+dependencies {
+    implementation project(':desktop')
+    implementation project(':core')
+    implementation 'com.google.code.gson:gson:2.13.2'
+    implementation 'dev.onvoid.webrtc:webrtc-java:1.0.0'
+    runtimeOnly 'dev.onvoid.webrtc:webrtc-java:1.0.0:windows-x86_64'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('processResources') {
+    // Package only the upstream images used by the lobby.
+    from('../core/src/main/assets') {
+        include 'sprites/warrior.png', 'sprites/rogue.png'
+    }
+}
+
+tasks.named('jar') {
+    manifest.attributes('Main-Class': application.mainClass.get())
+}
+
+def packagedInput = layout.buildDirectory.dir('jpackage-input')
+def packagedOutput = layout.buildDirectory.dir("jpackage/${version}")
+def appImage = packagedOutput.map { it.dir('NoxacPixelDungeon') }
+
+tasks.register('stageAppImage', Sync) {
+    from(tasks.named('jar'))
+    from(configurations.runtimeClasspath) {
+        exclude { entry ->
+            entry.name.contains('-natives-') &&
+                !entry.name.endsWith('-natives-windows.jar') &&
+                !entry.name.endsWith('-natives-desktop.jar')
+        }
+    }
+    into(packagedInput)
+}
+
+tasks.register('packageWindows', Exec) {
+    group = 'distribution'
+    description = 'Builds the portable Windows x64 EXE and its bundled Java runtime.'
+    dependsOn tasks.named('stageAppImage')
+    inputs.dir(packagedInput)
+    inputs.file('../LICENSE.txt')
+    inputs.file('THIRD_PARTY_NOTICES.md')
+    inputs.dir('licenses')
+    outputs.dir(appImage)
+
+    doFirst {
+        if (!System.getProperty('os.name').startsWith('Windows') ||
+            System.getProperty('os.arch') != 'amd64') {
+            throw new GradleException('packageWindows requires Windows x64 and a Windows x64 JDK.')
+        }
+        // jpackage refuses to overwrite an existing app image.
+        delete(appImage.get().asFile)
+        def jdk = javaToolchains.launcherFor(java.toolchain).get().metadata.installationPath
+        executable jdk.file('bin/jpackage.exe').asFile
+        args '--type', 'app-image',
+             '--input', packagedInput.get().asFile,
+             '--dest', packagedOutput.get().asFile,
+             '--name', 'NoxacPixelDungeon',
+             '--vendor', 'Noxac',
+             '--app-version', project.version.toString(),
+             '--main-jar', tasks.named('jar').get().archiveFileName.get(),
+             '--main-class', application.mainClass.get(),
+             '--add-modules', 'java.base,java.desktop,java.net.http,java.logging,java.prefs,jdk.crypto.ec,jdk.crypto.cryptoki,jdk.management,jdk.unsupported'
+    }
+
+    doLast {
+        copy {
+            from '../LICENSE.txt', 'THIRD_PARTY_NOTICES.md'
+            from('licenses') {
+                into 'licenses'
+            }
+            into appImage.get().asFile
+        }
+    }
+}

@@ -59,6 +59,7 @@ import com.shatteredpixel.shatteredpixeldungeon.actors.hero.spells.ClericSpell;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.spells.GuidingLight;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.spells.Stasis;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.DirectableAlly;
+import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnCompanion;
 import com.shatteredpixel.shatteredpixeldungeon.effects.CellEmitter;
 import com.shatteredpixel.shatteredpixeldungeon.effects.FloatingText;
 import com.shatteredpixel.shatteredpixeldungeon.effects.Surprise;
@@ -1721,8 +1722,17 @@ public abstract class Mob extends Char {
 	}
 
 	public static void holdAllies( Level level, int holdFromPos ){
+		holdAllies(level, holdFromPos, false);
+	}
+
+	public static void holdAllies(Level level, boolean onlyInnCompanion) {
+		holdAllies(level, Dungeon.hero.pos, onlyInnCompanion);
+	}
+
+	private static void holdAllies(Level level, int holdFromPos, boolean onlyInnCompanion) {
 		heldAllies.clear();
 		for (Mob mob : level.mobs.toArray( new Mob[0] )) {
+			if (onlyInnCompanion && !(mob instanceof InnCompanion)) continue;
 			//preserve directable allies or empowered intelligent allies no matter where they are
 			if (mob instanceof DirectableAlly
 				|| (mob.intelligentAlly && PowerOfMany.getPoweredAlly() == mob)) {

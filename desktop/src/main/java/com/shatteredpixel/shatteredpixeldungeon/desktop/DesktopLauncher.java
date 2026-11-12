@@ -31,6 +31,7 @@ import com.badlogic.gdx.utils.Os;
 import com.badlogic.gdx.utils.SharedLibraryLoader;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
+import com.shatteredpixel.shatteredpixeldungeon.scenes.StartScene;
 import com.shatteredpixel.shatteredpixeldungeon.services.news.News;
 import com.shatteredpixel.shatteredpixeldungeon.services.news.NewsImpl;
 import com.shatteredpixel.shatteredpixeldungeon.services.updates.UpdateImpl;
@@ -44,10 +45,21 @@ import org.lwjgl.util.tinyfd.TinyFileDialogs;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Locale;
+import java.util.function.Function;
 
 public class DesktopLauncher {
 
 	public static void main (String[] args) {
+		launch(args, null);
+	}
+
+	public static void launchInn(Function<DesktopPlatformSupport, ShatteredPixelDungeon> game) {
+		launch(new String[]{"--from-inn"}, game);
+	}
+
+	private static void launch(String[] args, Function<DesktopPlatformSupport, ShatteredPixelDungeon> inn) {
+		boolean innTestMode = args.length == 1 && "--from-inn-test".equals(args[0]);
+		boolean fromInn = innTestMode || (args.length == 1 && "--from-inn".equals(args[0]));
 
 		if (!DesktopLaunchValidator.verifyValidJVMState(args)){
 			return;
@@ -126,16 +138,16 @@ public class DesktopLauncher {
 			Game.versionCode = Integer.parseInt(System.getProperty("Implementation-Version"));
 		}
 
-		if (UpdateImpl.supportsUpdates()){
+		if (!fromInn && UpdateImpl.supportsUpdates()){
 			Updates.service = UpdateImpl.getUpdateService();
 		}
-		if (NewsImpl.supportsNews()){
+		if (!fromInn && NewsImpl.supportsNews()){
 			News.service = NewsImpl.getNewsService();
 		}
 		
 		Lwjgl3ApplicationConfiguration config = new Lwjgl3ApplicationConfiguration();
 		
-		config.setTitle( title );
+		config.setTitle(innTestMode ? title + " · 테스트 모드" : title);
 
 		//if I were implementing this from scratch I would use the full implementation title for saves
 		// (e.g. /.shatteredpixel/shatteredpixeldungeon), but we have too much existing save
@@ -168,6 +180,7 @@ public class DesktopLauncher {
 			baseFileType = Files.FileType.Absolute;
 		}
 
+		if (innTestMode) basePath += "test-mode/";
 		config.setPreferencesConfig( basePath, baseFileType );
 		SPDSettings.set( new Lwjgl3Preferences( new Lwjgl3FileHandle(basePath + SPDSettings.DEFAULT_PREFS_FILE, baseFileType) ));
 		FileUtils.setDefaultFileProperties( baseFileType, basePath );
@@ -189,6 +202,15 @@ public class DesktopLauncher {
 		config.setWindowIcon("icons/icon_16.png", "icons/icon_32.png", "icons/icon_48.png",
 				"icons/icon_64.png", "icons/icon_128.png", "icons/icon_256.png");
 
-		new Lwjgl3Application(new ShatteredPixelDungeon(new DesktopPlatformSupport()), config);
+		DesktopPlatformSupport platform = new DesktopPlatformSupport();
+		ShatteredPixelDungeon game;
+		if (inn != null) {
+			game = inn.apply(platform);
+		} else if (fromInn) {
+			game = new ShatteredPixelDungeon(platform, StartScene.class, innTestMode);
+		} else {
+			game = new ShatteredPixelDungeon(platform);
+		}
+		new Lwjgl3Application(game, config);
 	}
 }

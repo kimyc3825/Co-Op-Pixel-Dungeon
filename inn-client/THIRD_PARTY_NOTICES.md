@@ -1,0 +1,10 @@
+# Noxac Pixel Dungeon 여관 0.6.0
+
+This prototype includes the single-player game and artwork from [Shattered Pixel Dungeon v4.0.2](https://github.com/00-Evan/shattered-pixel-dungeon/tree/v4.0.2). Pixel Dungeon is copyright © 2012–2015 Oleg Dolya. Shattered Pixel Dungeon is copyright © 2014–2026 Evan Debenham. The license is included as LICENSE.txt. See the accompanying source archive for the code, artwork, and build scripts.
+
+- [Gson 2.13.2](https://github.com/google/gson/tree/gson-parent-2.13.2) and [Error Prone Annotations 2.41.0](https://github.com/google/error-prone/tree/v2.41.0) are Google projects licensed under Apache License 2.0. See `licenses/Apache-2.0.txt`.
+- [webrtc-java 1.0.0](https://github.com/devopvoid/webrtc-java/tree/v1.0.0) is copyright © 2019–2026 Alex Andres and uses Apache License 2.0. The Windows native JAR includes WebRTC license and source information under `META-INF/licenses/webrtc`.
+- The single-player game uses [libGDX 1.14.0](https://github.com/libgdx/libgdx/tree/1.14.0), [gdx-controllers 2.2.4](https://github.com/libgdx/gdx-controllers), and [Jamepad](https://github.com/libgdx/Jamepad) under Apache License 2.0. The FreeType and SDL2 notices are in `licenses`.
+- [LWJGL 3.3.3](https://github.com/LWJGL/lwjgl3/tree/3.3.3) is distributed under a BSD license and loads separate native libraries, including GLFW, jemalloc, OpenAL Soft, stb and tinyfiledialogs. The upstream source links and licenses for these libraries are listed in the [LWJGL repository](https://github.com/LWJGL/lwjgl3/tree/3.3.3). The supplied license texts include `licenses/LWJGL.md` and `licenses/LGPL-2.1.txt`.
+- The game also includes [JLayer 1.0.1-gdx](https://repo.maven.apache.org/maven2/com/badlogicgames/jlayer/jlayer/1.0.1-gdx/), [JOrbis 0.0.17](https://repo.maven.apache.org/maven2/org/jcraft/jorbis/0.0.17/), and [JSON-java 20170516](https://github.com/stleary/JSON-java/tree/20170516). See the LGPL and JSON-java license texts in `licenses`.
+- The bundled Eclipse Temurin runtime includes license and attribution files in `runtime/legal`.

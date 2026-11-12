@@ -71,23 +71,7 @@ public class HeroSprite extends CharSprite {
 	public void updateArmor() {
 
 		TextureFilm film = new TextureFilm( tiers(), Dungeon.hero.tier(), FRAME_WIDTH, FRAME_HEIGHT );
-		
-		idle = new Animation( 1, true );
-		idle.frames( film, 0, 0, 0, 1, 0, 0, 1, 1 );
-		
-		run = new Animation( RUN_FRAMERATE, true );
-		run.frames( film, 2, 3, 4, 5, 6, 7 );
-		
-		die = new Animation( 20, false );
-		die.frames( film, 8, 9, 10, 11, 12, 11 );
-		
-		attack = new Animation( 15, false );
-		attack.frames( film, 13, 14, 15, 0 );
-		
-		zap = attack.clone();
-		
-		operate = new Animation( 8, false );
-		operate.frames( film, 16, 17, 16, 17 );
+		setupAnimations(this, film);
 		
 		fly = new Animation( 1, true );
 		fly.frames( film, 18 );
@@ -99,6 +83,20 @@ public class HeroSprite extends CharSprite {
 			idle();
 		else
 			die();
+	}
+
+	static void setupAnimations(CharSprite sprite, TextureFilm film) {
+		sprite.idle = new Animation(1, true);
+		sprite.idle.frames(film, 0, 0, 0, 1, 0, 0, 1, 1);
+		sprite.run = new Animation(RUN_FRAMERATE, true);
+		sprite.run.frames(film, 2, 3, 4, 5, 6, 7);
+		sprite.die = new Animation(20, false);
+		sprite.die.frames(film, 8, 9, 10, 11, 12, 11);
+		sprite.attack = new Animation(15, false);
+		sprite.attack.frames(film, 13, 14, 15, 0);
+		sprite.zap = sprite.attack.clone();
+		sprite.operate = new Animation(8, false);
+		sprite.operate.frames(film, 16, 17, 16, 17);
 	}
 	
 	@Override

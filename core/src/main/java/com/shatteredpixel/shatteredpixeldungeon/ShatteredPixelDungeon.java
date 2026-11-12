@@ -26,6 +26,7 @@ import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.TitleScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.WelcomeScene;
 import com.watabou.noosa.Game;
+import com.watabou.noosa.Scene;
 import com.watabou.noosa.audio.Music;
 import com.watabou.noosa.audio.Sample;
 import com.watabou.utils.DeviceCompat;
@@ -44,15 +45,29 @@ public class ShatteredPixelDungeon extends Game {
 
 	//starting here we are doing 2 version codes per public update, so use code-1 to get both
 	public static final int v4_0_0 = 911;
+	private final boolean innTestMode;
 	
 	public ShatteredPixelDungeon( PlatformSupport platform ) {
-		super( sceneClass == null ? WelcomeScene.class : sceneClass, platform );
+		this(platform, sceneClass == null ? WelcomeScene.class : sceneClass);
+	}
+
+	public ShatteredPixelDungeon(PlatformSupport platform, Class<? extends Scene> firstScene) {
+		this(platform, firstScene, false);
+	}
+
+	public ShatteredPixelDungeon(PlatformSupport platform, Class<? extends Scene> firstScene, boolean innTestMode) {
+		super(firstScene, platform);
+		this.innTestMode = innTestMode;
 
 		//pre-v3.3.0
 		com.watabou.utils.Bundle.addAlias(
 				com.shatteredpixel.shatteredpixeldungeon.items.keys.WornKey.class,
 				"com.shatteredpixel.shatteredpixeldungeon.items.keys.SkeletonKey" );
 
+	}
+
+	static boolean isInnTestMode() {
+		return instance instanceof ShatteredPixelDungeon && ((ShatteredPixelDungeon) instance).innTestMode;
 	}
 	
 	@Override

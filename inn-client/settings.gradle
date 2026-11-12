@@ -1,0 +1,9 @@
+rootProject.name = 'noxac-inn-client'
+
+[':SPD-classes', ':core', ':desktop', ':services',
+ ':services:updates:githubUpdates', ':services:news:shatteredNews'].each { path ->
+    include path
+    project(path).projectDir = file('../' + path.substring(1).replace(':', '/'))
+}
+project(':services:updates').projectDir = file('../services/updates')
+project(':services:news').projectDir = file('../services/news')
