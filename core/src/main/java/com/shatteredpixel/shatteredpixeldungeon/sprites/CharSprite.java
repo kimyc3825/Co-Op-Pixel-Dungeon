@@ -668,7 +668,10 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 				emo.visible = visible;
 			}
 		}
-		idle();
+		synchronized (this) {
+			// A stale sleep frame must not replace an attack that still needs its callback.
+			if (curAnim == null || curAnim.looped || finished) idle();
+		}
 	}
 	
 	public void hideSleep() {
