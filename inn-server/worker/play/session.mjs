@@ -299,7 +299,7 @@ export class PlaySession {
     this.generation++;
     this.onBattle(null);
     if (this.leftInn) {
-      this.key = newKey();
+      if (battle.matchId) this.key = newKey();
       this.leftInn = false;
       this.nextMoveAt = this.nextMoveSendAt = this.retryAt = this.after = 0;
       this.history = [];
