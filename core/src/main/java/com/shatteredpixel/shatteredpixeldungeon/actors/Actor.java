@@ -326,6 +326,7 @@ public abstract class Actor implements Bundlable {
 			current = null;
 			Hero hero = Dungeon.hero;
 			boolean timed = InnAdventure.atb();
+			if (timed && hero != null) hero.applyInnTravelStop();
 			boolean frozen = timed && !atbPaused && freezesWorld(hero);
 			if (!interrupted && !Game.switchingScene() && timed) {
 				current = selectTimedActor(hero, frozen);

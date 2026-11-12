@@ -113,7 +113,7 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
 #attack { --icon-x: -24px; --icon-y: -72px; }
 #shoot { --icon-y: -48px; }
 #eat::before { background-image: url("/play/assets/items.png"); background-size: 384px auto; background-position: -120px -648px; }
-#backpack-toggle::before { background-image: url("/play/assets/toolbar.png"); background-size: 384px 48px; background-position: -240px 0; }
+#backpack-toggle::before, #inn-backpack-toggle::before { background-image: url("/play/assets/toolbar.png"); background-size: 384px 48px; background-position: -240px 0; }
 #return { --icon-x: 0; --icon-y: -24px; }
 .chat-toggle {
   position: absolute; left: var(--left); bottom: var(--bottom);
@@ -249,7 +249,7 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
 .bag-slot[aria-pressed="true"] { border-color: var(--gold); background: #453521; }
 .bag-slot[data-empty="true"] { border-color: #4f4838; }
 .bag-slot:disabled { opacity: 1; }
-.bag-icon { width: 32px; height: 32px; background-image: var(--items-atlas, none); background-repeat: no-repeat; background-size: 512px auto; image-rendering: pixelated; }
+.bag-icon { width: 32px; height: 32px; background-image: var(--items-atlas, url("/play/assets/items.png")); background-repeat: no-repeat; background-size: 512px auto; image-rendering: pixelated; }
 .bag-icon[data-item="gold"] { background-position: -64px -32px; }
 .bag-icon[data-item="ration"] { background-position: -160px -864px; }
 .bag-icon[data-item="violet-potion"] { background-position: -192px -704px; }

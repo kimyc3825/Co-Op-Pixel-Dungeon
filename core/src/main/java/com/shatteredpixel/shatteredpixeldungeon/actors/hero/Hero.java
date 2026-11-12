@@ -196,6 +196,7 @@ import com.watabou.utils.Random;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class Hero extends Char {
 
@@ -224,7 +225,7 @@ public class Hero extends Char {
 
 	public boolean ready = false;
 	public boolean damageInterrupt = true;
-	public HeroAction curAction = null;
+	public volatile HeroAction curAction = null;
 	public HeroAction lastAction = null;
 
 	//reference to the enemy the hero is currently in the process of attacking
@@ -856,7 +857,23 @@ public class Hero extends Char {
 	private float atbMoveAt;
 	private float atbMeleeAt;
 	private volatile HeroAction atbWaiting;
+	private final AtomicReference<HeroAction> atbTravelToStop = new AtomicReference<>();
 	private AtbSpend atbWaitKind;
+
+	public void requestInnTravelStop() {
+		HeroAction action = curAction;
+		if (action instanceof HeroAction.Move || action instanceof HeroAction.LvlTransition) {
+			atbTravelToStop.set(action);
+		}
+		resting = false;
+	}
+
+	/** Finish a committed step, then discard the rest of that same route. */
+	public void applyInnTravelStop() {
+		if (atbTravelToStop.get() == null) return;
+		HeroAction action = atbTravelToStop.getAndSet(null);
+		if (action != null && curAction == action) curAction = null;
+	}
 
 	public boolean innAtbActive() {
 		return InnAdventure.atb() && Dungeon.hero == this

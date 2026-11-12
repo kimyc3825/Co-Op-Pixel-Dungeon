@@ -160,7 +160,6 @@ public final class NativeDungeonScene extends PixelScene {
     private boolean shootHeld;
     private boolean aiming;
     private boolean rationHeld;
-    private boolean helpHeld;
     private boolean pauseHeld;
     private boolean examine;
     private boolean chatPinned;
@@ -255,7 +254,7 @@ public final class NativeDungeonScene extends PixelScene {
             party[i] = new PartySlot(left + i * (partyWidth + 3), top, partyWidth);
         }
         button(hud, "메뉴", this::openGameMenu).setRect(right - 29, top, 29, 17);
-        helpButton = button(hud, "F1 도움", this::toggleHelp);
+        helpButton = button(hud, "F8 도움", this::toggleHelp);
         helpButton.setRect(right - 65, top, 34, 17);
         pauseButton = button(hud, "정지 · P", this::togglePause);
         pauseButton.setRect(right - 117, top, 50, 17);
@@ -263,7 +262,7 @@ public final class NativeDungeonScene extends PixelScene {
         floorStatus = label(hud, " ", 6, TEXT, left + 58, top + 31, right - left - 114);
         fireLabel = label(hud, " ", 6, MUTED, right - 54, top + 31, 54);
 
-        StyledButton bag = button(hud, "가방", () -> showPanel(BackpackWindow::new));
+        StyledButton bag = button(hud, "배낭", () -> showPanel(BackpackWindow::new));
         bag.icon(Icons.BACKPACK.get());
         bag.setRect(left, toolbarY, 43, 21);
         button(hud, "대화", this::toggleChatLog).setRect(left + 45, toolbarY, 31, 21);
@@ -291,11 +290,11 @@ public final class NativeDungeonScene extends PixelScene {
         panel(help, helpX, helpY, helpCardWidth, 1, 0xAF9DB4A6);
         label(help, "이동  클릭 · WASD · 방향키 · 숫자패드", 7, TEXT, helpX + 5, helpY + 4, helpCardWidth - 10);
         label(help, "평타  Q · 대상 클릭", 7, TEXT, helpX + 5, helpY + 15, helpCardWidth - 10);
-        label(help, "대기 Space · 줍기 C · 재개 R", 7, TEXT, helpX + 5, helpY + 26, helpCardWidth - 10);
+        label(help, "자동 이동 중지 Space · 줍기 C · 재개 R", 7, TEXT, helpX + 5, helpY + 26, helpCardWidth - 10);
         label(help, "1 활 · 2 식량 · E 살펴보기", 7, TEXT, helpX + 5, helpY + 37, helpCardWidth - 10);
-        label(help, "F/I 가방 · H 상태 · +/- 확대", 7, TEXT, helpX + 5, helpY + 48, helpCardWidth - 10);
+        label(help, "F1/F/I 배낭 · H 상태 · +/- 확대", 7, TEXT, helpX + 5, helpY + 48, helpCardWidth - 10);
         label(help, "전술 정지 / 재개  P", 7, TEXT, helpX + 5, helpY + 59, helpCardWidth - 10);
-        label(help, "대화 Enter · 취소 Esc · 도움말 F1", 7, TEXT, helpX + 5, helpY + 70, helpCardWidth - 10);
+        label(help, "대화 Enter · 취소 Esc · 도움말 F8", 7, TEXT, helpX + 5, helpY + 70, helpCardWidth - 10);
         label(help, "연습 도구는 해당 칸에 서서 사용", 7, ALLY, helpX + 5, helpY + 81, helpCardWidth - 10);
         help.visible = help.active = false;
 
@@ -328,7 +327,10 @@ public final class NativeDungeonScene extends PixelScene {
         previewQueuedMove(now);
         waitingAction = null;
         if (!typing()) {
-            onHotkey(Input.Keys.F1, Gdx.input.isKeyPressed(Input.Keys.F1));
+            if (panelWindow == null) {
+                if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) showPanel(BackpackWindow::new);
+                else if (Gdx.input.isKeyJustPressed(Input.Keys.F8)) toggleHelp();
+            }
             onHotkey(Input.Keys.Q, Gdx.input.isKeyPressed(Input.Keys.Q));
             onHotkey(Input.Keys.NUM_1, Gdx.input.isKeyPressed(Input.Keys.NUM_1));
             onHotkey(Input.Keys.NUM_2, Gdx.input.isKeyPressed(Input.Keys.NUM_2));
@@ -1125,11 +1127,6 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private boolean onHotkey(int key, boolean pressed) {
-        if (key == Input.Keys.F1) {
-            if (pressed && !helpHeld && panelWindow == null) toggleHelp();
-            helpHeld = pressed;
-            return true;
-        }
         if (key == Input.Keys.Q) {
             if (pressed && !attackHeld) attack();
             attackHeld = pressed;
@@ -1153,15 +1150,12 @@ public final class NativeDungeonScene extends PixelScene {
         if (!pressed) return false;
         switch (key) {
             case Input.Keys.SPACE, Input.Keys.NUMPAD_5, Input.Keys.Z -> {
-                if (canAct()) {
-                    aiming = examine = false;
-                    interruptRoute();
-                }
+                if (canAct()) interruptRoute();
             }
             case Input.Keys.C -> goToLoot();
             case Input.Keys.R -> resumeRoute();
             case Input.Keys.E -> toggleExamine();
-            case Input.Keys.F, Input.Keys.I -> showPanel(BackpackWindow::new);
+            case Input.Keys.F1, Input.Keys.F, Input.Keys.I -> showPanel(BackpackWindow::new);
             case Input.Keys.H -> showPanel(StatusWindow::new);
             case Input.Keys.PLUS, Input.Keys.EQUALS -> zoom(1);
             case Input.Keys.MINUS -> zoom(-1);
@@ -1180,13 +1174,14 @@ public final class NativeDungeonScene extends PixelScene {
         closeComposer();
         interruptRoute();
         movement.reset();
-        helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = examine = false;
+        attackHeld = shootHeld = rationHeld = pauseHeld = aiming = examine = false;
         super.onPause();
     }
 
     private void toggleHelp() {
+        if (panelWindow != null || typing()) return;
         help.visible = help.active = !help.visible;
-        helpButton.text(help.visible ? "F1 접기" : "F1 도움");
+        helpButton.text(help.visible ? "F8 접기" : "F8 도움");
     }
 
     private void showPanel(Supplier<? extends Window> open) {
@@ -1389,7 +1384,7 @@ public final class NativeDungeonScene extends PixelScene {
         private int selectedSlot = -1;
 
         BackpackWindow() {
-            super("가방", 154, 121);
+            super("배낭", 154, 121);
             instructions = label(this, " ", 7, MUTED, 5, 22, 144);
             for (int index = 0; index < slots.length; index++) {
                 int slot = index;
@@ -1479,7 +1474,7 @@ public final class NativeDungeonScene extends PixelScene {
             identity = label(this, "", 8, ALLY, 5, 22, 144);
             vitals = label(this, "", 7, TEXT, 5, 36, 144);
             cooldowns = label(this, "", 7, MUTED, 5, 48, 144);
-            label(this, "동료 가방 · 열람만 가능", 8, ALLY, 5, 64, 144);
+            label(this, "동료 배낭 · 열람만 가능", 8, ALLY, 5, 64, 144);
             panel(this, 4, 77, 146, 52, 0x59121817);
             add(itemScroll);
             itemScroll.setRect(5, 78, 144, 50);
@@ -1648,7 +1643,7 @@ public final class NativeDungeonScene extends PixelScene {
         if (!canChat() || chatEditor != null || panelWindow != null) return;
         interruptRoute();
         movement.reset();
-        helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = examine = false;
+        attackHeld = shootHeld = rationHeld = pauseHeld = aiming = examine = false;
         composerEnterReleased = !Gdx.input.isKeyPressed(Input.Keys.ENTER);
         chatEditor = new TextInput(Chrome.get(Chrome.Type.TOAST_WHITE), false, defaultZoom * 7) {
             @Override

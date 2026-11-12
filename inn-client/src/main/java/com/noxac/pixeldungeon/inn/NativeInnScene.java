@@ -86,6 +86,7 @@ public final class NativeInnScene extends PixelScene {
         float top = insets.top + EDGE;
         float right = w - insets.right - EDGE;
         float bottom = h - insets.bottom - EDGE;
+        boolean compactHud = right - left < 218;
         add(block(0, 0, w, h, BACKGROUND));
         board = new NativeInnBoard(0, 0, w, h,
             cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc);
@@ -96,8 +97,10 @@ public final class NativeInnScene extends PixelScene {
         add(label("여관", 11, GOLD, left + 5, top + 3));
         presence = label("서버 연결 중", 6, MUTED, left + 5, top + 16);
         add(presence);
+        button("F1 배낭", compactHud ? left : right - 140, compactHud ? top + 29 : top,
+            49, 17, false, this::openBackpack);
         profile = button("모험가", right - 89, top, 47, 17, false, this::editProfile);
-        button("F1 도움말", right - 40, top, 40, 17, false, this::toggleHelp);
+        button("F8 도움말", right - 40, top, 40, 17, false, this::toggleHelp);
 
         float toolbarY = bottom - 18;
         expeditions = button("원정", right - 52, toolbarY, 52, 18, true, this::openExpeditions);
@@ -129,7 +132,7 @@ public final class NativeInnScene extends PixelScene {
         notice = label("", 7, CREAM, left, toolbarY + 2);
         notice.maxWidth((int) Math.max(65, right - left - 140));
         add(notice);
-        help = buildHelp(left, top + 30, Math.min(124, right - left));
+        help = buildHelp(left, top + (compactHud ? 50 : 30), Math.min(124, right - left));
         add(help);
         help.visible = help.active = false;
         showSnapshot();
@@ -140,15 +143,18 @@ public final class NativeInnScene extends PixelScene {
     public void update() {
         showSnapshot();
         sendQueuedStep(NativeClient.inn());
-        if (!modalOpen && Gdx.input.isKeyJustPressed(Input.Keys.F1)) toggleHelp();
         if (editor != null) {
             if (!Gdx.input.isKeyPressed(Input.Keys.ENTER)) openingEnterHeld = false;
             if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) closeComposer();
             else if (submitPending) submitChat();
         } else if (!modalOpen) {
-            if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) && !altHeld()) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.F1) || Gdx.input.isKeyJustPressed(Input.Keys.I)) {
+                openBackpack();
+            } else if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) && !altHeld()) {
                 openComposer();
             } else {
+                if (Gdx.input.isKeyJustPressed(Input.Keys.F8)) toggleHelp();
+                if (Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) destination = null;
                 move();
             }
         }
@@ -326,6 +332,27 @@ public final class NativeInnScene extends PixelScene {
         }
     }
 
+    private void openBackpack() {
+        if (modalOpen || editor != null) return;
+        destination = null;
+        keyboard.reset();
+        boolean online = displayed != null && displayed.online();
+        InnApi.Preparation preparation = online ? NativeClient.preparation() : null;
+        int startingFood = Math.max(0, 1 + InnApi.Preparation.rations(preparation));
+        int health = InnApi.Preparation.health(preparation);
+        String summary = "다음 ATB 원정 · 미리보기\n시작 식량 " + startingFood + "개";
+        if (health != 0) summary += "\n최대 체력 " + (health > 0 ? "+" : "") + health;
+        if (!online) summary += "\n연결 후 원정 준비를 반영합니다.";
+        modalOpen = true;
+        add(new WndOptions(Icons.BACKPACK.get(), "배낭", summary, "닫기") {
+            @Override
+            public void destroy() {
+                modalOpen = false;
+                super.destroy();
+            }
+        });
+    }
+
     private void openExpeditions() {
         if (modalOpen || !NativeClient.profileConfirmed()) return;
         closeComposer();
@@ -437,6 +464,7 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private void toggleHelp() {
+        if (modalOpen || editor != null) return;
         help.visible = help.active = !help.visible;
     }
 
@@ -462,15 +490,17 @@ public final class NativeInnScene extends PixelScene {
 
     private Group buildHelp(float x, float y, float w) {
         Group overlay = new Group();
-        ColorBlock back = block(x, y, w, 61, 0xe96b4b3d);
+        ColorBlock back = block(x, y, w, 81, 0xe96b4b3d);
         overlay.add(back);
         overlay.add(new PointerArea(back));
-        overlay.add(block(x + 1, y + 1, w - 2, 59, 0xe6211918));
+        overlay.add(block(x + 1, y + 1, w - 2, 79, 0xe6211918));
         overlay.add(label("조작 방법", 8, GOLD, x + 5, y + 4));
         overlay.add(label("이동  WASD / 방향키 / 숫자패드", 6, CREAM, x + 5, y + 16));
         overlay.add(label("대화  Enter · Esc 취소", 6, CREAM, x + 5, y + 26));
         overlay.add(label("동료 찾기  동료 구함 표지 클릭", 6, CREAM, x + 5, y + 36));
         overlay.add(label("확대/축소  휠 · +/- · NPC 대화  클릭", 6, CREAM, x + 5, y + 46));
+        overlay.add(label("배낭  F1 / I · 도움말  F8", 6, CREAM, x + 5, y + 56));
+        overlay.add(label("자동 이동 중지  Space", 6, CREAM, x + 5, y + 66));
         return overlay;
     }
 

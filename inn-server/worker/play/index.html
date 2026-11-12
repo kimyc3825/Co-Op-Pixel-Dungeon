@@ -17,7 +17,7 @@
       </div>
       <div class="top-actions">
         <button type="button" id="pause" class="hud-button" hidden>일시정지 <kbd>P</kbd></button>
-        <button type="button" id="help-toggle" class="hud-button" aria-controls="help" aria-expanded="false">조작법 <kbd>F1</kbd></button>
+        <button type="button" id="help-toggle" class="hud-button" aria-controls="help" aria-expanded="false" aria-keyshortcuts="F8">조작법 <kbd>F8</kbd></button>
       </div>
     </header>
 
@@ -36,9 +36,9 @@
               <div><dt>평타</dt><dd>적 클릭 · Q</dd></div>
               <div><dt>사격</dt><dd>1 · 칸 선택 · 행동력 2</dd></div>
               <div><dt>식량</dt><dd>2 · 행동력 3</dd></div>
-              <div><dt>확인</dt><dd>E 살펴보기 · F / I 배낭 · H 상태</dd></div>
+              <div><dt>확인</dt><dd>E 살펴보기 · F1 / I 배낭 · H 상태</dd></div>
               <div><dt>파티</dt><dd>동료 아이콘으로 상태와 배낭 확인</dd></div>
-              <div><dt>기타</dt><dd>Space / Z / 숫자패드 5 대기 · C 줍기 · R 이어가기</dd></div>
+              <div><dt>기타</dt><dd>Space / Z / 숫자패드 5 자동 이동 중단 · C 줍기 · R 이어가기</dd></div>
               <div><dt>일시정지</dt><dd>P · 파티 공유</dd></div>
             </dl>
           </aside>
@@ -123,6 +123,7 @@
 
           <nav class="hud-toolbar" aria-label="여관 기능">
             <button id="expedition-toggle" class="hud-button" type="button" aria-controls="expedition-window" aria-expanded="false">원정</button>
+            <button id="inn-backpack-toggle" class="hud-button" type="button" aria-controls="backpack-window" aria-expanded="false" aria-keyshortcuts="F1 I" disabled>배낭 <kbd>F1</kbd></button>
             <button id="drink" class="hud-button" type="button" disabled hidden>술 한 잔</button>
           </nav>
           <section id="expedition-window" class="game-window expedition-window" aria-labelledby="expedition-heading" hidden>
@@ -145,7 +146,7 @@
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 1인 저장</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.15.10/NoxacPixelDungeon-Inn-0.15.10-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.15.10</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.15.11/NoxacPixelDungeon-Inn-0.15.11-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.15.11</a>
             </div>
           </section>
 
@@ -171,15 +172,9 @@
             <button class="hud-button" id="attack" type="button">평타 <kbd>Q</kbd></button>
             <button class="hud-button" id="shoot" type="button" aria-pressed="false">사격 <kbd>1</kbd></button>
             <button class="hud-button" id="eat" type="button">식량 <kbd>2</kbd></button>
-            <button class="hud-button" id="backpack-toggle" type="button" aria-controls="backpack-window" aria-expanded="false">배낭</button>
+            <button class="hud-button" id="backpack-toggle" type="button" aria-controls="backpack-window" aria-expanded="false" aria-keyshortcuts="F1 I F">배낭 <kbd>F1</kbd></button>
             <button class="hud-button return" id="return" type="button">여관</button>
           </nav>
-          <section id="backpack-window" class="game-window backpack-window" aria-labelledby="backpack-heading" hidden>
-            <header class="window-title"><h2 id="backpack-heading">배낭</h2><button type="button" data-close-window="backpack" aria-label="닫기">×</button></header>
-            <div id="backpack" class="backpack" role="group" aria-label="배낭 칸"></div>
-            <button id="backpack-use" class="backpack-use" type="button" hidden>마시기</button>
-            <p id="backpack-hint" class="backpack-hint">아이템 칸을 누른 뒤 옮길 칸을 선택하세요.</p>
-          </section>
           <section class="chat-hud dungeon-chat" aria-labelledby="dungeon-chat-heading">
             <h2 id="dungeon-chat-heading" class="sr-only">파티 대화</h2>
             <ol id="dungeon-chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></ol>
@@ -190,6 +185,12 @@
             </form>
           </section>
         </div>
+        <section id="backpack-window" class="game-window backpack-window" aria-labelledby="backpack-heading" hidden>
+          <header class="window-title"><h2 id="backpack-heading">배낭</h2><button type="button" data-close-window="backpack" aria-label="닫기">×</button></header>
+          <div id="backpack" class="backpack" role="group" aria-label="배낭 칸"></div>
+          <button id="backpack-use" class="backpack-use" type="button" hidden>마시기</button>
+          <p id="backpack-hint" class="backpack-hint">아이템 칸을 누른 뒤 옮길 칸을 선택하세요.</p>
+        </section>
         <button id="chat-toggle" class="hud-button chat-toggle" type="button" aria-keyshortcuts="Enter" aria-expanded="false" aria-controls="chat-form dungeon-chat-form">대화 <kbd>Enter</kbd></button>
       </aside>
     </div>

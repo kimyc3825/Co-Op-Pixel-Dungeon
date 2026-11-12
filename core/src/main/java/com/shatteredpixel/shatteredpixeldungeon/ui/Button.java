@@ -21,6 +21,9 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.ui;
 
+import com.badlogic.gdx.Input;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.watabou.input.ControllerHandler;
 import com.watabou.input.GameAction;
@@ -91,11 +94,11 @@ public class Button extends Component {
 				if (text != null){
 					int key = 0;
 					if (keyAction() != null){
-						key = KeyBindings.getFirstKeyForAction(keyAction(), ControllerHandler.controllerActive);
+						key = tooltipKey(keyAction());
 					}
 
 					if (key == 0 && secondaryTooltipAction() != null){
-						key = KeyBindings.getFirstKeyForAction(secondaryTooltipAction(), ControllerHandler.controllerActive);
+						key = tooltipKey(secondaryTooltipAction());
 					}
 
 					if (key != 0){
@@ -143,6 +146,18 @@ public class Button extends Component {
 	}
 	
 	private Signal.Listener<KeyEvent> keyListener;
+
+	private static int tooltipKey(GameAction action) {
+		int key = KeyBindings.getFirstKeyForAction(action, ControllerHandler.controllerActive);
+		if (key == Input.Keys.SPACE && InnAdventure.atb() &&
+				(action == SPDAction.WAIT || action == SPDAction.WAIT_OR_PICKUP)) {
+			for (int alternate : KeyBindings.getKeyboardKeysForAction(action)) {
+				if (alternate != Input.Keys.SPACE) return alternate;
+			}
+			return 0;
+		}
+		return key;
+	}
 	
 	public GameAction keyAction(){
 		return null;

@@ -19,7 +19,7 @@ const fields = Object.fromEntries([
   'dungeon-chat-log', 'dungeon-chat-message', 'dungeon-chat-send',
   'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
-  'original-launch', 'expedition-window', 'expedition-toggle', 'backpack-window', 'backpack-toggle', 'chat-toggle', 'hud-scrim',
+  'original-launch', 'expedition-window', 'expedition-toggle', 'backpack-window', 'backpack-toggle', 'inn-backpack-toggle', 'chat-toggle', 'hud-scrim',
   'prepare-expedition', 'preparation-result',
 ].map((id) => [id, byId(id)]));
 
@@ -93,7 +93,7 @@ const profileCard = fields['name-form'].closest('.profile-card');
 const layout = profileCard.closest('.layout');
 const gameWindows = [
   [fields['expedition-window'], fields['expedition-toggle']],
-  [fields['backpack-window'], fields['backpack-toggle']],
+  [fields['backpack-window'], fields['inn-backpack-toggle'], fields['backpack-toggle']],
 ];
 const preview = fields['profile-preview'];
 const previewContext = preview.getContext('2d');
@@ -186,7 +186,7 @@ const play = new PlaySession({
     const now = performance.now();
     syncVisualClock(isPaused(state), now);
     board.set(state, true, visualTime(now), frame.assetVersion, frame.wallTime());
-    if (artChanged) fields['dungeon-panel'].style.setProperty('--items-atlas', `url("${board.images.items.src}")`);
+    if (artChanged) fields['dungeon-panel'].parentElement.style.setProperty('--items-atlas', `url("${board.images.items.src}")`);
     const attackEvents = recentAttackEvents(state, frame.serverTime());
     board.showAttackEvents(attackEvents, visualTime(now));
     showAttackResults(state, attackEvents);
@@ -381,16 +381,16 @@ function closePartyDetails() {
 }
 
 function closeGameWindows() {
-  for (const [panel, button] of gameWindows) {
+  for (const [panel, ...buttons] of gameWindows) {
     panel.hidden = true;
-    button.setAttribute('aria-expanded', 'false');
+    for (const button of buttons) button.setAttribute('aria-expanded', 'false');
   }
   fields['hud-scrim'].hidden = true;
   closePartyDetails();
 }
 
-function toggleGameWindow(index) {
-  const [panel, button] = gameWindows[index];
+function toggleGameWindow(index, button = gameWindows[index][1]) {
+  const [panel] = gameWindows[index];
   const open = panel.hidden;
   closeGameWindows();
   if (open) {
@@ -405,7 +405,12 @@ function toggleGameWindow(index) {
 }
 
 function toggleBackpack() {
-  if (play.frame) toggleGameWindow(1);
+  const button = fields[play.frame ? 'backpack-toggle' : 'inn-backpack-toggle'];
+  if (button.disabled) return;
+  setAim(null);
+  setExamining(false);
+  updateBackpack();
+  toggleGameWindow(1, button);
 }
 
 function toggleHeroStatus() {
@@ -469,6 +474,7 @@ function updateScene() {
   if (dungeon !== hudDungeon) {
     hudDungeon = dungeon;
     closeGameWindows();
+    if (!dungeon) fields['dungeon-panel'].parentElement.style.removeProperty('--items-atlas');
   }
   const title = dungeon ? (play.frame.state.theme === PRISON ? '버려진 감옥' : '하수도') : '여관';
   fields['inn-panel'].hidden = dungeon;
@@ -520,6 +526,7 @@ function updateInn() {
       '다음 원정 · 아무 일도 없었습니다.');
   }
   fields.drink.disabled = !ready || busy.has('drink');
+  fields['inn-backpack-toggle'].disabled = !ready;
   fields.guide.disabled = !ready || rulesLocked || profileOpen;
   fields.solo.disabled = original.active || !canLaunchOriginal();
   fields['original-launch'].disabled = original.active || !canLaunchOriginal();
@@ -532,6 +539,7 @@ function updateInn() {
   fields['loading-retry'].disabled = !ready || busy.has('match');
   updateSeekers(state, ready);
   updateChat(fields['chat-log'], state?.events ?? []);
+  if (!fields['backpack-window'].hidden) updateBackpack();
 }
 
 function updateSeekers(state, ready) {
@@ -786,14 +794,20 @@ function updateAllyInventory(slot, state) {
 }
 
 function backpackCounts(state = play.frame?.state) {
+  if (!state) {
+    const food = 1 + (play.inn?.preparation?.food ?? 0);
+    return new Map(food > 0 ? [['ration', food]] : []);
+  }
   return new Map(inventoryFor(ownActor(state), state).map(({ item, amount }) => [item, amount]));
 }
 
+function backpackReadOnly(state = play.frame?.state) { return !state || isPaused(state); }
+
 function updateBackpack() {
   const state = play.frame?.state;
-  const paused = isPaused(state);
+  const readOnly = backpackReadOnly(state);
   const counts = backpackCounts(state);
-  if (paused || selectedSlot !== -1 && !counts.has(backpack[selectedSlot])) selectedSlot = -1;
+  if (readOnly || selectedSlot !== -1 && !counts.has(backpack[selectedSlot])) selectedSlot = -1;
   for (let index = 0; index < slotViews.length; index++) {
     const { button, icon, label, count } = slotViews[index];
     const item = backpack[index];
@@ -802,8 +816,8 @@ function updateBackpack() {
     icon.hidden = label.hidden = count.hidden = amount === 0;
     icon.dataset.item = item ?? '';
     button.dataset.empty = String(amount === 0);
-    button.disabled = paused;
-    button.draggable = !paused && amount > 0;
+    button.disabled = readOnly;
+    button.draggable = !readOnly && amount > 0;
     button.setAttribute('aria-pressed', String(selectedSlot === index));
     button.setAttribute('aria-label', amount > 0 ? `${index + 1}번 칸 · ${name} ${amount}` : `${index + 1}번 빈 칸`);
     if (amount > 0) {
@@ -816,13 +830,14 @@ function updateBackpack() {
   use.hidden = !Object.hasOwn(potionNames, selectedItem);
   use.disabled = !canAct(state, ownActor(state)) || state?.queued?.type === 'use-item';
   if (!use.hidden) text(use, `마시기 · 행동력 ${BattleRules.cost('use-item')}`);
-  const hint = paused ? '일시정지 중 · 배낭 보기' : selectedSlot === -1 ? '아이템 칸을 누른 뒤 옮길 칸을 선택하세요.' :
+  const hint = !state ? `다음 원정 · 시작 식량 ${counts.get('ration') ?? 0}개` : readOnly ? '일시정지 중 · 배낭 보기' :
+    selectedSlot === -1 ? '아이템 칸을 누른 뒤 옮길 칸을 선택하세요.' :
     `${itemName(selectedItem, state)} · 옮길 칸을 선택하세요.`;
   text(fields['backpack-hint'], hint);
 }
 
 function swapSlots(from, to) {
-  if (isPaused(play.frame?.state)) return;
+  if (backpackReadOnly()) return;
   [backpack[from], backpack[to]] = [backpack[to], backpack[from]];
   selectedSlot = -1;
   updateBackpack();
@@ -842,7 +857,7 @@ function buildBackpack() {
     count.className = 'bag-count';
     button.append(icon, label, count);
     button.addEventListener('click', () => {
-      if (isPaused(play.frame?.state)) return;
+      if (backpackReadOnly()) return;
       if (selectedSlot !== -1) {
         swapSlots(selectedSlot, index);
       } else if (backpackCounts().has(backpack[index])) {
@@ -851,7 +866,7 @@ function buildBackpack() {
       }
     });
     button.addEventListener('dragstart', (event) => {
-      if (isPaused(play.frame?.state) || !backpackCounts().has(backpack[index])) {
+      if (backpackReadOnly() || !backpackCounts().has(backpack[index])) {
         event.preventDefault();
         return;
       }
@@ -1399,6 +1414,7 @@ profileCard.addEventListener('cancel', (event) => {
   if (!fields['profile-cancel'].hidden && !fields['profile-cancel'].disabled) fields['profile-cancel'].click();
 });
 fields['expedition-toggle'].addEventListener('click', () => toggleGameWindow(0));
+fields['inn-backpack-toggle'].addEventListener('click', toggleBackpack);
 fields['backpack-toggle'].addEventListener('click', toggleBackpack);
 fields['backpack-use'].addEventListener('click', drinkBackpackPotion);
 for (const close of document.querySelectorAll('[data-close-window]')) {
@@ -1648,9 +1664,16 @@ window.addEventListener('keydown', (event) => {
     return;
   }
   if (typing(event.target) || profileCard.open) return;
-  if (event.code === 'F1' && !event.repeat) { event.preventDefault(); toggleHelp(); return; }
+  if (event.code === 'F1' || event.code === 'F8' || event.code === 'KeyI') {
+    event.preventDefault();
+    if (!event.repeat) {
+      if (event.code === 'F8') toggleHelp();
+      else toggleBackpack();
+    }
+    return;
+  }
   if (play.frame && !event.repeat) {
-    if (event.code === 'KeyF' || event.code === 'KeyI' || event.code === 'KeyH') {
+    if (event.code === 'KeyF' || event.code === 'KeyH') {
       event.preventDefault();
       setAim(null);
       setExamining(false);
@@ -1665,6 +1688,11 @@ window.addEventListener('keydown', (event) => {
     }
   }
   if (gameUiBlocksMovement()) return;
+  if (event.code === 'Space' && [board.canvas, document.body, document.documentElement].includes(event.target)) {
+    event.preventDefault();
+    if (!event.repeat && (destination || dungeonRoute)) stopAndRememberRoute();
+    return;
+  }
   if (!event.repeat && (event.code === 'Equal' || event.code === 'NumpadAdd' ||
       event.code === 'Minus' || event.code === 'NumpadSubtract')) {
     event.preventDefault();
@@ -1723,8 +1751,7 @@ window.addEventListener('keydown', (event) => {
     }
   } else if (play.frame && !event.repeat) {
     if (event.code === 'KeyQ') { event.preventDefault(); attack(); }
-    if (event.code === 'KeyZ' || event.code === 'Numpad5' ||
-        event.code === 'Space' && !event.target?.closest?.('button')) {
+    if (event.code === 'KeyZ' || event.code === 'Numpad5') {
       event.preventDefault();
       setAim(null);
       setExamining(false);

@@ -21,6 +21,7 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.scenes;
 
+import com.badlogic.gdx.Input;
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Challenges;
@@ -133,7 +134,9 @@ import com.shatteredpixel.shatteredpixeldungeon.windows.WndUpgrade;
 import com.watabou.gltextures.TextureCache;
 import com.watabou.glwrap.Blending;
 import com.watabou.input.ControllerHandler;
+import com.watabou.input.GameAction;
 import com.watabou.input.KeyBindings;
+import com.watabou.input.KeyEvent;
 import com.watabou.input.PointerEvent;
 import com.watabou.noosa.Camera;
 import com.watabou.noosa.Game;
@@ -156,6 +159,7 @@ import com.watabou.utils.Point;
 import com.watabou.utils.PointF;
 import com.watabou.utils.Random;
 import com.watabou.utils.RectF;
+import com.watabou.utils.Signal;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -214,6 +218,7 @@ public class GameScene extends PixelScene {
 	private static boolean invVisible = true;
 
 	private Toolbar toolbar;
+	private final Signal.Listener<KeyEvent> atbKeys = this::handleAtbKey;
 	private Toast prompt;
 
 	private AttackIndicator attack;
@@ -561,6 +566,7 @@ public class GameScene extends PixelScene {
 		} else {
 			toolbar.setRect( insets.left, uiCamera.height - toolbar.height() - insets.bottom, uiCamera.width - insets.right, toolbar.height() );
 		}
+		if (InnAdventure.atb()) KeyEvent.addKeyListener(atbKeys);
 
 		if (insets.bottom > 0){
 			SkinnedBlock bar = new SkinnedBlock(uiCamera.width, insets.bottom, TextureCache.createSolid(0x88000000));
@@ -809,6 +815,7 @@ public class GameScene extends PixelScene {
 	}
 	
 	public void destroy() {
+		KeyEvent.removeKeyListener(atbKeys);
 		
 		//tell the actor thread to finish, then wait for it to complete any actions it may be doing.
 		if (!waitForActorThread( 4500, true )){
@@ -1504,6 +1511,36 @@ public class GameScene extends PixelScene {
 		}
 
 		return false;
+	}
+
+	private boolean handleAtbKey(KeyEvent event) {
+		if (!InnAdventure.atb() || Dungeon.hero == null || interfaceBlockingHero()) return false;
+		GameAction action = KeyBindings.getActionForKey(event);
+		if (action == SPDAction.BAG_1) {
+			if (!event.pressed) toggleBackpack();
+			return true;
+		}
+		if (event.code == Input.Keys.SPACE && (action == SPDAction.WAIT || action == SPDAction.WAIT_OR_PICKUP)) {
+			if (event.pressed) {
+				cellSelector.resetKeyHold();
+				Dungeon.hero.requestInnTravelStop();
+			}
+			return true;
+		}
+		return false;
+	}
+
+	private void toggleBackpack() {
+		cellSelector.resetKeyHold();
+		if (inventory == null) {
+			show(new WndBag(Dungeon.hero.belongings.backpack));
+		} else if (inventory.visible && InventoryPane.lastBag == Dungeon.hero.belongings.backpack) {
+			toggleInvPane();
+		} else {
+			InventoryPane.lastBag = Dungeon.hero.belongings.backpack;
+			inventory.updateInventory();
+			if (!inventory.visible) toggleInvPane();
+		}
 	}
 
 	public static void toggleInvPane(){

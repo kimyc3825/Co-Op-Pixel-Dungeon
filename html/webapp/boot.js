@@ -246,6 +246,9 @@
 	// browser shortcuts that clash with game key bindings (scrolling with space/arrows, tab focus change...)
 	window.addEventListener("keydown", function (e) {
 		if (e.target === kb) return;
+		if (e.code === "F1" && e.target === canvas && !textInputActive && !e.altKey && !e.ctrlKey && !e.metaKey) {
+			e.preventDefault();
+		}
 		if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab", "Backspace",
 			 "PageUp", "PageDown", "Home", "End"].indexOf(e.code) >= 0) {
 			e.preventDefault();

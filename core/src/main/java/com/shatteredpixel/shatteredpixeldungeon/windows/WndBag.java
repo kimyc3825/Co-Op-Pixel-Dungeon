@@ -22,6 +22,7 @@
 package com.shatteredpixel.shatteredpixeldungeon.windows;
 
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Belongings;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
@@ -365,12 +366,21 @@ public class WndBag extends WndTabbed {
 
 	@Override
 	public boolean onSignal(KeyEvent event) {
-		if (event.pressed && KeyBindings.getActionForKey( event ) == SPDAction.INVENTORY) {
+		GameAction action = KeyBindings.getActionForKey(event);
+		if (action == SPDAction.BAG_1 && atbBackpackOpen()) {
+			if (!event.pressed) onBackPressed();
+			return true;
+		}
+		if (event.pressed && action == SPDAction.INVENTORY) {
 			onBackPressed();
 			return true;
 		} else {
 			return super.onSignal(event);
 		}
+	}
+
+	private boolean atbBackpackOpen() {
+		return InnAdventure.atb() && selector == null && lastBag instanceof Belongings.Backpack;
 	}
 	
 	@Override
@@ -435,7 +445,8 @@ public class WndBag extends WndTabbed {
 		public GameAction keyAction() {
 			switch (index){
 				case 1: default:
-					return SPDAction.BAG_1;
+					// The backpack window handles the toggle when this tab is already selected.
+					return atbBackpackOpen() ? null : SPDAction.BAG_1;
 				case 2:
 					return SPDAction.BAG_2;
 				case 3:
