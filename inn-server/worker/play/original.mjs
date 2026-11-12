@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 const MANIFEST = '/play/original/manifest.json';
-const BOOT_TIMEOUT = 45_000;
+const BOOT_TIMEOUT = 120_000;
 const SAVE_TIMEOUT = 8_000;
 
 export class OriginalGame {
@@ -23,6 +23,7 @@ export class OriginalGame {
     this.tipTimer = null;
     this.frame = this.attempt = this.suspending = this.phase = null;
     this.deadline = null;
+    this.progress = -1;
     document.getElementById('original-launch').addEventListener('click', () => this.start());
     this.back.addEventListener('click', () => {
       if (this.phase === 'ready') this.requestSave();
@@ -77,8 +78,9 @@ export class OriginalGame {
       frame.tabIndex = -1;
       frame.src = entry;
       this.frame = frame;
+      this.progress = -1;
       this.body.prepend(frame);
-      this.deadline = setTimeout(() => this.fail('원본 게임을 시작하지 못했습니다'), BOOT_TIMEOUT);
+      this.resetBootDeadline();
     } catch {
       if (!attempt.signal.aborted) this.fail('원본 게임을 불러오지 못했습니다');
     }
@@ -115,15 +117,26 @@ export class OriginalGame {
   onMessage(event) {
     if (!this.frame || event.source !== this.frame.contentWindow || event.origin !== window.location.origin ||
         this.phase === 'returning') return;
-    if (event.data?.type === 'noxac-original-ready' && this.phase === 'loading') {
+    const { type, percent } = event.data ?? {};
+    if (type === 'noxac-original-progress' && this.phase === 'loading' &&
+        Number.isInteger(percent) && percent >= 0 && percent <= 100 && percent > this.progress) {
+      this.progress = percent;
+      this.label.textContent = `원본 게임 불러오는 중 · ${percent}%`;
+      this.resetBootDeadline();
+    } else if (type === 'noxac-original-ready' && this.phase === 'loading') {
       clearTimeout(this.deadline);
       this.setPhase('ready');
       this.frame.focus();
-    } else if (event.data?.type === 'noxac-original-error') {
+    } else if (type === 'noxac-original-error') {
       this.fail('원본 게임이 중단되었습니다');
-    } else if (event.data?.type === 'noxac-original-exit') {
+    } else if (type === 'noxac-original-exit') {
       void this.returnToInn();
     }
+  }
+
+  resetBootDeadline() {
+    clearTimeout(this.deadline);
+    this.deadline = setTimeout(() => this.fail('원본 게임을 시작하지 못했습니다'), BOOT_TIMEOUT);
   }
 
   requestSave() {

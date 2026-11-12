@@ -48,8 +48,16 @@
 	});
 	var ready = false;
 	var finished = false;
-	function notifyParent(type) {
-		if (window.parent !== window) window.parent.postMessage({ type: type }, location.origin);
+	var exiting = false;
+	document.addEventListener("visibilitychange", function (event) {
+		// Returning already paused and saved on the game thread. The backend listener can be gone on detach.
+		if (exiting) event.stopImmediatePropagation();
+	}, true);
+	function notifyParent(type, percent) {
+		if (window.parent === window) return;
+		var message = { type: type };
+		if (typeof percent === "number") message.percent = percent;
+		window.parent.postMessage(message, location.origin);
 	}
 	spd.ready = function () {
 		if (ready || finished) return;
@@ -61,13 +69,19 @@
 
 	// ---- loading screen -------------------------------------------------------------------
 	var barFill = $("bar").firstElementChild;
+	var lastPercent = -1;
 	spd.progress = function (done, total) {
 		var pct = total > 0 ? Math.floor(done * 100 / total) : 0;
+		if (!Number.isFinite(pct)) return;
+		pct = Math.max(0, Math.min(100, pct));
+		if (pct === lastPercent) return;
+		lastPercent = pct;
 		barFill.style.width = pct + "%";
 		$("status").textContent = "원본 게임 불러오는 중… " + pct + "%";
+		notifyParent("noxac-original-progress", pct);
 	};
 	spd.loaded = function () {
-		barFill.style.width = "100%";
+		spd.progress(1, 1);
 		$("status").textContent = "원본 게임을 시작하는 중…";
 		// the game draws its first frames a moment after the assets are ready
 		setTimeout(function () { $("loader").classList.add("hidden"); canvas.focus(); }, 400);
@@ -89,6 +103,7 @@
 	spd.exit = function () {
 		if (finished) return;
 		finished = true;
+		exiting = true;
 		$("closed").classList.remove("hidden");
 		if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen();
 		notifyParent("noxac-original-exit");
