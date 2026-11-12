@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151713">
+  <meta name="description" content="여관에서 동료를 만나 함께 하수도 던전에 들어가세요.">
+  <title>여관 · Noxac Pixel Dungeon</title>
+  <link rel="stylesheet" href="/play/styles.css">
+  <script type="module" src="/play/main.mjs"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true"><i></i></span>
+        <div><p class="brand-name">Noxac Pixel Dungeon</p><h1 id="scene-title">여관</h1></div>
+      </div>
+      <div class="top-actions">
+        <span class="status" id="connection" data-tone="idle">입장 대기</span>
+        <button type="button" id="help-toggle" aria-controls="help" aria-expanded="false">조작법 <kbd>F1</kbd></button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="stage" aria-labelledby="board-title">
+        <header class="stage-heading"><h2 id="board-title">여관 홀</h2><span id="board-status">모험가 대기 중</span></header>
+        <div class="canvas-wrap">
+          <canvas id="board" width="384" height="288" tabindex="0" aria-label="여관 지도. 방향키나 WASD로 이동합니다."></canvas>
+          <aside id="help" class="help" hidden aria-label="조작법">
+            <dl>
+              <div><dt>이동</dt><dd>WASD · 방향키 · 칸 클릭</dd></div>
+              <div><dt>대각선</dt><dd>방향 조합 · 숫자패드</dd></div>
+              <div><dt>평타</dt><dd>Space · 적 클릭</dd></div>
+              <div><dt>식량</dt><dd>E · 행동력 3</dd></div>
+            </dl>
+          </aside>
+          <p id="battle-overlay" class="battle-overlay" hidden></p>
+        </div>
+        <footer class="stage-footer">
+          <p id="notice" class="notice" role="status" aria-live="polite"></p>
+          <div id="touch-controls" class="touch-controls" aria-label="터치 조작" hidden>
+            <div class="dpad" aria-label="이동 방향">
+              <button data-direction="-1,-1" type="button" aria-label="왼쪽 위">↖</button>
+              <button data-direction="0,-1" type="button" aria-label="위">↑</button>
+              <button data-direction="1,-1" type="button" aria-label="오른쪽 위">↗</button>
+              <button data-direction="-1,0" type="button" aria-label="왼쪽">←</button>
+              <span class="dpad-center" aria-hidden="true">◆</span>
+              <button data-direction="1,0" type="button" aria-label="오른쪽">→</button>
+              <button data-direction="-1,1" type="button" aria-label="왼쪽 아래">↙</button>
+              <button data-direction="0,1" type="button" aria-label="아래">↓</button>
+              <button data-direction="1,1" type="button" aria-label="오른쪽 아래">↘</button>
+            </div>
+            <div id="touch-battle" class="touch-battle" hidden>
+              <button class="primary" id="touch-attack" type="button">평타</button>
+              <button id="touch-eat" type="button">식량</button>
+            </div>
+          </div>
+        </footer>
+      </section>
+
+      <aside class="sidebar" aria-label="게임 조작과 상태">
+        <div id="inn-panel">
+          <section class="card profile-card" aria-labelledby="name-heading">
+            <h2 id="name-heading">여관 입장</h2>
+            <form id="name-form" class="inline-form">
+              <label class="sr-only" for="player-name">닉네임</label>
+              <input id="player-name" name="name" maxlength="40" placeholder="닉네임" autocomplete="nickname" required>
+              <button class="primary" id="name-button" type="submit">입장</button>
+            </form>
+          </section>
+
+          <section class="card" aria-labelledby="expedition-heading">
+            <h2 id="expedition-heading">던전 입장</h2>
+            <button class="primary wide" id="match" type="button" disabled>동료 찾기</button>
+            <div class="button-row">
+              <button id="guide" type="button" disabled>길잡이와 입장</button>
+              <button id="drink" type="button" disabled>술 한 잔</button>
+            </div>
+            <ul id="seekers" class="seekers" aria-label="동료를 찾는 모험가" hidden></ul>
+          </section>
+
+          <section class="card chat-card" aria-labelledby="chat-heading">
+            <h2 id="chat-heading">여관 대화</h2>
+            <ol id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></ol>
+            <form id="chat-form" class="inline-form">
+              <label class="sr-only" for="chat-message">보낼 메시지</label>
+              <input id="chat-message" name="message" maxlength="320" placeholder="메시지" autocomplete="off" disabled required>
+              <button id="chat-send" type="submit" disabled>보내기</button>
+            </form>
+          </section>
+        </div>
+
+        <div id="dungeon-panel" hidden>
+          <section class="card" aria-labelledby="party-heading">
+            <h2 id="party-heading">파티</h2>
+            <div id="party" class="party"></div>
+            <p id="queued" class="queue" hidden></p>
+          </section>
+          <section class="card actions-card" aria-labelledby="actions-heading">
+            <h2 id="actions-heading">행동</h2>
+            <button class="primary wide" id="attack" type="button">평타 <kbd>Space</kbd></button>
+            <button class="wide" id="eat" type="button">식량 <kbd>E</kbd></button>
+            <button class="wide return" id="return" type="button">여관으로</button>
+          </section>
+        </div>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>
