@@ -299,7 +299,9 @@ export class HostBattle {
 
   #chat(actor, text) {
     if (this.#messages.length === CHAT_HISTORY) this.#messages.shift();
-    this.#messages.push({ id: ++this.#nextMessageId, actorId: actor.id, name: actor.name, text });
+    this.#messages.push({
+      id: ++this.#nextMessageId, actorId: actor.id, name: actor.name, text, time: this.#wallObservedAt
+    });
   }
 
   #find(actorId) {

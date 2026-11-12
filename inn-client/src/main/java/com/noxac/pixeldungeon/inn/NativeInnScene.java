@@ -69,7 +69,9 @@ public final class NativeInnScene extends PixelScene {
     private boolean hasDisplayed;
     private boolean modalOpen;
     private boolean submitPending;
-    private boolean sending;
+    private boolean openingEnterHeld;
+    private String unsentChat = "";
+    private long chatRevision;
 
     @Override
     public void create() {
@@ -96,7 +98,7 @@ public final class NativeInnScene extends PixelScene {
         float panelHeight = bottom - top;
         panel(EDGE, top, boardWidth, panelHeight);
         board = new NativeInnBoard(EDGE + 1, top + 1, boardWidth - 2, panelHeight - 18,
-            cell -> destination = cell, this::joinSeeking, this::speakToNpc);
+            cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc);
         add(board);
         drink = button("술 한 잔", EDGE + boardWidth - 40, bottom - 15, 36, 12, false, () -> {
             LobbySession session = NativeClient.inn();
@@ -141,11 +143,11 @@ public final class NativeInnScene extends PixelScene {
         showSnapshot();
         if (!modalOpen && Gdx.input.isKeyJustPressed(Input.Keys.F1)) toggleHelp();
         if (editor != null) {
+            if (!Gdx.input.isKeyPressed(Input.Keys.ENTER)) openingEnterHeld = false;
             if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) closeComposer();
             else if (submitPending) submitChat();
         } else if (!modalOpen) {
-            if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) &&
-                    !Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT) && !Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT)) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) && !altHeld()) {
                 openComposer();
             } else {
                 move();
@@ -206,7 +208,7 @@ public final class NativeInnScene extends PixelScene {
                 state != null && state.queued() ? "구함 취소" : "동료 구함");
             drink.enabled(online);
             compose.enabled(online);
-            send.enabled(online && !sending);
+            send.enabled(online);
             if (!online) closeComposer();
             displayed = snapshot;
             displayedTestMode = testMode;
@@ -370,7 +372,7 @@ public final class NativeInnScene extends PixelScene {
         overlay.add(block(x + 1, y + 1, w - 2, 59, 0xe6211918));
         overlay.add(label("조작 방법", 8, GOLD, x + 5, y + 4));
         overlay.add(label("이동  WASD / 방향키 / 숫자패드", 6, CREAM, x + 5, y + 16));
-        overlay.add(label("대화  Enter", 6, CREAM, x + 5, y + 26));
+        overlay.add(label("대화  Enter · Esc 취소", 6, CREAM, x + 5, y + 26));
         overlay.add(label("동료 찾기  동료 구함 표지 클릭", 6, CREAM, x + 5, y + 36));
         overlay.add(label("확대/축소  휠 · NPC 대화  클릭", 6, CREAM, x + 5, y + 46));
         return overlay;
@@ -380,13 +382,19 @@ public final class NativeInnScene extends PixelScene {
         if (editor != null || modalOpen || displayed == null || !displayed.online()) return;
         destination = null;
         keyboard.reset();
+        openingEnterHeld = Gdx.input.isKeyPressed(Input.Keys.ENTER);
+        chatRevision++;
         editor = new TextInput(Chrome.get(Chrome.Type.TOAST_WHITE), false, defaultZoom * 7) {
             @Override
             public void enterPressed() {
-                submitPending = true;
+                if (!openingEnterHeld && !altHeld()) submitPending = true;
             }
         };
         editor.setMaxLength(160);
+        if (!unsentChat.isEmpty()) {
+            editor.setText(unsentChat);
+            unsentChat = "";
+        }
         compose.visible = false;
         send.visible = true;
         addToFront(editor);
@@ -399,25 +407,29 @@ public final class NativeInnScene extends PixelScene {
         editor.destroy();
         editor = null;
         submitPending = false;
+        openingEnterHeld = false;
+        destination = null;
+        keyboard.reset();
         compose.visible = true;
         send.visible = false;
     }
 
     private void submitChat() {
         submitPending = false;
-        if (editor == null || sending) return;
+        if (editor == null) return;
         String value = editor.getText().strip();
-        if (value.isBlank()) return;
+        closeComposer();
+        if (value.isEmpty()) return;
         LobbySession session = NativeClient.inn();
         if (session == null) return;
-        sending = true;
-        TextInput input = editor;
-        send.enabled(false);
+        long revision = chatRevision;
         session.chat(value, sent -> Gdx.app.postRunnable(() -> {
-            sending = false;
-            if (editor == input && sent) closeComposer();
-            send.enabled(displayed != null && displayed.online());
+            if (!sent && Game.scene() == this && editor == null && revision == chatRevision) unsentChat = value;
         }));
+    }
+
+    private static boolean altHeld() {
+        return Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT);
     }
 
     private void panel(float x, float y, float w, float h) {

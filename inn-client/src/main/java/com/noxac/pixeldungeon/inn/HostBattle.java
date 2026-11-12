@@ -277,7 +277,7 @@ final class HostBattle {
 
     private void chat(Actor actor, String text) {
         if (messages.size() == CHAT_HISTORY) messages.removeFirst();
-        messages.addLast(new InnApi.PartyChat(++nextMessageId, actor.id, actor.name, text));
+        messages.addLast(new InnApi.PartyChat(++nextMessageId, actor.id, actor.name, text, wallObservedAt));
     }
 
     private static InnApi.Action normalize(InnApi.Action action) {

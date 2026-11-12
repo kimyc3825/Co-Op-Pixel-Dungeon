@@ -52,7 +52,7 @@ final class InnApi {
         }
     }
     record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
-    record PartyChat(long id, String actorId, String name, String text) {}
+    record PartyChat(long id, String actorId, String name, String text, long time) {}
     record BattleEvent(long id, String action, String result, String actorId, String targetId,
                        int x, int y, int amount, long at) {}
     record Projectile(long id, String ownerId, int x, int y, int nextX, int nextY, long stepAt) {}

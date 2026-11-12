@@ -13,9 +13,9 @@ const fields = Object.fromEntries([
   'inn-panel', 'name-heading', 'name-form', 'player-name', 'name-button', 'dungeon-theme', 'friendly-fire', 'match', 'guide', 'drink', 'seekers',
   'profile-preview', 'profile-summary', 'profile-name', 'profile-job-label', 'profile-change', 'profile-cancel', 'profile-notice',
   'profile-job', 'profile-hair-style', 'profile-hair-color', 'profile-hair-swatch', 'profile-outfit-color', 'profile-outfit-swatch', 'profile-accessory',
-  'chat-form', 'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
+  'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
   'touch-controls', 'touch-battle', 'touch-attack', 'touch-shoot', 'touch-eat', 'backpack', 'backpack-hint', 'attack-log', 'aim-hint',
-  'dungeon-chat-log', 'dungeon-chat-form', 'dungeon-chat-message', 'dungeon-chat-send',
+  'dungeon-chat-log', 'dungeon-chat-message', 'dungeon-chat-send',
   'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
   'original-launch',
@@ -48,6 +48,9 @@ const LOADING_TIPS = [
 const held = new Map();
 const busy = new Set();
 const party = new Map();
+const chatInputs = new Set([fields['chat-message'], fields['dungeon-chat-message']]);
+const composingChat = new WeakSet();
+const skipChatSubmit = new WeakSet();
 const profileFields = [
   { input: fields['profile-job'], field: 'job', options: AvatarCatalog.jobs },
   { input: fields['profile-hair-style'], field: 'hairStyle', options: AvatarCatalog.hairStyles },
@@ -123,12 +126,12 @@ const play = new PlaySession({
       fields.party.replaceChildren();
       fields['dungeon-chat-message'].value = '';
       fields['dungeon-chat-log'].replaceChildren();
-      delete fields['dungeon-chat-log'].dataset.events;
+      delete fields['dungeon-chat-log'].dataset.after;
     }
     const artChanged = prior?.id !== state.id || board.assetVersion !== frame.assetVersion;
     const now = performance.now();
     syncVisualClock(isPaused(state), now);
-    board.set(state, true, visualTime(now), frame.assetVersion);
+    board.set(state, true, visualTime(now), frame.assetVersion, frame.wallTime());
     if (artChanged) fields.backpack.style.setProperty('--items-atlas', `url("${board.images.items.src}")`);
     const attackEvents = recentAttackEvents(state, frame.serverTime());
     board.showAttackEvents(attackEvents, visualTime(now));
@@ -302,6 +305,12 @@ function drawProfile(now) {
 
 function focusBoard() { board.canvas.focus({ preventScroll: true }); }
 
+function chatFocused() { return chatInputs.has(document.activeElement); }
+
+function preserveChatFocus(event) {
+  if (chatFocused()) event.preventDefault();
+}
+
 function isRuntimeLoading() {
   return loading?.phase === 'checking' || loading?.phase === 'loading';
 }
@@ -435,12 +444,12 @@ function talkNearby() {
 }
 
 function updateChat(log, events) {
-  const recent = events.slice(-24);
-  const key = recent.map((event) => event.id).join(',');
-  if (key === log.dataset.events) return;
-  log.dataset.events = key;
+  const after = Number(log.dataset.after) || 0;
+  const fresh = events.filter(({ id }) => id > after);
+  if (!fresh.length) return;
+  log.dataset.after = String(fresh.at(-1).id);
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
-  log.replaceChildren(...recent.map((event) => {
+  log.append(...fresh.map((event) => {
     const row = document.createElement('li');
     const who = document.createElement('strong');
     who.textContent = event.name;
@@ -448,6 +457,7 @@ function updateChat(log, events) {
     row.append(who, document.createTextNode(event.kind === 'drink' ? '님이 술을 마셨습니다.' : event.text ?? ''));
     return row;
   }));
+  while (log.childElementCount > 80) log.firstElementChild.remove();
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
@@ -902,7 +912,7 @@ function changeDirection(now, releasing = false) {
 }
 
 function movement(now) {
-  if (aimCell || isRuntimeLoading() || isPaused(play.frame?.state)) return;
+  if (aimCell || isRuntimeLoading() || isPaused(play.frame?.state) || typing(document.activeElement)) return;
   const command = tap ?? (direction?.at <= now ? direction : null);
   if (command) {
     if (play.frame) moveDungeon(command.dx, command.dy, command.fresh, now);
@@ -981,36 +991,50 @@ fields['name-form'].addEventListener('submit', (event) => {
     focusBoard();
   });
 });
-fields['chat-form'].addEventListener('submit', (event) => {
-  event.preventDefault();
-  const input = fields['chat-message'];
-  const message = input.value.trim();
-  if (message) void run('chat', async () => {
-    if (await play.chat(message) && input.value.trim() === message) input.value = '';
+for (const input of chatInputs) {
+  input.addEventListener('compositionstart', () => composingChat.add(input));
+  input.addEventListener('compositionend', () => composingChat.delete(input));
+  input.addEventListener('blur', () => composingChat.delete(input));
+  input.form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (input.disabled || composingChat.has(input) || skipChatSubmit.has(input)) return;
+    const draft = input.value;
+    const message = draft.trim();
+    if (!message) { board.canvas.focus(); return; }
+    if ([...message].length > BattleRules.CHAT_LIMIT || /[\p{C}\p{Zl}\p{Zp}]/u.test(message)) {
+      flash(`대화는 한 줄, ${BattleRules.CHAT_LIMIT}자까지 보낼 수 있습니다.`);
+      return;
+    }
+    if (input === fields['dungeon-chat-message']) {
+      if (!canChat(play.frame?.state) || !play.action('chat', 0, 0, message)) return;
+      input.value = '';
+      board.canvas.focus();
+      return;
+    }
+    if (busy.has('chat')) return;
+    input.value = '';
+    board.canvas.focus();
+    void run('chat', async () => {
+      if (!await play.chat(message) && !input.value) input.value = draft;
+    });
   });
-});
-fields['dungeon-chat-form'].addEventListener('submit', (event) => {
-  event.preventDefault();
-  if (!canChat(play.frame?.state)) return;
-  const input = fields['dungeon-chat-message'];
-  const message = input.value.trim();
-  if (!message) return;
-  if ([...message].length > BattleRules.CHAT_LIMIT || /[\p{C}\p{Zl}\p{Zp}]/u.test(message)) {
-    flash(`파티 대화는 한 줄, ${BattleRules.CHAT_LIMIT}자까지 보낼 수 있습니다.`);
-  } else if (play.action('chat', 0, 0, message)) input.value = '';
-});
+}
 fields.match.addEventListener('click', () => void match());
-fields.drink.addEventListener('click', () => void run('drink', async () => { await play.drink(); focusBoard(); }));
 fields.guide.addEventListener('click', () => { if (play.practice()) focusBoard(); });
-fields.attack.addEventListener('click', () => { attack(); focusBoard(); });
-fields.shoot.addEventListener('click', () => { toggleAim(); focusBoard(); });
-fields.eat.addEventListener('click', () => { eat(); focusBoard(); });
-fields['touch-attack'].addEventListener('click', () => attack());
-fields['touch-shoot'].addEventListener('click', () => { toggleAim(); focusBoard(); });
-fields['touch-eat'].addEventListener('click', eat);
+for (const [id, action, returnFocus] of [
+  ['drink', () => void run('drink', () => play.drink()), true],
+  ['attack', attack, true], ['shoot', toggleAim, true], ['eat', eat, true], ['pause', togglePause, true],
+  ['touch-attack', attack, false], ['touch-shoot', toggleAim, true], ['touch-eat', eat, false],
+]) {
+  fields[id].addEventListener('pointerdown', preserveChatFocus);
+  fields[id].addEventListener('click', () => {
+    if (chatFocused()) return;
+    action();
+    if (returnFocus) focusBoard();
+  });
+}
 fields.return.addEventListener('click', () => void run('return', async () => { await play.returnToInn(); focusBoard(); }));
 fields['help-toggle'].addEventListener('click', toggleHelp);
-fields.pause.addEventListener('click', () => { togglePause(); focusBoard(); });
 fields['npc-close'].addEventListener('click', () => { showDialogue(); focusBoard(); });
 fields['loading-retry'].addEventListener('click', () => {
   if (loading?.phase !== 'failed' || fields['loading-retry'].disabled) return;
@@ -1021,7 +1045,9 @@ fields['loading-retry'].addEventListener('click', () => {
   focusBoard();
 });
 fields['loading-close'].addEventListener('click', () => { updateLoading({ phase: 'ready' }); focusBoard(); });
+board.canvas.addEventListener('pointerdown', preserveChatFocus);
 board.canvas.addEventListener('click', (event) => {
+  if (chatFocused()) { focusBoard(); return; }
   const [px, py] = board.point(event);
   const [x, y] = board.cellAt(px, py);
   focusBoard();
@@ -1069,17 +1095,40 @@ board.canvas.addEventListener('wheel', (event) => {
 function typing(target) { return target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable); }
 
 window.addEventListener('keydown', (event) => {
-  if (original.active) return;
+  if (original.active || event.defaultPrevented) return;
+  const enter = event.key === 'Enter' || event.code === 'Enter' || event.code === 'NumpadEnter';
+  const escape = event.key === 'Escape' || event.code === 'Escape';
+  const chatInput = chatInputs.has(event.target) ? event.target : null;
+  if (event.isComposing || event.keyCode === 229 || composingChat.has(chatInput)) {
+    if (chatInput && enter) {
+      skipChatSubmit.add(chatInput);
+      setTimeout(() => skipChatSubmit.delete(chatInput), 0);
+    }
+    return;
+  }
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (chatInput) {
+    if (enter || escape) {
+      event.preventDefault();
+      if (!event.repeat) {
+        if (enter && chatInput.value.trim()) {
+          skipChatSubmit.delete(chatInput);
+          chatInput.form.requestSubmit();
+        } else board.canvas.focus();
+      }
+    }
+    return;
+  }
+  if (typing(event.target)) return;
   if (event.code === 'F1' && !event.repeat) { event.preventDefault(); toggleHelp(); return; }
-  if (event.altKey || event.ctrlKey || event.metaKey || typing(event.target)) return;
   if (!play.frame && !event.repeat) {
-    if (event.code === 'Enter' && event.target === board.canvas) { event.preventDefault(); talkNearby(); return; }
-    if (event.code === 'Escape' && !fields['inn-dialogue'].hidden) { event.preventDefault(); showDialogue(); return; }
+    if (event.code === 'KeyF' && event.target === board.canvas) { event.preventDefault(); talkNearby(); return; }
+    if (escape && !fields['inn-dialogue'].hidden) { event.preventDefault(); showDialogue(); focusBoard(); return; }
   }
   const step = keys.get(event.code);
   if (aimCell) {
-    if (event.code === 'Escape') { event.preventDefault(); setAim(null); return; }
-    if (event.code === 'Enter' && event.target === board.canvas && !event.repeat) {
+    if (escape) { event.preventDefault(); setAim(null); return; }
+    if (enter && event.target === board.canvas && !event.repeat) {
       event.preventDefault();
       shoot(...aimCell);
       return;
@@ -1089,6 +1138,15 @@ window.addEventListener('keydown', (event) => {
       aimAt(aimCell[0] + step[0], aimCell[1] + step[1]);
       return;
     }
+  }
+  if (enter && !aimCell && !loading && fields['inn-dialogue'].hidden &&
+      !event.target?.closest?.('button, a, summary, [role="button"]')) {
+    const input = fields[play.frame ? 'dungeon-chat-message' : 'chat-message'];
+    if (!input.disabled) {
+      event.preventDefault();
+      if (!event.repeat) input.focus();
+    }
+    return;
   }
   if (step) {
     event.preventDefault();
@@ -1112,6 +1170,7 @@ document.addEventListener('focusin', (event) => { if (typing(event.target)) clea
 for (const button of document.querySelectorAll('[data-direction]')) {
   const step = button.dataset.direction.split(',').map(Number);
   button.addEventListener('pointerdown', (event) => {
+    if (chatFocused()) { event.preventDefault(); return; }
     if (event.button !== 0 || aimCell || isPaused(play.frame?.state)) return;
     event.preventDefault();
     button.setPointerCapture(event.pointerId);
@@ -1124,7 +1183,7 @@ for (const button of document.querySelectorAll('[data-direction]')) {
     });
   }
   button.addEventListener('click', (event) => {
-    if (event.detail !== 0 || aimCell) return;
+    if (chatFocused() || event.detail !== 0 || aimCell) return;
     if (play.frame) moveDungeon(...step, true, performance.now());
     else moveInn(...step, performance.now());
   });

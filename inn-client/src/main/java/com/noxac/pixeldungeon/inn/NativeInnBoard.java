@@ -27,6 +27,7 @@ final class NativeInnBoard extends Group {
     private static final int CREAM = 0xf9e5c8;
     private static final int TILE = 16;
     private static final int MAX_ZOOM_STEPS = 4;
+    private static final long SPEECH_MILLIS = 4_500;
     private static final String SIGN = "inn/looking-sign.png";
     private static final String NPC_SPRITES = "inn/inn-npcs.png";
     private static final int[] FLOOR = {0x72503b, 0x79543e, 0x805840, 0x754b36};
@@ -39,6 +40,7 @@ final class NativeInnBoard extends Group {
     private final int viewportHeight;
     private final Group world = new Group();
     private final Group figures = new Group();
+    private final Group speechBubbles = new Group();
     private final Map<String, Figure> guests = new HashMap<>();
     private final Map<String, Figure> npcs = new HashMap<>();
 
@@ -76,6 +78,7 @@ final class NativeInnBoard extends Group {
         world.camera = boardCamera;
         add(world);
         world.add(figures);
+        world.add(speechBubbles);
         add(new ScrollArea(left, top, width, height) {
             @Override
             protected void onScroll(ScrollEvent event) {
@@ -187,8 +190,12 @@ final class NativeInnBoard extends Group {
             if (event.id() <= lastEvent) continue;
             lastEvent = event.id();
             Figure guest = guests.get(event.playerId());
-            if (guest != null && "drink".equals(event.kind()) && state.now() - event.time() <= 2_000) {
+            if (guest == null) continue;
+            long age = Math.max(0, state.now() - event.time());
+            if ("drink".equals(event.kind()) && age <= 2_000) {
                 guest.motion.drink(now);
+            } else if ("chat".equals(event.kind()) && age < SPEECH_MILLIS && event.text() != null && !event.text().isBlank()) {
+                guest.speak(event.text(), now + (SPEECH_MILLIS - age) * 1_000_000L);
             }
         }
     }
@@ -211,6 +218,7 @@ final class NativeInnBoard extends Group {
             if (guide != null) guide.pose(guide.motion.pose(now));
             figures.sort(Comparator.nullsLast(Comparator.comparingDouble(g -> ((Figure) g).depth)));
             followPlayer();
+            for (Figure guest : guests.values()) guest.placeSpeech(now);
         }
         super.update();
     }
@@ -349,6 +357,88 @@ final class NativeInnBoard extends Group {
         map.fillRectangle(x, y, w, h);
     }
 
+    private final class SpeechBubble extends Group {
+        private static final int INK = 0x392824;
+        private static final int PAPER = 0xfff8e9cc;
+        private static final int EDGE = 0xff392824;
+
+        private final ColorBlock shadow = new ColorBlock(1, 1, 0x991d1717);
+        private final ColorBlock border = new ColorBlock(1, 1, EDGE);
+        private final ColorBlock background = new ColorBlock(1, 1, PAPER);
+        private final ColorBlock tail = new ColorBlock(5, 2, EDGE);
+        private final ColorBlock tailCenter = new ColorBlock(3, 1, PAPER);
+        private final ColorBlock tip = new ColorBlock(1, 1, EDGE);
+        private final RenderedTextBlock label = PixelScene.renderTextBlock(6);
+        private String message;
+        private long expires;
+        private int columns;
+
+        SpeechBubble() {
+            add(shadow);
+            add(border);
+            add(background);
+            add(tail);
+            add(tailCenter);
+            add(tip);
+            add(label);
+            label.maxWidth(180);
+            label.setHightlighting(false);
+            label.hardlight(INK);
+            visible = false;
+        }
+
+        void show(String message, long expires) {
+            this.message = message;
+            this.expires = expires;
+            columns = 0;
+        }
+
+        void place(float center, float anchor, float spriteTop, float feet, long now) {
+            float leftEdge = Math.max(1, boardCamera.scroll.x + 1);
+            float rightEdge = Math.min(mapWidth - 1, boardCamera.scroll.x + viewportWidth / boardCamera.zoom - 1);
+            float topEdge = Math.max(1, boardCamera.scroll.y + 1);
+            float bottomEdge = Math.min(mapHeight - 1, boardCamera.scroll.y + viewportHeight / boardCamera.zoom - 1);
+            visible = now < expires && center >= leftEdge && center <= rightEdge && feet >= topEdge && spriteTop < bottomEdge;
+            if (!visible) return;
+
+            int limit = Math.max(2, Math.min(18, (int) ((rightEdge - leftEdge - 8) / 7)));
+            if (columns != limit) {
+                columns = limit;
+                label.text(previewText(message, columns));
+            }
+            float width = (float) Math.ceil(label.width()) + 8;
+            float height = (float) Math.ceil(label.height()) + 6;
+            float left = Math.round(Math.max(leftEdge, Math.min(rightEdge - width, center - width / 2)));
+            float above = anchor - height - 5;
+            boolean below = above < topEdge && feet + 5 + height <= bottomEdge;
+            float top = Math.round(below ? feet + 5 : Math.max(topEdge, above));
+            float pointer = Math.round(Math.max(left + 4, Math.min(left + width - 4, center)));
+
+            shadow.size(width, height);
+            border.size(width, height);
+            background.size(width - 2, height - 2);
+            shadow.x = background.x = left + 1;
+            shadow.y = background.y = top + 1;
+            border.x = left;
+            border.y = top;
+            tail.x = pointer - 2;
+            tail.y = below ? top - 2 : top + height;
+            tailCenter.x = pointer - 1;
+            tailCenter.y = below ? top - 1 : top + height;
+            tip.x = pointer;
+            tip.y = below ? top - 3 : top + height + 2;
+            label.setPos(left + 4, top + 2);
+        }
+
+        private static String previewText(String text, int lineLength) {
+            int length = text.codePointCount(0, text.length());
+            if (length > lineLength * 2) text = text.substring(0, text.offsetByCodePoints(0, lineLength * 2 - 1)) + "…";
+            if (length <= lineLength) return text;
+            int split = text.offsetByCodePoints(0, lineLength);
+            return text.substring(0, split).stripTrailing() + "\n" + text.substring(split).stripLeading();
+        }
+    }
+
     private final class Figure extends Group {
         private final InnMotion motion;
         private final boolean companion;
@@ -361,6 +451,7 @@ final class NativeInnBoard extends Group {
         private final ColorBlock mug = new ColorBlock(3, 3, 0xffe8b75f);
         private Image sign;
         private RenderedTextBlock signText;
+        private SpeechBubble speech;
         private String name;
         private InnApi.Appearance appearance;
         private AvatarSprites outfit;
@@ -396,8 +487,27 @@ final class NativeInnBoard extends Group {
 
         @Override
         public void destroy() {
+            if (speech != null) {
+                speech.remove();
+                speech.destroy();
+            }
             super.destroy();
             if (outfit != null) outfit.close();
+        }
+
+        void speak(String text, long expires) {
+            if (speech == null) {
+                speech = new SpeechBubble();
+                speechBubbles.add(speech);
+            }
+            speech.show(text, expires);
+        }
+
+        void placeSpeech(long now) {
+            if (speech != null) {
+                float anchor = sign != null && sign.visible ? sign.y : nameplate.y;
+                speech.place(sprite.x + sprite.width() / 2, anchor, sprite.y, depth, now);
+            }
         }
 
         void rename(String value) {

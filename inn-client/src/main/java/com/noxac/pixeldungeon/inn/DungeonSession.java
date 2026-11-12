@@ -371,7 +371,8 @@ final class DungeonSession implements AutoCloseable {
             state.drops() != null && state.drops().stream().allMatch(drop ->
                 drop != null && drop.id() != null && drop.item() != null) &&
             state.messages().size() <= 16 && state.messages().stream().allMatch(message ->
-                message != null && message.actorId() != null && message.name() != null && message.text() != null) &&
+                message != null && message.id() > 0 && message.time() >= 0 && message.actorId() != null &&
+                    message.name() != null && message.text() != null) &&
             state.attackEvents().size() <= 16 && state.attackEvents().stream().allMatch(event ->
                 event != null && event.id() > 0 && event.at() >= 0 && event.actorId() != null && event.amount() >= 0 &&
                     ("attack".equals(event.action()) || "shoot".equals(event.action())) &&

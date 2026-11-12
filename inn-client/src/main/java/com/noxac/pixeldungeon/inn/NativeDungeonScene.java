@@ -51,6 +51,8 @@ public final class NativeDungeonScene extends PixelScene {
     private static final long MOVE_QUEUE_LEAD_MS = 70;
     private static final long MOVE_RETRY_NS = 60_000_000L;
     private static final long COMMAND_ACK_WAIT_NS = 550_000_000L;
+    private static final long SPEECH_MS = 4_500;
+    private static final int CHAT_HISTORY_LIMIT = 80;
 
     private record Step(int dx, int dy) {}
     private record SubmittedAction(InnApi.Action action, long acknowledgement, long sentAt) {}
@@ -76,6 +78,7 @@ public final class NativeDungeonScene extends PixelScene {
     private final Map<Long, ColorBlock> projectileViews = new HashMap<>();
     private final List<ImpactLabel> impactLabels = new ArrayList<>();
     private final List<WallLip> wallLips = new ArrayList<>();
+    private final List<InnApi.PartyChat> chatHistory = new ArrayList<>();
     private final PartySlot[] party = new PartySlot[2];
     private final KeyboardMovement movement = new KeyboardMovement();
     private InnApi.DungeonState state;
@@ -83,10 +86,17 @@ public final class NativeDungeonScene extends PixelScene {
     private Signal.Listener<KeyEvent> keys;
     private Group world;
     private Group actorOverlays;
+    private Group speechOverlays;
     private Group projectiles;
     private Group impacts;
     private Group loot;
     private Group help;
+    private Group chatLog;
+    private ChatRows chatRows;
+    private ScrollPane chatScroll;
+    private StyledButton chatPrompt;
+    private StyledButton chatSend;
+    private TextInput chatEditor;
     private Tilemap tiles;
     private ColorBlock floorPanel;
     private ColorBlock selectedTile;
@@ -127,12 +137,20 @@ public final class NativeDungeonScene extends PixelScene {
     private String localNotice = "";
     private long noticeUntil;
     private long seenAttackEvent;
+    private long seenChatId;
     private boolean attackHeld;
     private boolean shootHeld;
     private boolean aiming;
     private boolean rationHeld;
     private boolean helpHeld;
     private boolean pauseHeld;
+    private boolean chatPinned;
+    private boolean chatDirty = true;
+    private boolean chatOpenPending;
+    private boolean chatCancelPending;
+    private boolean chatSubmitPending;
+    private boolean composerEnterReleased;
+    private boolean waitForKeyRelease;
     private boolean rationFirst = true;
     private boolean leaving;
 
@@ -174,7 +192,7 @@ public final class NativeDungeonScene extends PixelScene {
         float toolsWidth = (sideWidth - 16) / 3;
         button(this, "가방", () -> showPanel(BackpackWindow::new)).setRect(sideX + 6, boardY + 4, toolsWidth, 13);
         button(this, "상태", () -> showPanel(StatusWindow::new)).setRect(sideX + 8 + toolsWidth, boardY + 4, toolsWidth, 13);
-        button(this, "대화", () -> showPanel(ChatWindow::new)).setRect(sideX + 10 + toolsWidth * 2, boardY + 4, toolsWidth, 13);
+        button(this, "대화", this::toggleChatLog).setRect(sideX + 10 + toolsWidth * 2, boardY + 4, toolsWidth, 13);
 
         float partyTop = boardY + 21;
         float spacing = boardHeight < 125 ? 26 : 31;
@@ -214,14 +232,16 @@ public final class NativeDungeonScene extends PixelScene {
         pauseCard = new Group();
         add(pauseCard);
         float pauseCardWidth = Math.min(boardWidth - 14, 118);
-        float pauseCardX = boardX + (boardWidth - pauseCardWidth) / 2;
-        float pauseCardY = boardY + 8;
+        float pauseCardX = boardX + boardWidth - pauseCardWidth - 6;
+        float pauseCardY = boardY + 16;
         panel(pauseCard, pauseCardX, pauseCardY, pauseCardWidth, 30, 0xE9262C29);
         RenderedTextBlock pauseTitle = label(pauseCard, "전술 정지", 9, TEXT, pauseCardX + 5, pauseCardY + 4, pauseCardWidth - 10);
         pauseTitle.align(RenderedTextBlock.CENTER_ALIGN);
         pauseCountdown = label(pauseCard, " ", 7, TEXT, pauseCardX + 5, pauseCardY + 17, pauseCardWidth - 10);
         pauseCountdown.align(RenderedTextBlock.CENTER_ALIGN);
         pauseCard.visible = false;
+        speechOverlays = new Group();
+        add(speechOverlays);
         waitingCard = new Group();
         add(waitingCard);
         waitingCard.visible = false;
@@ -245,7 +265,7 @@ public final class NativeDungeonScene extends PixelScene {
         float helpCardWidth = Math.min(boardWidth - 12, 131);
         float helpX = boardX + 6;
         float helpY = boardY + 6;
-        panel(help, helpX, helpY, helpCardWidth, 85, 0xC01A201D);
+        panel(help, helpX, helpY, helpCardWidth, 96, 0xC01A201D);
         panel(help, helpX, helpY, helpCardWidth, 1, 0xAF9DB4A6);
         label(help, "이동  WASD · 방향키", 7, TEXT, helpX + 5, helpY + 4, helpCardWidth - 10);
         label(help, "대각선  방향 조합 · 숫자패드", 7, TEXT, helpX + 5, helpY + 15, helpCardWidth - 10);
@@ -254,8 +274,10 @@ public final class NativeDungeonScene extends PixelScene {
         label(help, "식량 사용  E · 행동력 3", 7, TEXT, helpX + 5, helpY + 48, helpCardWidth - 10);
         label(help, "전술 정지 / 재개  P", 7, TEXT, helpX + 5, helpY + 59, helpCardWidth - 10);
         label(help, "활 조준  R → 칸 클릭", 7, TEXT, helpX + 5, helpY + 70, helpCardWidth - 10);
+        label(help, "대화  Enter · 취소 Esc", 7, TEXT, helpX + 5, helpY + 81, helpCardWidth - 10);
         help.visible = false;
 
+        createChatLog();
         keys = this::onKey;
         KeyEvent.addKeyListener(keys);
         accept(NativeClient.dungeonState());
@@ -267,6 +289,8 @@ public final class NativeDungeonScene extends PixelScene {
     public void update() {
         InnApi.DungeonState next = NativeClient.dungeonState();
         if (next != state) accept(next);
+        updateChatInput();
+        refreshChatLog();
         long now = NativeClient.dungeonNow();
         if (state != null) {
             for (PartySlot slot : party) slot.update(now);
@@ -280,12 +304,16 @@ public final class NativeDungeonScene extends PixelScene {
         String connectionNotice = NativeClient.dungeonNotice();
         setText(notice, connectionNotice.isEmpty() && System.nanoTime() < noticeUntil ? localNotice : connectionNotice);
         previewQueuedMove(now);
-        onHotkey(Input.Keys.F1, Gdx.input.isKeyPressed(Input.Keys.F1));
-        onHotkey(Input.Keys.SPACE, Gdx.input.isKeyPressed(Input.Keys.SPACE));
-        onHotkey(Input.Keys.R, Gdx.input.isKeyPressed(Input.Keys.R));
-        onHotkey(Input.Keys.E, Gdx.input.isKeyPressed(Input.Keys.E));
-        onHotkey(Input.Keys.P, Gdx.input.isKeyPressed(Input.Keys.P));
-        updateInput(now);
+        if (!typing()) {
+            onHotkey(Input.Keys.F1, Gdx.input.isKeyPressed(Input.Keys.F1));
+            onHotkey(Input.Keys.SPACE, Gdx.input.isKeyPressed(Input.Keys.SPACE));
+            onHotkey(Input.Keys.R, Gdx.input.isKeyPressed(Input.Keys.R));
+            onHotkey(Input.Keys.E, Gdx.input.isKeyPressed(Input.Keys.E));
+            onHotkey(Input.Keys.P, Gdx.input.isKeyPressed(Input.Keys.P));
+            updateInput(now);
+        }
+        long receipt = System.nanoTime();
+        for (DungeonActorView view : actorViews.values()) view.expireSpeech(receipt);
         super.update();
         world.sort(WORLD_DEPTH);
     }
@@ -313,6 +341,11 @@ public final class NativeDungeonScene extends PixelScene {
             submitted = null;
             showWaiting("던전을 불러오는 중…");
             return;
+        }
+        if (prior == null || !next.id().equals(prior.id())) {
+            chatHistory.clear();
+            seenChatId = 0;
+            chatDirty = true;
         }
         if (tiles == null || prior == null || !next.map().equals(prior.map()) || !next.id().equals(prior.id()) ||
                 !next.theme().equals(prior.theme())) {
@@ -342,6 +375,7 @@ public final class NativeDungeonScene extends PixelScene {
                 actorViews.put(actor.id(), view);
                 world.add(view);
                 actorOverlays.add(view.overlay());
+                if ("player".equals(actor.kind())) speechOverlays.add(view.speechOverlay());
             } else {
                 view.accept(actor, find(actor.targetId()), now);
             }
@@ -353,6 +387,7 @@ public final class NativeDungeonScene extends PixelScene {
             entry.getValue().destroy();
             return true;
         });
+        acceptChat(next);
         if (submitted != null && next.commandAck() > submitted.acknowledgement()) {
             if (self != null && priorSelf != null && "move".equals(submitted.action().type()) &&
                 self.x() == priorSelf.x() && self.y() == priorSelf.y() && !submitted.action().equals(next.queued())) {
@@ -492,10 +527,12 @@ public final class NativeDungeonScene extends PixelScene {
         moveLayerUp(actorOverlays);
         moveLayerUp(impacts);
         moveLayerUp(pauseCard);
+        moveLayerUp(speechOverlays);
         moveLayerUp(fireLabel);
         moveLayerUp(notice);
         moveLayerUp(waitingCard);
         moveLayerUp(help);
+        moveLayerUp(chatLog);
     }
 
     private void moveLayerUp(Gizmo layer) {
@@ -504,7 +541,7 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private boolean canAct() {
-        return !leaving && panelWindow == null && !paused() && activePlayer();
+        return !leaving && panelWindow == null && chatEditor == null && !paused() && activePlayer();
     }
 
     private boolean activePlayer() { return self != null && self.hp() > 0 && battleOngoing(); }
@@ -520,7 +557,7 @@ public final class NativeDungeonScene extends PixelScene {
     private boolean paused() { return state != null && state.pausedUntil() > 0; }
 
     private boolean canTogglePause(long wallNow) {
-        return !leaving && panelWindow == null && self != null && battleOngoing() &&
+        return !leaving && panelWindow == null && chatEditor == null && self != null && battleOngoing() &&
             (paused() || wallNow >= state.pauseReadyAt());
     }
 
@@ -830,6 +867,14 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private boolean onKey(KeyEvent event) {
+        if (typing()) {
+            if (chatEditor != null && event.code == Input.Keys.ESCAPE && event.pressed) chatCancelPending = true;
+            return true;
+        }
+        if (panelWindow == null && event.code == Input.Keys.ENTER && event.pressed && !enterWithAlt()) {
+            chatOpenPending = true;
+            return true;
+        }
         return panelWindow == null && (onHotkey(event.code, event.pressed) || !paused() && movement.onKey(event.code, event.pressed));
     }
 
@@ -869,6 +914,7 @@ public final class NativeDungeonScene extends PixelScene {
 
     @Override
     public void onPause() {
+        closeComposer();
         movement.reset();
         helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = false;
         super.onPause();
@@ -880,7 +926,7 @@ public final class NativeDungeonScene extends PixelScene {
     }
 
     private void showPanel(Supplier<? extends Window> open) {
-        if (state == null || leaving || panelWindow != null) return;
+        if (state == null || leaving || panelWindow != null || chatEditor != null) return;
         movement.reset();
         panelWindow = open.get();
         add(panelWindow);
@@ -894,7 +940,9 @@ public final class NativeDungeonScene extends PixelScene {
 
     @Override
     protected void onBackPressed() {
-        if (panelWindow != null) panelWindow.hide();
+        if (chatEditor != null) chatCancelPending = true;
+        else if (panelWindow != null) panelWindow.hide();
+        else if (chatPinned) toggleChatLog();
         else if (aiming) aiming = false;
         else leave();
     }
@@ -1075,76 +1123,170 @@ public final class NativeDungeonScene extends PixelScene {
         }
     }
 
-    private final class ChatWindow extends DungeonWindow {
-        private final ChatRows rows = new ChatRows();
-        private final ScrollPane chat = new ScrollPane(rows);
-        private final TextInput editor;
-        private final StyledButton send;
-        private List<InnApi.PartyChat> displayed;
+    private void createChatLog() {
+        chatLog = new Group();
+        add(chatLog);
+        float x = boardX + 5;
+        float width = Math.min(174, boardWidth - 10);
+        float historyHeight = Math.min(54, Math.max(30, boardHeight / 3));
+        float composerY = boardY + boardHeight - 31;
+        float y = composerY - historyHeight - 14;
+        ColorBlock backdrop = panel(chatLog, x, y, width, historyHeight + 28, 0xDB202622);
+        chatLog.add(new PointerArea(backdrop));
+        panel(chatLog, x, y, width, 1, 0xC2667767);
+        label(chatLog, "파티 대화", 7, ALLY, x + 5, y + 3, width - 10);
+        chatRows = new ChatRows(width - 8);
+        chatScroll = new ScrollPane(chatRows);
+        chatLog.add(chatScroll);
+        chatScroll.setRect(x + 3, y + 12, width - 6, historyHeight);
+        chatPrompt = button(chatLog, "Enter · 대화 입력", this::openComposer);
+        chatPrompt.setRect(x + 3, composerY, width - 6, 12);
+        chatSend = button(chatLog, "보내기", () -> chatSubmitPending = true);
+        chatSend.setRect(x + width - 35, composerY, 32, 12);
+        updateChatVisibility();
+    }
 
-        ChatWindow() {
-            super("파티 대화", 184, 112);
-            panel(this, 4, 21, 176, 65, 0xFF252A27);
-            add(chat);
-            chat.setRect(5, 22, 174, 63);
-            editor = new TextInput(Chrome.get(Chrome.Type.TOAST_WHITE), false, defaultZoom * 7) {
-                @Override
-                public void enterPressed() { submitMessage(); }
-            };
-            editor.setMaxLength(160);
-            add(editor);
-            editor.setRect(4, 91, 134, 16);
-            send = button(this, "보내기", this::submitMessage);
-            send.setRect(140, 91, 40, 16);
-            refresh();
-        }
+    private boolean canChat() {
+        return !leaving && state != null && !state.waitingForPartner() && !"closed".equals(state.status());
+    }
 
-        @Override
-        public void update() {
-            refresh();
-            super.update();
-        }
+    private boolean typing() { return chatEditor != null || waitForKeyRelease; }
 
-        private void refresh() {
-            List<InnApi.PartyChat> messages = state == null ? List.of() : state.messages();
-            if (!messages.equals(displayed)) {
-                float scrollY = rows.camera.scroll.y;
-                boolean bottom = scrollY + chat.height() >= rows.height() - 5;
-                rows.rebuild(messages);
-                chat.setSize(chat.width(), chat.height());
-                chat.scrollTo(0, bottom ? rows.height() : scrollY);
-                displayed = messages;
+    private void toggleChatLog() {
+        if (panelWindow != null) return;
+        if (chatEditor != null) closeComposer();
+        else chatPinned = !chatPinned;
+        updateChatVisibility();
+    }
+
+    private void updateChatVisibility() {
+        chatLog.visible = chatLog.active = chatPinned || chatEditor != null;
+        chatPrompt.visible = chatEditor == null;
+        chatPrompt.enable(chatPrompt.visible && canChat());
+        chatSend.visible = chatEditor != null;
+        chatSend.enable(chatSend.visible);
+    }
+
+    private void openComposer() {
+        if (!canChat() || chatEditor != null || panelWindow != null) return;
+        movement.reset();
+        helpHeld = attackHeld = shootHeld = rationHeld = pauseHeld = aiming = false;
+        composerEnterReleased = !Gdx.input.isKeyPressed(Input.Keys.ENTER);
+        chatEditor = new TextInput(Chrome.get(Chrome.Type.TOAST_WHITE), false, defaultZoom * 7) {
+            @Override
+            public void enterPressed() {
+                if (composerEnterReleased) chatSubmitPending = true;
             }
-            send.enable(canChat());
-        }
+        };
+        chatEditor.setMaxLength(160);
+        chatLog.add(chatEditor);
+        chatEditor.setRect(chatPrompt.left(), chatPrompt.top(), chatSend.left() - chatPrompt.left() - 2,
+            chatPrompt.height());
+        updateChatVisibility();
+    }
 
-        private boolean canChat() {
-            return state != null && !state.waitingForPartner() && !"closed".equals(state.status());
-        }
+    private void closeComposer() {
+        if (chatEditor == null) return;
+        chatLog.erase(chatEditor);
+        chatEditor.destroy();
+        chatEditor = null;
+        chatCancelPending = chatSubmitPending = false;
+        waitForKeyRelease = Gdx.input.isKeyPressed(Input.Keys.ANY_KEY);
+        updateChatVisibility();
+    }
 
-        private void submitMessage() {
-            if (!canChat()) return;
-            String message = editor.getText().strip();
-            if (message.isEmpty()) return;
-            NativeClient.dungeonChat(message);
-            editor.setText("");
+    private static boolean enterWithAlt() {
+        return Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT);
+    }
+
+    private void updateChatInput() {
+        if (waitForKeyRelease && !Gdx.input.isKeyPressed(Input.Keys.ANY_KEY)) waitForKeyRelease = false;
+        if (chatEditor != null) {
+            if (!canChat() || chatCancelPending || Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+                closeComposer();
+            } else {
+                composerEnterReleased |= !Gdx.input.isKeyPressed(Input.Keys.ENTER);
+                if (chatSubmitPending) {
+                    chatSubmitPending = false;
+                    String message = chatEditor.getText().strip();
+                    if (!message.isBlank()) {
+                        NativeClient.dungeonChat(message);
+                        closeComposer();
+                    }
+                }
+            }
+        } else if (!waitForKeyRelease && !enterWithAlt() &&
+                (chatOpenPending || Gdx.input.isKeyJustPressed(Input.Keys.ENTER))) {
+            openComposer();
+        }
+        chatOpenPending = false;
+    }
+
+    private void acceptChat(InnApi.DungeonState snapshot) {
+        long receipt = System.nanoTime();
+        long wallNow = NativeClient.dungeonWallNow();
+        for (InnApi.PartyChat message : snapshot.messages()) {
+            if (message.id() <= seenChatId) continue;
+            seenChatId = message.id();
+            if (chatHistory.size() == CHAT_HISTORY_LIMIT) chatHistory.removeFirst();
+            chatHistory.add(message);
+            chatDirty = true;
+            long age = message.time() > 0 ? Math.max(0, wallNow - message.time()) : 0;
+            DungeonActorView speaker = actorViews.get(message.actorId());
+            if (speaker != null && age < SPEECH_MS) {
+                speaker.speak(message.text(), receipt + (SPEECH_MS - age) * 1_000_000,
+                    boardX, boardY, boardWidth);
+            }
         }
     }
 
+    private void refreshChatLog() {
+        if (!chatLog.visible) return;
+        chatPrompt.enable(chatEditor == null && canChat());
+        if (!chatDirty) return;
+        float scrollY = chatRows.camera.scroll.y;
+        boolean bottom = scrollY + chatScroll.height() >= chatRows.height() - 5;
+        chatRows.rebuild(chatHistory);
+        chatScroll.setSize(chatScroll.width(), chatScroll.height());
+        chatScroll.scrollTo(0, bottom ? chatRows.height() : scrollY);
+        chatDirty = false;
+    }
+
+    static String wrapLongChatWords(String text, int columns) {
+        StringBuilder wrapped = new StringBuilder(text.length());
+        int run = 0;
+        for (int i = 0; i < text.length();) {
+            int codePoint = text.codePointAt(i);
+            i += Character.charCount(codePoint);
+            if (Character.isWhitespace(codePoint)) run = 0;
+            else if (++run > columns) {
+                wrapped.append('\n');
+                run = 1;
+            }
+            wrapped.appendCodePoint(codePoint);
+        }
+        return wrapped.toString();
+    }
+
     private static final class ChatRows extends Component {
+        private final float rowWidth;
+
+        ChatRows(float rowWidth) { this.rowWidth = rowWidth; }
+
         void rebuild(List<InnApi.PartyChat> messages) {
             for (Gizmo child : members) if (child != null) child.destroy();
             clear();
             float y = 2;
             if (messages.isEmpty()) {
-                y = label(this, "아직 대화가 없습니다.", 7, MUTED, 3, y, 166).bottom() + 2;
+                y = label(this, "아직 대화가 없습니다.", 7, MUTED, 3, y, rowWidth - 5).bottom() + 2;
             } else {
                 for (InnApi.PartyChat message : messages) {
-                    String text = message.name() + "  " + message.text();
-                    y = label(this, text, 7, TEXT, 3, y, 166).bottom() + 2;
+                    String text = wrapLongChatWords(message.name() + "  " + message.text(),
+                        Math.max(6, (int) ((rowWidth - 5) / 7)));
+                    y = label(this, text, 7, TEXT, 3, y, rowWidth - 5).bottom() + 2;
                 }
             }
-            setSize(170, y);
+            setSize(rowWidth, y);
         }
     }
 

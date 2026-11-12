@@ -625,8 +625,9 @@ class BattleSession {
         Number.isFinite(actor.energy) && Number.isSafeInteger(actor.rations) && actor.rations >= 0) &&
       Array.isArray(state.drops) && state.drops.every(drop => typeof drop?.id === 'string' && typeof drop.item === 'string') &&
       Array.isArray(state.messages) && state.messages.length <= 16 && state.messages.every(message =>
-        Number.isSafeInteger(message?.id) && typeof message.actorId === 'string' &&
-        typeof message.name === 'string' && typeof message.text === 'string') &&
+        Number.isSafeInteger(message?.id) && message.id > 0 && typeof message.actorId === 'string' &&
+        typeof message.name === 'string' && typeof message.text === 'string' &&
+        (message.time == null || (Number.isSafeInteger(message.time) && message.time >= 0))) &&
       typeof state.friendlyFire === 'boolean' && (!this.frame || state.friendlyFire === this.frame.state.friendlyFire) &&
       Array.isArray(state.attackEvents) && state.attackEvents.length <= 16 && state.attackEvents.every(event =>
         Number.isSafeInteger(event?.id) && event.id > 0 && Number.isSafeInteger(event.at) && event.at >= 0 &&

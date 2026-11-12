@@ -27,10 +27,19 @@ final class DungeonActorView extends Group {
     private final MovieClip.Animation death;
     private final Image shadow;
     private final Group overlay = new Group();
+    private final Group speechOverlay = new Group();
     private final RenderedTextBlock name;
     private final RenderedTextBlock healthChange;
     private final ColorBlock healthBack;
     private final ColorBlock healthFill;
+    private Group speech;
+    private ColorBlock speechBack;
+    private ColorBlock speechTail;
+    private RenderedTextBlock speechText;
+    private long speechUntil;
+    private float speechLeft;
+    private float speechTop;
+    private float speechRight;
 
     private InnApi.Combatant actor;
     private float mapX;
@@ -105,11 +114,39 @@ final class DungeonActorView extends Group {
     float depth() { return shownY + FOOT_OFFSET; }
 
     Group overlay() { return overlay; }
+    Group speechOverlay() { return speechOverlay; }
+
+    void speak(String message, long deadline, float boardX, float boardY, float boardWidth) {
+        if (!"player".equals(actor.kind())) return;
+        if (speech == null) {
+            speech = new Group();
+            speechOverlay.add(speech);
+            speechBack = NativeDungeonScene.panel(speech, 0, 0, 1, 1, 0xF12B2D25);
+            speechTail = NativeDungeonScene.panel(speech, 0, 0, 4, 2, 0xF12B2D25);
+            speechText = NativeDungeonScene.label(speech, " ", 7, NativeDungeonScene.TEXT, 0, 0, 97);
+        }
+        int length = message.codePointCount(0, message.length());
+        String preview = length <= 28 ? message : message.substring(0, message.offsetByCodePoints(0, 27)) + "…";
+        speechText.text(NativeDungeonScene.wrapLongChatWords(preview, 14));
+        speechText.visible = true;
+        speechUntil = deadline;
+        speechLeft = boardX + 3;
+        speechTop = boardY + 3;
+        speechRight = boardX + boardWidth - 3;
+        speech.visible = true;
+        layoutSpeech();
+    }
+
+    void expireSpeech(long now) {
+        if (speech != null && now >= speechUntil) speech.visible = false;
+    }
 
     @Override
     public void destroy() {
         overlay.remove();
         overlay.destroy();
+        speechOverlay.remove();
+        speechOverlay.destroy();
         super.destroy();
         if (outfit != null) outfit.close();
     }
@@ -242,5 +279,21 @@ final class DungeonActorView extends Group {
             healthChange.setPos(center - healthChange.width() / 2, sprite.y - 7 - 13 * healthChangeTime / DAMAGE_DURATION);
             healthChange.alpha(1 - healthChangeTime / DAMAGE_DURATION);
         }
+        layoutSpeech();
+    }
+
+    private void layoutSpeech() {
+        if (speech == null || !speech.visible) return;
+        float center = sprite.x + sprite.width() / 2;
+        float width = Math.min(speechRight - speechLeft, speechText.width() + 8);
+        float height = speechText.height() + 5;
+        float x = Math.clamp(center - width / 2, speechLeft, speechRight - width);
+        float y = Math.max(speechTop, sprite.y - (name.visible ? 9 : 3) - height);
+        speechBack.size(width, height);
+        speechBack.x = x;
+        speechBack.y = y;
+        speechTail.x = Math.clamp(center - 2, x + 2, x + width - 6);
+        speechTail.y = y + height;
+        speechText.setPos(x + 4, y + 2);
     }
 }

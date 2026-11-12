@@ -32,7 +32,8 @@
             <dl>
               <div><dt>이동</dt><dd>WASD · 방향키 · 칸 클릭</dd></div>
               <div><dt>대각선</dt><dd>방향 조합 · 숫자패드</dd></div>
-              <div><dt>여관</dt><dd>휠로 확대 · 주민 클릭 또는 근처에서 Enter</dd></div>
+              <div><dt>여관</dt><dd>휠로 확대 · 주민 클릭 또는 근처에서 F</dd></div>
+              <div><dt>대화</dt><dd>Enter로 열기·전송 · Esc로 닫기</dd></div>
               <div><dt>평타</dt><dd>Space · 적 클릭</dd></div>
               <div><dt>사격</dt><dd>R · 칸 선택 · 행동력 2</dd></div>
               <div><dt>식량</dt><dd>E · 행동력 3</dd></div>
@@ -133,7 +134,7 @@
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 녹픽던 시작</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.10.0" target="_blank" rel="noopener">Windows 배포판 0.10.0</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.11.0/NoxacPixelDungeon-Inn-0.11.0-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.11.0</a>
             </div>
           </section>
 
@@ -142,7 +143,7 @@
             <ol id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></ol>
             <form id="chat-form" class="inline-form">
               <label class="sr-only" for="chat-message">보낼 메시지</label>
-              <input id="chat-message" name="message" maxlength="320" placeholder="메시지" autocomplete="off" disabled required>
+              <input id="chat-message" name="message" maxlength="320" placeholder="메시지" autocomplete="off" aria-keyshortcuts="Enter Escape" disabled required>
               <button id="chat-send" type="submit" disabled>보내기</button>
             </form>
           </section>
@@ -172,7 +173,7 @@
             <ol id="dungeon-chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></ol>
             <form id="dungeon-chat-form" class="inline-form">
               <label class="sr-only" for="dungeon-chat-message">파티 메시지</label>
-              <input id="dungeon-chat-message" name="message" maxlength="320" placeholder="메시지" autocomplete="off" required>
+              <input id="dungeon-chat-message" name="message" maxlength="320" placeholder="메시지" autocomplete="off" aria-keyshortcuts="Enter Escape" required>
               <button id="dungeon-chat-send" type="submit">보내기</button>
             </form>
           </section>

@@ -9,6 +9,8 @@ const WALL_SOURCE_Y = 12 * ATLAS_TILE + 8;
 const WALL_SOURCE_HEIGHT = 4;
 const WALL_HEIGHT = TILE * WALL_SOURCE_HEIGHT / ATLAS_TILE;
 const IMPACT_MS = 590;
+const SPEECH_LINES = 3;
+const SPEECH_SEGMENTER = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
 const INN_VIEW_WIDTH = 15 * TILE;
 const INN_VIEW_HEIGHT = 10 * TILE;
 const INN_ZOOM = [.55, .75, 1, 1.25, 1.5, 2];
@@ -20,6 +22,27 @@ const NPC_COLORS = ['#9a8a73', '#ba8452', '#74997a', '#a982a3', '#b9986e'];
 const INN = ['############', '#BBBBBBBB..#', '#..........#', '#..TT..TT..#', '#..........#',
   '#..TT..TT..#', '#..........#', '#....DD....#', '############'];
 export const DIRECTIONS = [[1, 0], [-1, 0], [0, -1], [0, 1], [1, -1], [-1, -1], [1, 1], [-1, 1]];
+
+function speechLines(context, text, width) {
+  const letters = SPEECH_SEGMENTER ? [...SPEECH_SEGMENTER.segment(text)].map(({ segment }) => segment) : [...text];
+  const lines = [];
+  let line = [];
+  for (const letter of letters) {
+    if (!line.length && !letter.trim()) continue;
+    if (line.length && context.measureText(line.join('') + letter).width > width) {
+      if (lines.length === SPEECH_LINES - 1) {
+        while (line.length && context.measureText(line.join('') + '…').width > width) line.pop();
+        lines.push(line.join('').trimEnd() + '…');
+        return lines;
+      }
+      lines.push(line.join('').trimEnd());
+      line = [];
+    }
+    if (line.length || letter.trim()) line.push(letter);
+  }
+  if (line.length) lines.push(line.join(''));
+  return lines;
+}
 
 function walkable(map, x, y, dungeon) {
   const tile = map[y]?.[x];
@@ -221,7 +244,7 @@ export class Board {
     return image;
   }
 
-  set(snapshot, dungeon, now = performance.now(), version) {
+  set(snapshot, dungeon, now = performance.now(), version, chatWall = snapshot?.wallNow) {
     const scene = dungeon ? snapshot?.id : snapshot?.selfId;
     const textureName = dungeon ? (snapshot?.theme === PRISON ? 'tiles_prison' : 'tiles_sewers') : null;
     const sceneChanged = scene !== this.scene || dungeon !== this.dungeon || textureName !== this.textureName;
@@ -229,6 +252,7 @@ export class Board {
       this.figures.clear();
       this.impacts.length = 0;
       this.lastEvent = 0;
+      this.lastSpeechId = 0;
       this.terrain = null;
       this.scene = scene;
       this.zoom = DEFAULT_ZOOM;
@@ -281,6 +305,23 @@ export class Board {
           if (figure) figure.drinkUntil = now + 1100;
         }
       }
+    }
+    const chat = dungeon ? snapshot?.messages : snapshot?.events?.filter(({ kind }) => kind === 'chat');
+    this.updateSpeech(chat, dungeon ? chatWall : snapshot?.now, sceneChanged && dungeon);
+  }
+
+  updateSpeech(messages = [], serverWall, newDungeon) {
+    const receivedAt = performance.now();
+    for (const message of messages) {
+      if (!Number.isSafeInteger(message.id) || message.id <= this.lastSpeechId) continue;
+      this.lastSpeechId = message.id;
+      const figure = this.figures.get(message.actorId ?? message.playerId);
+      if (!figure || typeof message.text !== 'string' || !message.text) continue;
+      const timed = message.time > 0 && Number.isFinite(serverWall);
+      if (!timed && newDungeon) continue;
+      const duration = Math.min(8000, 3600 + 30 * [...message.text].length);
+      const elapsed = timed ? Math.max(0, serverWall - message.time) : 0;
+      if (elapsed < duration) figure.speech = { id: message.id, text: message.text, until: receivedAt + duration - elapsed };
     }
   }
 
@@ -390,7 +431,7 @@ export class Board {
     return image;
   }
 
-  draw(now, selected, destination, aim, gameNow) {
+  draw(now, selected, destination, aim, gameNow, wallNow = performance.now()) {
     const context = this.context;
     for (const figure of this.figures.values()) figure.advance(now);
     this.updateCamera(now);
@@ -448,6 +489,71 @@ export class Board {
     if (aim) this.drawAim(...aim);
     if (!this.dungeon) {
       for (const { figure } of objects) if (figure?.actor.queued) this.drawSign(figure);
+    }
+    context.restore();
+    this.drawSpeech(wallNow);
+  }
+
+  drawSpeech(now) {
+    const speakers = [...this.figures.values()].filter(({ speech }) => speech?.until > now);
+    if (!speakers.length) return;
+    speakers.sort((a, b) => b.speech.id - a.speech.id);
+    const { context, canvas } = this;
+    const scale = canvas.width / (canvas.clientWidth || canvas.width);
+    const fontSize = Math.max(9, Math.round(12 * scale));
+    const lineHeight = Math.ceil(fontSize * 1.3);
+    const pad = Math.max(4, Math.round(6 * scale));
+    const tail = Math.max(3, Math.round(5 * scale));
+    const margin = pad + tail;
+    const textWidth = Math.min(Math.round(176 * scale), canvas.width - 2 * (margin + pad));
+    if (textWidth < fontSize) return;
+    const placed = [];
+    context.save();
+    context.font = `600 ${fontSize}px "Malgun Gothic", sans-serif`;
+    context.textAlign = 'center';
+    context.textBaseline = 'top';
+    context.lineWidth = Math.max(1, scale);
+    for (const figure of speakers) {
+      const headX = Math.round((figure.x + .5) * TILE - this.viewX);
+      const feetY = Math.round((figure.y + .87) * TILE - this.viewY);
+      if (headX < 0 || headX > canvas.width || feetY < 0 || feetY - TILE > canvas.height) continue;
+      const headY = feetY - (figure.actor.queued ? 57 : 36);
+      const speech = figure.speech;
+      if (!speech.layout || speech.layout.fontSize !== fontSize || speech.layout.textWidth !== textWidth) {
+        const lines = speechLines(context, speech.text, textWidth);
+        const width = Math.ceil(Math.max(0, ...lines.map(line => context.measureText(line).width)));
+        speech.layout = { lines, width, fontSize, textWidth };
+      }
+      const { lines, width } = speech.layout;
+      const boxWidth = width + pad * 2;
+      const boxHeight = lines.length * lineHeight + pad * 2;
+      const left = Math.max(margin, Math.min(canvas.width - margin - boxWidth, Math.round(headX - boxWidth / 2)));
+      let top = Math.max(margin, Math.min(canvas.height - margin - boxHeight - tail, headY - boxHeight - tail));
+      for (const other of placed) {
+        if (left < other.right && left + boxWidth > other.left && top < other.bottom && top + boxHeight + tail > other.top) {
+          top = Math.max(margin, other.top - boxHeight - tail - pad);
+        }
+      }
+      const bottom = top + boxHeight;
+      const right = left + boxWidth;
+      const tip = Math.max(left + tail, Math.min(right - tail, headX));
+      placed.push({ left, right, top, bottom: bottom + tail });
+      context.globalAlpha = Math.min(1, (speech.until - now) / 250);
+      context.fillStyle = '#242019';
+      context.strokeStyle = '#d1a873';
+      context.beginPath();
+      context.moveTo(left, top);
+      context.lineTo(right, top);
+      context.lineTo(right, bottom);
+      context.lineTo(tip + tail, bottom);
+      context.lineTo(tip, bottom + tail);
+      context.lineTo(tip - tail, bottom);
+      context.lineTo(left, bottom);
+      context.closePath();
+      context.fill();
+      context.stroke();
+      context.fillStyle = '#fff0d0';
+      for (const [index, line] of lines.entries()) context.fillText(line, (left + right) / 2, top + pad + index * lineHeight);
     }
     context.restore();
   }
