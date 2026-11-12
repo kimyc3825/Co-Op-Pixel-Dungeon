@@ -22,13 +22,18 @@
 package com.shatteredpixel.shatteredpixeldungeon.effects;
 
 import com.badlogic.gdx.graphics.Pixmap;
+import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.CharSprite;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
+import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.watabou.gltextures.SmartTexture;
 import com.watabou.gltextures.TextureCache;
+import com.watabou.noosa.Camera;
+import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.Game;
+import com.watabou.noosa.Group;
 import com.watabou.noosa.Image;
 import com.watabou.utils.PointF;
 import com.watabou.utils.Random;
@@ -78,17 +83,59 @@ public class EmoIcon extends Image {
 		return new PointF(width()/2f, height()/2f);
 	};
 	
-	public static class Sweat extends EmoIcon {
+	public static final class Sweat extends Group {
 
+		private static final float CYCLE = 0.8f;
 		private static SmartTexture dropTexture;
 
+		private final CharSprite owner;
+		private final Image[] drops = new Image[3];
+		private final ColorBlock labelBack;
+		private final RenderedTextBlock label;
+		private float elapsed;
+
 		public Sweat(CharSprite owner) {
-			super(owner);
-			texture(drop());
-			maxSize = 1.35f;
-			timeScale = 2f;
-			x = owner.x + owner.width - width / 2f;
-			y = owner.y - height / 2f;
+			this.owner = owner;
+			SmartTexture texture = drop();
+			for (int i = 0; i < drops.length; i++) {
+				Image drop = new Image(texture);
+				drop.scale.set(i == 0 ? 1f : 0.8f);
+				drops[i] = drop;
+				add(drop);
+			}
+
+			label = PixelScene.renderTextBlock(6, false);
+			label.text(Messages.get(Sweat.class, "exhausted"));
+			label.hardlight(0xFFE3AE);
+			labelBack = new ColorBlock(label.width() + 4, label.height() + 2, 0xE0272523);
+			add(labelBack);
+			add(label);
+			position();
+			GameScene.add(this);
+		}
+
+		@Override
+		public void update() {
+			elapsed = (elapsed + Game.elapsed) % CYCLE;
+			position();
+		}
+
+		private void position() {
+			Camera camera = owner.camera();
+			float center = owner.x + owner.width() / 2f;
+			float head = owner.y;
+			for (int i = 0; i < drops.length; i++) {
+				Image drop = drops[i];
+				float phase = (elapsed / CYCLE + (float) i / drops.length) % 1f;
+				float side = i == 2 ? -1 : 1;
+				drop.x = PixelScene.align(camera, center + side * (7 + phase * 2) - drop.width() / 2f);
+				drop.y = PixelScene.align(camera, head - (i == 1 ? 5 : 1) + phase * 8);
+				drop.alpha(1 - 0.45f * phase);
+			}
+
+			labelBack.x = PixelScene.align(camera, center - labelBack.width() / 2f);
+			labelBack.y = PixelScene.align(camera, head - labelBack.height() - 7);
+			label.setPos(labelBack.x + 2, labelBack.y + 1);
 		}
 
 		private static SmartTexture drop() {

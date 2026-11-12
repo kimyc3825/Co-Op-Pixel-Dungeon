@@ -13,6 +13,7 @@ public final class InnAtbMeter extends Component {
     private ColorBlock fill;
     private RenderedTextBlock text;
     private int lastValue = -1;
+    private int lastColor = -1;
 
     public InnAtbMeter() {
         setSize(68, 14);
@@ -22,9 +23,8 @@ public final class InnAtbMeter extends Component {
     protected void createChildren() {
         add(back = new ColorBlock(1, 1, 0xD51A211D));
         add(track = new ColorBlock(1, 1, 0xFF333E34));
-        add(fill = new ColorBlock(1, 1, 0xFF91CBB0));
+        add(fill = new ColorBlock(1, 1, 0xFFFFFFFF));
         add(text = PixelScene.renderTextBlock(6));
-        text.hardlight(0xCBEED9);
     }
 
     @Override
@@ -45,9 +45,22 @@ public final class InnAtbMeter extends Component {
         refresh();
     }
 
+    public static int colorForFraction(float remaining) {
+        if (remaining <= 0.25f) return 0xEF8580;
+        if (remaining <= 0.50f) return 0xE5B766;
+        return 0x91CBB0;
+    }
+
     private void refresh() {
         float energy = InnAtb.energy();
-        fill.size((width - 4) * energy / InnAtb.CAPACITY, 2);
+        float remaining = energy / InnAtb.CAPACITY;
+        fill.size((width - 4) * remaining, 2);
+        int color = colorForFraction(remaining);
+        if (lastColor != color) {
+            lastColor = color;
+            fill.hardlight(color);
+            text.hardlight(color);
+        }
         int value = (int) (energy + 0.0001f);
         if (lastValue != value) {
             lastValue = value;

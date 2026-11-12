@@ -9,6 +9,7 @@ import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTileSheet;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
+import com.shatteredpixel.shatteredpixeldungeon.ui.InnAtbMeter;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
@@ -1587,7 +1588,7 @@ public final class NativeDungeonScene extends PixelScene {
             panel(group, x, y + 19, width, 3, 0xFF414B41);
             hpBar = panel(group, x, y + 19, width, 3, 0xFFA67F66);
             panel(group, x, y + 23, width, 2, 0xFF414B41);
-            charge = panel(group, x, y + 23, width, 2, 0xFF94C9C0);
+            charge = panel(group, x, y + 23, width, 2, 0xFFFFFFFF);
             group.visible = false;
         }
 
@@ -1606,7 +1607,11 @@ public final class NativeDungeonScene extends PixelScene {
             boolean active = state != null && ("active".equals(state.status()) || "won".equals(state.status())) &&
                 !state.waitingForPartner();
             double energy = active && actor.hp() > 0 ? BattleRules.energyAt(actor, state.now(), now) : 0;
-            charge.size(width * (float) (energy / BattleRules.ENERGY_CAP), 2);
+            float remaining = (float) (energy / BattleRules.ENERGY_CAP);
+            int color = InnAtbMeter.colorForFraction(remaining);
+            charge.size(width * remaining, 2);
+            charge.hardlight(color);
+            energyLabel.hardlight(active && actor.hp() > 0 ? color : MUTED);
             String balance = "행동 " + (int) (energy + 1e-8) + "/" + BattleRules.ENERGY_CAP;
             setText(energyLabel, actor.hp() == 0 ? "쓰러짐" : active ? balance : "대기");
         }

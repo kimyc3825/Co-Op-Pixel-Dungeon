@@ -19,6 +19,7 @@ final class DungeonActorView extends Group {
     private static final float ATTACK_DURATION = 0.28f;
     private static final float DAMAGE_DURATION = 0.62f;
     private static final float FOOT_OFFSET = 0.89f;
+    private static final float SWEAT_CYCLE = 0.68f;
 
     private final MovieClip sprite;
     private final AvatarSprites outfit;
@@ -35,7 +36,9 @@ final class DungeonActorView extends Group {
     private final ColorBlock healthBack;
     private final ColorBlock healthFill;
     private final Group sweat;
-    private final ColorBlock[] sweatPixels;
+    private final ColorBlock[][] sweatDrops;
+    private final ColorBlock fatigueBack;
+    private final RenderedTextBlock fatigueText;
     private float sweatTime;
     private Group speech;
     private ColorBlock speechBack;
@@ -106,15 +109,26 @@ final class DungeonActorView extends Group {
         name = NativeDungeonScene.label(overlay, enemy ? "" : nick, 6, color, 0, 0, 65);
         healthChange = NativeDungeonScene.label(overlay, "", 8, NativeDungeonScene.ENEMY, 0, 0, 38);
         sweat = own ? new Group() : null;
-        sweatPixels = own ? new ColorBlock[] {
-            NativeDungeonScene.panel(sweat, 0, 0, 1, 5, 0xFF204C64),
-            NativeDungeonScene.panel(sweat, 0, 0, 3, 2, 0xFF204C64),
-            NativeDungeonScene.panel(sweat, 0, 0, 1, 3, 0xFF69C6E3),
-            NativeDungeonScene.panel(sweat, 0, 0, 1, 1, 0xFFC5F5FA),
-        } : null;
-        if (sweat != null) {
+        sweatDrops = own ? new ColorBlock[3][] : null;
+        if (own) {
+            for (int i = 0; i < sweatDrops.length; i++) {
+                sweatDrops[i] = new ColorBlock[] {
+                    NativeDungeonScene.panel(sweat, 0, 0, 1, 5, 0xFF204C64),
+                    NativeDungeonScene.panel(sweat, 0, 0, 3, 2, 0xFF204C64),
+                    NativeDungeonScene.panel(sweat, 0, 0, 1, 3, 0xFF69C6E3),
+                    NativeDungeonScene.panel(sweat, 0, 0, 1, 1, 0xFFC5F5FA),
+                };
+            }
+            fatigueBack = NativeDungeonScene.panel(sweat, 0, 0, 1, 1, 0xEA26211B);
+            fatigueText = PixelScene.renderTextBlock(7, false);
+            fatigueText.hardlight(NativeDungeonScene.TEXT);
+            fatigueText.text("(지쳤음)");
+            sweat.add(fatigueText);
             sweat.visible = false;
             overlay.add(sweat);
+        } else {
+            fatigueBack = null;
+            fatigueText = null;
         }
         if (actor.hp() <= 0) {
             deadTime = 1;
@@ -268,7 +282,7 @@ final class DungeonActorView extends Group {
         stepTime = Math.min(stepDuration, stepTime + Game.elapsed);
         attackTime = Math.min(ATTACK_DURATION, attackTime + Game.elapsed);
         healthChangeTime = Math.min(DAMAGE_DURATION, healthChangeTime + Game.elapsed);
-        if (sweat != null && sweat.visible) sweatTime = (sweatTime + Game.elapsed) % 0.62f;
+        if (sweat != null && sweat.visible) sweatTime = (sweatTime + Game.elapsed) % SWEAT_CYCLE;
         if (actor.hp() > 0) {
             if (attackTime >= ATTACK_DURATION) {
                 sprite.play(strideIdle < STRIDE_GRACE ? walk : idle);
@@ -315,18 +329,32 @@ final class DungeonActorView extends Group {
             healthChange.setPos(center - healthChange.width() / 2, sprite.y - 7 - 13 * healthChangeTime / DAMAGE_DURATION);
             healthChange.alpha(1 - healthChangeTime / DAMAGE_DURATION);
         }
-        if (sweat != null && sweat.visible) layoutSweat(center, base, scale);
+        if (sweat != null && sweat.visible) layoutFatigue(center, scale);
         layoutSpeech();
     }
 
-    private void layoutSweat(float center, float base, float scale) {
-        float phase = sweatTime / 0.62f;
-        float x = center + Math.round(5 + 4 * phase) * scale;
-        float y = base + Math.round(-14.5f + 5 * phase) * scale;
-        placeSweatPixel(sweatPixels[0], x + scale, y, scale, 5 * scale);
-        placeSweatPixel(sweatPixels[1], x, y + 2 * scale, 3 * scale, 2 * scale);
-        placeSweatPixel(sweatPixels[2], x + scale, y + scale, scale, 3 * scale);
-        placeSweatPixel(sweatPixels[3], x + scale, y + scale, scale, scale);
+    private void layoutFatigue(float center, float scale) {
+        float cycle = sweatTime / SWEAT_CYCLE;
+        layoutSweatDrop(sweatDrops[0], center + 5 * scale, sprite.y, scale, cycle, 1);
+        layoutSweatDrop(sweatDrops[1], center - 9 * scale, sprite.y - 2 * scale, scale, (cycle + 0.35f) % 1, -1);
+        layoutSweatDrop(sweatDrops[2], center + 10 * scale, sprite.y - 5 * scale, scale, (cycle + 0.68f) % 1, 1);
+
+        float top = (name.visible ? name.top() : sprite.y) - fatigueText.height() - 4;
+        fatigueText.setPos(center - fatigueText.width() / 2, top);
+        fatigueBack.x = fatigueText.left() - 2;
+        fatigueBack.y = top - 1;
+        fatigueBack.size(fatigueText.width() + 4, fatigueText.height() + 2);
+    }
+
+    private static void layoutSweatDrop(ColorBlock[] pixels, float startX, float startY, float scale, float phase, int side) {
+        float x = startX + Math.round(3 * phase) * side * scale;
+        float y = startY + Math.round(8 * phase) * scale;
+        placeSweatPixel(pixels[0], x + scale, y, scale, 5 * scale);
+        placeSweatPixel(pixels[1], x, y + 2 * scale, 3 * scale, 2 * scale);
+        placeSweatPixel(pixels[2], x + scale, y + scale, scale, 3 * scale);
+        placeSweatPixel(pixels[3], x + scale, y + scale, scale, scale);
+        float opacity = 1 - 0.55f * phase;
+        for (ColorBlock pixel : pixels) pixel.alpha(opacity);
     }
 
     private static void placeSweatPixel(ColorBlock pixel, float x, float y, float width, float height) {
@@ -341,7 +369,8 @@ final class DungeonActorView extends Group {
         float width = Math.min(speechRight - speechLeft, speechText.width() + 8);
         float height = speechText.height() + 5;
         float x = Math.clamp(center - width / 2, speechLeft, speechRight - width);
-        float y = Math.max(speechTop, sprite.y - (name.visible ? 9 : 3) - height);
+        float anchor = sweat != null && sweat.visible ? fatigueBack.y - 2 : sprite.y - (name.visible ? 9 : 3);
+        float y = Math.max(speechTop, anchor - height);
         speechBack.size(width, height);
         speechBack.x = x;
         speechBack.y = y;

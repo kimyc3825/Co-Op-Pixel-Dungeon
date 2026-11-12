@@ -826,6 +826,9 @@ function updateCombatUi() {
     const actor = slot.actor;
     const energy = actor.hp > 0 ? BattleRules.energyAt(actor, state.now, now) : 0;
     if (slot.energyMeter.value !== energy) slot.energyMeter.value = energy;
+    const ratio = energy / BattleRules.ENERGY_CAP;
+    const band = ratio > .5 ? 'high' : ratio > .25 ? 'low' : 'critical';
+    if (slot.root.dataset.energy !== band) slot.root.dataset.energy = band;
     text(slot.energy, actor.hp > 0 ? `행동력 ${Math.floor(energy + 1e-8)}/${BattleRules.ENERGY_CAP}` : '쓰러짐');
     if (!slot.details.hidden) {
       for (const type of ['move', 'attack', 'shoot']) {

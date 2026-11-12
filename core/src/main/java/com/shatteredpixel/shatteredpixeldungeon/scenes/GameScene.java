@@ -1228,6 +1228,10 @@ public class GameScene extends PixelScene {
 	public static void add( EmoIcon icon ) {
 		scene.emoicons.add( icon );
 	}
+
+	public static void add( EmoIcon.Sweat fatigue ) {
+		scene.emoicons.add( fatigue );
+	}
 	
 	public static void add( CharHealthIndicator indicator ){
 		if (scene != null) scene.healthIndicators.add(indicator);

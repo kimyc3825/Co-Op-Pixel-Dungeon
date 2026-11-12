@@ -176,13 +176,14 @@ public class HeroSprite extends CharSprite {
 		if (tired && sweat == null) {
 			sweat = new EmoIcon.Sweat(this);
 		}
-		if (sweat != null) sweat.visible = tired;
+		if (sweat != null) sweat.active = sweat.visible = tired;
 	}
 
 	@Override
 	public void destroy() {
 		if (sweat != null) {
 			sweat.killAndErase();
+			sweat.destroy();
 			sweat = null;
 		}
 		super.destroy();

@@ -506,7 +506,9 @@ export class Board {
     context.imageSmoothingEnabled = false;
     context.drawImage(this.getTerrain(), 0, 0);
     const snapshot = this.snapshot;
-    const self = this.figures.get(snapshot?.selfId)?.actor;
+    const selfFigure = this.figures.get(snapshot?.selfId);
+    const self = selfFigure?.actor;
+    const fatigued = waitingForEnergy ? selfFigure : null;
     const target = this.figures.get(selected)?.actor;
     if (target?.hp > 0 && !aim) this.marker(target.x, target.y, '#f4876b');
     const queued = snapshot?.queued;
@@ -553,7 +555,7 @@ export class Board {
     while (rowIndex < rows.length) this.drawWallRow(rows[rowIndex++]);
     for (const { figure, npc, tool } of objects) {
       if (figure) this.drawFigureLabels(figure, now);
-      if (waitingForEnergy && figure && figure.actor === self) this.drawSweat(figure, now);
+      if (figure && figure === fatigued) this.drawSweat(figure, now);
       if (npc) this.caption(npc.name, (npc.x + .5) * TILE, Math.max(9, npc.y * TILE - 5), '#f5d9a9');
       const prop = tool && TRAINING_PROPS.get(tool.id);
       if (prop) this.caption(prop[1], (tool.x + .5) * TILE, (tool.y + .97) * TILE, '#d4e7c5');
@@ -565,13 +567,13 @@ export class Board {
       for (const { figure } of objects) if (figure?.actor.queued) this.drawSign(figure);
     }
     context.restore();
-    this.drawSpeech(wallNow);
+    this.drawSpeech(wallNow, fatigued);
   }
 
-  drawSpeech(now) {
+  drawSpeech(now, fatigued) {
     const speakers = [...this.figures.values()].filter(({ speech }) => speech?.until > now);
     const overlay = this.speechCanvas;
-    const hideSpeech = speakers.length === 0;
+    const hideSpeech = speakers.length === 0 && !fatigued;
     if (overlay && overlay.hidden !== hideSpeech) overlay.hidden = hideSpeech;
     if (hideSpeech) return;
     speakers.sort((a, b) => b.speech.id - a.speech.id);
@@ -601,9 +603,25 @@ export class Board {
     if (textWidth < fontSize) return;
     const placed = [];
     context.save();
+    context.textBaseline = 'top';
+    if (fatigued) {
+      const headX = Math.round(((fatigued.x + .5) * TILE - this.viewX) * scaleX);
+      const feetY = Math.round(((fatigued.y + .87) * TILE - this.viewY) * scaleY);
+      if (headX >= 0 && headX <= width && feetY >= 0 && feetY - TILE * scaleY <= height) {
+        const label = '(지쳤음)';
+        context.font = '400 13px "Malgun Gothic", system-ui, sans-serif';
+        context.textAlign = 'center';
+        const labelWidth = Math.ceil(context.measureText(label).width) + 12;
+        const left = Math.max(margin, Math.min(width - margin - labelWidth, headX - labelWidth / 2));
+        const top = Math.max(margin, feetY - 43 * scaleY - 20);
+        paint(context, '#242019ed', left, top, labelWidth, 20);
+        context.fillStyle = '#f5d9a9';
+        context.fillText(label, left + labelWidth / 2, top + 3);
+        placed.push({ left, right: left + labelWidth, top, bottom: top + 20 });
+      }
+    }
     context.font = `400 ${fontSize}px "Malgun Gothic", system-ui, sans-serif`;
     context.textAlign = 'left';
-    context.textBaseline = 'top';
     context.lineWidth = .75;
     for (const figure of speakers) {
       const headX = Math.round(((figure.x + .5) * TILE - this.viewX) * scaleX);
@@ -815,13 +833,17 @@ export class Board {
   }
 
   drawSweat(figure, now) {
-    const phase = now % 620 / 620;
-    const x = Math.round((figure.x + .5) * TILE + 10 + 8 * phase);
-    const y = Math.round((figure.y + .87) * TILE - 29 + 10 * phase);
-    paint(this.context, '#204c64', x + 2, y, 2, 10);
-    paint(this.context, '#204c64', x, y + 4, 6, 4);
-    paint(this.context, '#69c6e3', x + 2, y + 2, 2, 6);
-    paint(this.context, '#c5f5fa', x + 2, y + 2, 2, 2);
+    const headX = (figure.x + .5) * TILE;
+    const headY = (figure.y + .87) * TILE - 30;
+    for (const [index, offset] of [-15, 9, 17].entries()) {
+      const phase = (now / 680 + index / 3) % 1;
+      const x = Math.round(headX + offset + Math.sign(offset) * 6 * phase);
+      const y = Math.round(headY + 10 * phase - index * 2);
+      paint(this.context, '#204c64', x + 2, y, 2, 10);
+      paint(this.context, '#204c64', x, y + 4, 6, 4);
+      paint(this.context, '#69c6e3', x + 2, y + 2, 2, 6);
+      paint(this.context, '#c5f5fa', x + 2, y + 2, 2, 2);
+    }
   }
 
   caption(text, x, y, color) {
