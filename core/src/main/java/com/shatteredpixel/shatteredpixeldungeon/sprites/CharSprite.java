@@ -221,11 +221,14 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 
 		play( run );
 		
-		motion = new PosTweener( this, worldToCamera( to ), moveInterval );
-		motion.listener = this;
-		parent.add( motion );
-
-		isMoving = true;
+		PosTweener nextMotion = new PosTweener( this, worldToCamera( to ), moveInterval );
+		nextMotion.listener = this;
+		synchronized (this) {
+			motion = nextMotion;
+			isMoving = true;
+		}
+		// A render frame can complete the tween as soon as it joins the group.
+		parent.add( nextMotion );
 		
 		if (visible && Dungeon.level.water[from] && ch != null && !ch.flying) {
 			GameScene.ripple( from );
@@ -248,8 +251,9 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 	}
 	
 	public void interruptMotion() {
-		if (motion != null) {
-			motion.stop(false);
+		PosTweener interrupted = motion;
+		if (interrupted != null) {
+			interrupted.stop(false);
 		}
 	}
 	
@@ -823,13 +827,14 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 			}
 			GameScene.sortMobSprites();
 
-		} else if (tweener == motion) {
+		} else {
 
 			synchronized (this) {
-				isMoving = false;
+				if (tweener != motion) return;
 
-				motion.killAndErase();
+				tweener.killAndErase();
 				motion = null;
+				isMoving = false;
 				if (ch != null) ch.onMotionComplete();
 
 				GameScene.sortMobSprites();

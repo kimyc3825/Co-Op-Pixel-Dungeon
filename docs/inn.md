@@ -21,7 +21,7 @@
 
 ## 브라우저에서 플레이
 
-[웹 여관](https://noxac-pixel-dungeon-inn.kimyc3825.chatgpt.site/play/)에서 닉네임과 외관을 고르고 **입장**을 누른다. 최신 브라우저판과 Windows 0.15.3은 같은 여관과 매칭을 사용한다. 어느 클라이언트든 파티장이나 참가자가 될 수 있다.
+[웹 여관](https://noxac-pixel-dungeon-inn.kimyc3825.chatgpt.site/play/)에서 닉네임과 외관을 고르고 **입장**을 누른다. 최신 브라우저판과 Windows 0.15.4은 같은 여관과 매칭을 사용한다. 어느 클라이언트든 파티장이나 참가자가 될 수 있다.
 
 브라우저에서도 **1인 원정 · 원본 ATB**를 플레이한다. **동료 찾기**나 모험가의 팻말은 2인 ATB 시험 던전으로 연결된다. 가까운 주민과는 **F** 또는 클릭으로 대화한다. 2인 원정 중에는 파티장이 게임 창이나 브라우저 탭을 열어 둔다.
 
@@ -92,7 +92,7 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 .\gradlew.bat -p inn-client packageWindows
 ```
 
-출력은 `inn-client/build/jpackage/0.15.3/NoxacPixelDungeon/NoxacPixelDungeon.exe`다. 실행 폴더에 Java와 게임 에셋이 포함된다.
+출력은 `inn-client/build/jpackage/0.15.4/NoxacPixelDungeon/NoxacPixelDungeon.exe`다. 실행 폴더에 Java와 게임 에셋이 포함된다.
 
 원본 브라우저판은 저장소 루트에서 `.\gradlew.bat -PwebOnly html:dist`로 빌드한다. 결과는 `html/build/dist/web`에 생성된다.
 
