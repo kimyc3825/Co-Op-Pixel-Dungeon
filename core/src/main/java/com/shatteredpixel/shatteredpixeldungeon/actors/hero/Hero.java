@@ -1075,7 +1075,8 @@ public class Hero extends Char {
 		ready = true;
 		canSelfTrample = true;
 
-		AttackIndicator.updateState();
+		if (InnAdventure.atb()) GameScene.refreshAtbAttackIndicator();
+		else AttackIndicator.updateState();
 		
 		GameScene.ready();
 		//check statistics to see if vault warned?
@@ -2491,9 +2492,17 @@ public class Hero extends Char {
 
 	@Override
 	public void move(int step, boolean travelling) {
-		boolean wasHighGrass = Dungeon.level.map[step] == Terrain.HIGH_GRASS;
+		Level level = Dungeon.level;
+		int from = pos;
+		boolean wasHighGrass = level.map[step] == Terrain.HIGH_GRASS;
 
 		super.move( step, travelling);
+
+		// ATB can make the hero ready at the end of the tween without another actor turn.
+		if (InnAdventure.atb() && Dungeon.hero == this && Dungeon.level == level
+				&& pos != from && isAlive() && !Game.switchingScene()) {
+			Dungeon.observe();
+		}
 		
 		if (!flying && travelling) {
 			if (Dungeon.level.water[pos]) {

@@ -17,6 +17,7 @@ import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonWallsTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.FogOfWar;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.RaisedTerrainTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
+import com.shatteredpixel.shatteredpixeldungeon.ui.RedButton;
 import com.watabou.input.GameAction;
 import com.watabou.input.KeyBindings;
 import com.watabou.input.KeyEvent;
@@ -53,6 +54,8 @@ public final class InnPartyScene extends PixelScene {
     private DungeonWallsTilemap walls;
     private FogOfWar fog;
     private RenderedTextBlock status;
+    private RedButton attackButton;
+    private Integer attackTarget;
     private int revision;
     private int floor;
     private int player;
@@ -66,6 +69,16 @@ public final class InnPartyScene extends PixelScene {
         status.camera = uiCamera;
         status.setPos(5, 5);
         add(status);
+        attackButton = new RedButton("공격 (Q)") {
+            @Override
+            protected void onClick() {
+                attackSelected();
+            }
+        };
+        attackButton.camera = uiCamera;
+        attackButton.setRect(uiCamera.width - 54, uiCamera.height - 22, 48, 16);
+        attackButton.visible = attackButton.active = false;
+        add(attackButton);
         KeyEvent.addKeyListener(keys);
         ScrollEvent.addScrollListener(scrolling);
     }
@@ -126,6 +139,17 @@ public final class InnPartyScene extends PixelScene {
         applyActors(state);
         applyLoot(state);
         ActorView self = actors.get(player);
+        attackTarget = null;
+        if (self != null && self.actor.isAlive()) {
+            for (Map.Entry<Integer, ActorView> entry : actors.entrySet()) {
+                ActorView target = entry.getValue();
+                if (target.kind == 2 && target.actor.isAlive() && level.adjacent(self.actor.pos, target.actor.pos)) {
+                    attackTarget = entry.getKey();
+                    break;
+                }
+            }
+        }
+        attackButton.visible = attackButton.active = attackTarget != null;
         if (self != null) {
             String energy = (state.energy / 10) + "." + (state.energy % 10);
             status.text(state.depth + "층 · HP " + self.actor.HP + "/" + self.actor.HT
@@ -170,8 +194,11 @@ public final class InnPartyScene extends PixelScene {
             }
         });
         erase(status);
+        erase(attackButton);
         add(world);
         add(status);
+        add(attackButton);
+        attackButton.givePointerPriority();
     }
 
     private void applyActors(InnOriginalParty.Snapshot state) {
@@ -294,21 +321,14 @@ public final class InnPartyScene extends PixelScene {
             return true;
         }
         if (action == SPDAction.TAG_ATTACK) {
-            if (event.pressed) {
-                ActorView self = actors.get(player);
-                if (self != null) {
-                    for (Map.Entry<Integer, ActorView> entry : actors.entrySet()) {
-                        ActorView target = entry.getValue();
-                        if (target.kind == 2 && Dungeon.level.adjacent(self.actor.pos, target.actor.pos)) {
-                            party.command("A", entry.getKey(), 0);
-                            break;
-                        }
-                    }
-                }
-            }
+            if (event.pressed) attackSelected();
             return true;
         }
         return false;
+    }
+
+    private void attackSelected() {
+        if (attackTarget != null) party.command("A", attackTarget, 0);
     }
 
     private void moveHeld() {

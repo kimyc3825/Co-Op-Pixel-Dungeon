@@ -39,7 +39,7 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 .\gradlew.bat -p inn-client packageWindows
 ```
 
-출력은 `inn-client/build/jpackage/0.16.0/NoxacPixelDungeon/NoxacPixelDungeon.exe`다. 실행 폴더에 Java와 게임 에셋이 포함된다.
+출력은 `inn-client/build/jpackage/0.16.1/NoxacPixelDungeon/NoxacPixelDungeon.exe`다. 실행 폴더에 Java와 게임 에셋이 포함된다.
 
 원본 브라우저판은 저장소 루트에서 `.\gradlew.bat -PwebOnly html:dist`로 빌드한다. 결과는 `html/build/dist/web`에 생성된다.
 

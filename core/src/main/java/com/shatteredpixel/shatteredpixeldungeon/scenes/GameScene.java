@@ -224,6 +224,7 @@ public class GameScene extends PixelScene {
 	private Toast prompt;
 
 	private AttackIndicator attack;
+	private volatile boolean refreshAtbAttack;
 	private LootIndicator loot;
 	private ActionIndicator action;
 	private ResumeIndicator resume;
@@ -972,6 +973,11 @@ public class GameScene extends PixelScene {
 			log.newLine();
 		}
 
+		if (refreshAtbAttack) {
+			refreshAtbAttack = false;
+			AttackIndicator.updateState();
+		}
+
 		if (updateTags){
 			tagAttack = attack.active;
 			tagLoot = loot.visible;
@@ -1607,8 +1613,13 @@ public class GameScene extends PixelScene {
 		}
 	}
 	
+	public static void refreshAtbAttackIndicator() {
+		if (scene != null) scene.refreshAtbAttack = true;
+	}
+
 	public static void afterObserve() {
 		if (scene != null) {
+			if (InnAdventure.atb()) refreshAtbAttackIndicator();
 			for (Mob mob : Dungeon.level.mobs.toArray(new Mob[0])) {
 				if (mob.sprite != null) {
 					if (mob instanceof Mimic && mob.state == mob.PASSIVE && ((Mimic) mob).stealthy() && Dungeon.level.visited[mob.pos]){

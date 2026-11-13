@@ -22,6 +22,7 @@
 package com.shatteredpixel.shatteredpixeldungeon.ui;
 
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
@@ -114,11 +115,18 @@ public class AttackIndicator extends Tag {
 	private synchronized void checkEnemies() {
 
 		candidates.clear();
-		int v = Dungeon.hero.visibleEnemies();
-		for (int i=0; i < v; i++) {
-			Mob mob = Dungeon.hero.visibleEnemy( i );
-			if ( Dungeon.hero.canAttack( mob) ) {
-				candidates.add( mob );
+		if (InnAdventure.atb()) {
+			for (Mob mob : Dungeon.level.mobs.toArray(new Mob[0])) {
+				if (mob.alignment == Char.Alignment.ENEMY && mob.isAlive() && mob.invisible == 0
+						&& mob.pos >= 0 && mob.pos < Dungeon.level.length() && Dungeon.level.heroFOV[mob.pos]
+						&& Dungeon.hero.canAttack(mob)
+						&& !Dungeon.hero.isCharmedBy(mob)) {
+					candidates.add(mob);
+				}
+			}
+		} else {
+			for (Mob mob : Dungeon.hero.getVisibleEnemies()) {
+				if (Dungeon.hero.canAttack(mob)) candidates.add(mob);
 			}
 		}
 		
@@ -180,7 +188,8 @@ public class AttackIndicator extends Tag {
 	@Override
 	protected void onClick() {
 		super.onClick();
-		if (enabled && Dungeon.hero.ready) {
+		if (InnAdventure.atb() && Dungeon.hero.ready) checkEnemies();
+		if (enabled && Dungeon.hero.ready && lastTarget != null) {
 			if (Dungeon.hero.handle( lastTarget.pos )) {
 				Dungeon.hero.next();
 			}

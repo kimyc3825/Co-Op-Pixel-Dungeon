@@ -23,6 +23,7 @@ package com.shatteredpixel.shatteredpixeldungeon.actors;
 
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.Statistics;
 import com.shatteredpixel.shatteredpixeldungeon.actors.blobs.Blob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Buff;
@@ -389,6 +390,7 @@ public abstract class Actor implements Bundlable {
 					} else if (timed && acting instanceof Mob && hero != null && !Game.switchingScene()) {
 						if (doNext && hero.atbCanSkipIdle() && hero.fieldOfView != null) hero.checkVisibleMobs();
 						else hero.observeInnEncounter();
+						GameScene.refreshAtbAttackIndicator();
 					}
 				}
 			} else {
