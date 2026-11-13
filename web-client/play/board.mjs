@@ -180,7 +180,7 @@ class Figure {
 }
 
 export class Board {
-  constructor(canvas) {
+  constructor(canvas, { fitMap = false } = {}) {
     this.canvas = canvas;
     this.context = canvas.getContext('2d');
     this.figures = new Map();
@@ -189,6 +189,7 @@ export class Board {
     this.zoom = DEFAULT_ZOOM;
     this.viewX = this.viewY = 0;
     this.panX = this.panY = 0;
+    this.fitMap = fitMap;
     this.gameViewport = canvas.classList?.contains('game-board') === true;
     this.images = Object.fromEntries(INN_ASSETS.map((name) => [name, this.loadImage(name)]));
     this.set(null, false);
@@ -303,10 +304,16 @@ export class Board {
   }
 
   hasInnCamera() {
-    return !this.dungeon && (this.gameViewport || this.worldWidth > INN_VIEW_WIDTH || this.worldHeight > INN_VIEW_HEIGHT);
+    return !this.fitMap && !this.dungeon &&
+      (this.gameViewport || this.worldWidth > INN_VIEW_WIDTH || this.worldHeight > INN_VIEW_HEIGHT);
   }
 
   resizeViewport() {
+    if (this.fitMap && !this.dungeon) {
+      if (this.canvas.width !== this.worldWidth) this.canvas.width = this.worldWidth;
+      if (this.canvas.height !== this.worldHeight) this.canvas.height = this.worldHeight;
+      return;
+    }
     const zoom = INN_ZOOM[this.zoom];
     let width = this.hasInnCamera() ? Math.round(INN_VIEW_WIDTH / zoom) : this.worldWidth;
     let height = this.hasInnCamera() ? Math.round(INN_VIEW_HEIGHT / zoom) : this.worldHeight;
@@ -363,7 +370,7 @@ export class Board {
   }
 
   updateCamera(now) {
-    if (!this.gameViewport && !this.hasInnCamera()) {
+    if ((this.fitMap && !this.dungeon) || (!this.gameViewport && !this.hasInnCamera())) {
       this.viewX = this.viewY = 0;
       return;
     }

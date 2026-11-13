@@ -218,7 +218,7 @@ public final class NativeInnScene extends PixelScene {
             if (!displayedChat.equals(history)) {
                 float scroll = chatRows.camera.scroll.y;
                 boolean bottom = scroll + chat.height() >= chatRows.height() - 5;
-                chatRows.rebuild(history);
+                chatRows.rebuild(history, state == null ? List.of() : state.npcs());
                 chat.setSize(chat.width(), chat.height());
                 chat.scrollTo(0, bottom ? chatRows.height() : scroll);
                 displayedChat = history;
@@ -463,6 +463,8 @@ public final class NativeInnScene extends PixelScene {
         closeComposer();
         destination = null;
         keyboard.reset();
+        LobbySession session = NativeClient.inn();
+        if (session != null) session.talkToNpc(npc.id());
         if (!npc.lessons().isEmpty()) {
             openLessons(npc);
             return;
@@ -713,7 +715,7 @@ public final class NativeInnScene extends PixelScene {
             setSize(lineWidth, 1);
         }
 
-        void rebuild(List<InnApi.Event> history) {
+        void rebuild(List<InnApi.Event> history, List<InnApi.Npc> npcs) {
             for (Gizmo child : members.toArray(new Gizmo[0])) {
                 if (child != null) child.destroy();
             }
@@ -721,8 +723,15 @@ public final class NativeInnScene extends PixelScene {
             float y = 1;
             for (InnApi.Event event : history) {
                 boolean drink = "drink".equals(event.kind());
-                String text = event.name() + (drink ? " 님이 술을 마셨습니다." : "  " + event.text());
-                RenderedTextBlock row = label(text, 6, drink ? MUTED : CREAM, 0, y);
+                boolean interact = "interact".equals(event.kind());
+                String message = "  " + event.text();
+                if (drink) message = " 님이 술을 마셨습니다.";
+                if (interact) {
+                    String npc = npcs.stream().filter(value -> value.id().equals(event.npcId()))
+                        .map(InnApi.Npc::name).findFirst().orElse("여관 주민");
+                    message = " 님이 " + npc + "에게 말을 걸었습니다.";
+                }
+                RenderedTextBlock row = label(event.name() + message, 6, drink || interact ? MUTED : CREAM, 0, y);
                 row.maxWidth((int) lineWidth);
                 add(row);
                 y += row.height() + 3;

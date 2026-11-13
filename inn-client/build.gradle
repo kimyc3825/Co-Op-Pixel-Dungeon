@@ -5,7 +5,7 @@ plugins {
 apply from: '../gradle/game-platform.gradle'
 
 group = 'com.noxac.pixeldungeon'
-version = '0.16.9'
+version = '0.16.10'
 
 java {
     toolchain {
@@ -36,7 +36,7 @@ tasks.named('processResources') {
     }
     def webClient = rootProject.file('../web-client/play')
     from(new File(webClient, 'assets')) {
-        include 'inn-npcs.png', 'training.png', 'avatars/*.png', 'avatars/catalog.json'
+        include 'inn-layout.json', 'inn-npcs.png', 'training.png', 'avatars/*.png', 'avatars/catalog.json'
         into 'inn'
     }
     from(new File(webClient, 'defeat-lines.json')) { into 'inn' }

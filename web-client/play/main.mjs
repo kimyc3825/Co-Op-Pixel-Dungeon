@@ -577,7 +577,7 @@ function updateInn() {
   if (!ready) showDialogue();
   fields['loading-retry'].disabled = !ready || busy.has('match');
   updateSeekers(state, ready);
-  updateChat(fields['chat-log'], state?.events ?? []);
+  updateChat(fields['chat-log'], state?.events ?? [], state?.npcs);
   if (!fields['backpack-window'].hidden) updateBackpack();
 }
 
@@ -611,6 +611,7 @@ function showDialogue(npc) {
     return;
   }
   clearMovement();
+  play.talkToNpc(npc.id);
   npcDialog.dataset.role = npc.role;
   const lessons = Array.isArray(npc.lessons) ? npc.lessons : [];
   const showTopics = () => showDialoguePage(npc.name, '무엇이 궁금한가?', [
@@ -639,15 +640,18 @@ function showDialoguePage(title, message, choices) {
   if (npcDialog.open) fields['npc-name'].focus({ preventScroll: true });
 }
 
-function hasExpeditionGate(map) {
-  return map?.[14]?.slice(22, 25) === 'DDD';
+function expeditionGate(state) {
+  if (state?.layoutId) return state.expeditionGate;
+  if (state?.map?.[14]?.slice(22, 25) === 'DDD') return { left: 22, top: 10, right: 24, bottom: 15 };
 }
 
 function interactNearby() {
   const state = play.inn;
   const self = state?.people.find((person) => person.id === state.selfId);
   if (!self || !play.online || play.battle || state.match) return;
-  const byGate = hasExpeditionGate(state.map) && self.x >= 21 && self.x <= 24 && self.y >= 13 && self.y <= 15;
+  const gate = expeditionGate(state);
+  const byGate = gate && self.x >= gate.left - 1 && self.x <= gate.right &&
+    self.y >= Math.max(gate.top, gate.bottom - 2) && self.y <= gate.bottom;
   if (byGate && state.map[self.y][self.x] === 'D') {
     toggleGameWindow(0);
     return;
@@ -660,7 +664,7 @@ function interactNearby() {
   }
 }
 
-function updateChat(log, events) {
+function updateChat(log, events, npcs = []) {
   const after = Number(log.dataset.after) || 0;
   const fresh = events.filter(({ id }) => id > after);
   if (!fresh.length) return;
@@ -670,8 +674,14 @@ function updateChat(log, events) {
     const row = document.createElement('li');
     const who = document.createElement('strong');
     who.textContent = event.name;
-    if (event.kind === 'drink') row.classList.add('drink');
-    row.append(who, document.createTextNode(event.kind === 'drink' ? '님이 술을 마셨습니다.' : event.text ?? ''));
+    let message = event.text ?? '';
+    if (event.kind === 'drink' || event.kind === 'interact') row.classList.add('drink');
+    if (event.kind === 'drink') message = '님이 술을 마셨습니다.';
+    if (event.kind === 'interact') {
+      const npc = npcs.find(({ id }) => id === event.npcId);
+      message = npc ? `님이 ${npc.name}에게 말을 걸었습니다.` : '님이 여관 주민에게 말을 걸었습니다.';
+    }
+    row.append(who, document.createTextNode(message));
     return row;
   }));
   while (log.childElementCount > 80) log.firstElementChild.remove();
@@ -1653,10 +1663,11 @@ board.canvas.addEventListener('click', (event) => {
   if (!play.frame) {
     const id = board.signAt(px, py);
     const npc = board.npcAt(px, py);
+    const gate = expeditionGate(play.inn);
     if (id) void match(id);
     else if (npc && play.online && !play.battle && !play.inn?.match) showDialogue(npc);
-    else if (play.online && !play.battle && !play.inn?.match &&
-        hasExpeditionGate(play.inn?.map) && x >= 22 && x <= 24 && y >= 10 && y <= 15) toggleGameWindow(0);
+    else if (play.online && !play.battle && !play.inn?.match && gate &&
+        x >= gate.left && x <= gate.right && y >= gate.top && y <= gate.bottom) toggleGameWindow(0);
     else if (['.', 'D'].includes(play.inn?.map[y]?.[x])) destination = [x, y];
     return;
   }

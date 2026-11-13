@@ -37,6 +37,7 @@ final class NativeInnBoard extends Group {
     private static final int[] BOTTLES = {0x456353, 0x806243, 0x6c4345, 0x8b6b49, 0x46525e};
     private static final int[] STONE = {0x3d4950, 0x424b54, 0x333d46, 0x485158};
     private static final int GATE_X = 344, GATE_Y = 164;
+    private static final InnLayout.Gate LEGACY_GATE = new InnLayout.Gate(22, 10, 24, 15);
     private static final int[][] LIGHTS = {
         {120, 23, 93, 106}, {53, 116, 44, 49}, {53, 182, 47, 45}, {169, 133, 57, 53},
         {200, 164, 51, 49}, {264, 146, 50, 48}, {312, 82, 100, 56}, {382, 211, 59, 65}, {200, 239, 69, 53}
@@ -141,8 +142,7 @@ final class NativeInnBoard extends Group {
                         return;
                     }
                 }
-                if (isGateTile(column, row) || hearthHall && point.x >= GATE_X + 3 && point.x < GATE_X + 47
-                        && point.y >= GATE_Y + 1 && point.y < GATE_Y + 70) {
+                if (gateClicked(point, column, row)) {
                     openGate.run();
                     return;
                 }
@@ -152,13 +152,26 @@ final class NativeInnBoard extends Group {
     }
 
     boolean nearGate() {
-        if (state == null || !hearthHall) return false;
+        InnLayout.Gate gate = expeditionGate();
+        if (gate == null) return false;
         InnApi.Person self = state.self();
-        return self.x() >= 21 && self.x() <= 24 && self.y() >= 13 && self.y() <= 15;
+        return gate.near(self.x(), self.y());
     }
 
-    private boolean isGateTile(int x, int y) {
-        return hearthHall && x >= 22 && x <= 24 && y >= 14 && y <= 15 && tileAt(map, x, y) == 'D';
+    private InnLayout.Gate expeditionGate() {
+        if (state == null) return null;
+        if (state.layoutId() != null) return state.expeditionGate();
+        return hearthHall ? LEGACY_GATE : null;
+    }
+
+    private boolean gateClicked(PointF point, int column, int row) {
+        if (state.layoutId() != null) {
+            InnLayout.Gate gate = state.expeditionGate();
+            return gate != null && gate.contains(column, row);
+        }
+        return hearthHall && (LEGACY_GATE.contains(column, row) && tileAt(map, column, row) == 'D'
+            || point.x >= GATE_X + 3 && point.x < GATE_X + 47
+            && point.y >= GATE_Y + 1 && point.y < GATE_Y + 70);
     }
 
     void zoom(int steps) {
