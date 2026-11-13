@@ -26,6 +26,7 @@ import com.badlogic.gdx.utils.Os;
 import com.badlogic.gdx.utils.SharedLibraryLoader;
 import com.github.xpenatan.gdx.teavm.backends.web.WebApplicationConfiguration;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty;
 import com.watabou.noosa.Game;
 import com.watabou.utils.FileUtils;
 
@@ -109,14 +110,26 @@ public class WebLauncher {
 
 		String innName = WebJS.innProfileField("name");
 		boolean fromInn = innName != null && !innName.isBlank();
+		boolean party = false;
 		if (fromInn) {
 			InnAdventure.configure(innName, WebJS.innProfileField("job"), WebJS.innProfileField("hairColor"),
 					WebJS.innProfileField("outfitColor"), WebJS.innProfileField("hairStyle"), WebJS.innProfileField("accessory"),
 					"1".equals(WebJS.innProfileField("atb")), preparationValue("prepHp", 2),
 					preparationValue("prepFood", 1));
+			if ("1".equals(WebJS.innProfileField("practice"))) InnAdventure.enablePractice();
+			String role = WebJS.innProfileField("partyRole");
+			if ("host".equals(role) || "guest".equals(role)) {
+				party = true;
+				InnOriginalParty.configure("host".equals(role), WebJS.innProfileField("partyName"),
+						WebJS.innProfileField("partyJob"), WebJS.innProfileField("partyHairColor"),
+						WebJS.innProfileField("partyOutfitColor"), WebJS.innProfileField("partyHairStyle"),
+						WebJS.innProfileField("partyAccessory"), Long.parseLong(WebJS.innProfileField("partySeed")),
+						"1".equals(WebJS.innProfileField("friendlyFire")), WebJS::sendPartyPayload);
+			}
 		}
 		GameThread game = new GameThread(new WebInnGame(fromInn));
 		new SPDWebApplication(game, new WebPreloader(), config);
+		if (party) WebJS.onPartyPayload(data -> game.post(() -> InnOriginalParty.receive(data)));
 	}
 
 	private static int preparationValue(String field, int magnitude) {

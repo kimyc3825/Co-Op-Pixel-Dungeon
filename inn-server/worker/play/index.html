@@ -139,7 +139,7 @@
           </nav>
           <section id="expedition-window" class="game-window expedition-window" aria-labelledby="expedition-heading" hidden>
             <header class="window-title"><h2 id="expedition-heading">던전 입장</h2><button type="button" data-close-window="expedition" aria-label="닫기">×</button></header>
-            <div class="theme-choice">
+            <div class="theme-choice" hidden>
               <label for="dungeon-theme">ATB 던전 테마</label>
               <select id="dungeon-theme" aria-describedby="party-rules-hint">
                 <option value="sewers">하수도</option>
@@ -147,17 +147,17 @@
               </select>
             </div>
             <label class="party-option"><input id="friendly-fire" type="checkbox" aria-describedby="party-rules-hint"> 아군 공격 허용</label>
-            <p id="party-rules-hint" class="party-rules-hint">테마는 2인 원정과 길잡이 연습에 적용됩니다. 2인 원정의 아군 공격 규칙은 파티장이 정합니다.</p>
+            <p id="party-rules-hint" class="party-rules-hint">원본 던전 1층에서 시작합니다. 2인 원정의 아군 공격 규칙은 파티장이 정합니다.</p>
             <button id="prepare-expedition" class="wide" type="button" aria-describedby="preparation-result" disabled>원정 준비</button>
             <p id="preparation-result" class="party-rules-hint" role="status" hidden></p>
-            <button class="primary wide" id="match" type="button" disabled>동료 찾기</button>
+            <button class="primary wide" id="match" type="button" disabled>동료 찾기 · 원본 ATB</button>
             <ul id="seekers" class="seekers" aria-label="동료를 찾는 모험가" hidden></ul>
             <button id="solo" class="wide" type="button" disabled>1인 원정 · 원본 ATB</button>
-            <button id="guide" class="wide" type="button" disabled>연습 모드 · 길잡이</button>
+            <button id="guide" class="wide" type="button" disabled>길잡이 연습 · 원본 ATB</button>
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 1인 저장</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.15.12/NoxacPixelDungeon-Inn-0.15.12-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.15.12</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.16.0/NoxacPixelDungeon-Inn-0.16.0-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.16.0</a>
             </div>
           </section>
 
@@ -228,11 +228,11 @@
       <h2 id="settings-heading">설정</h2>
       <button aria-label="닫기">×</button>
     </form>
-    <p>Noxac Pixel Dungeon 0.15.12</p>
+    <p>Noxac Pixel Dungeon 0.16.0</p>
     <p>이 게임은 Evan Debenham의 Shattered Pixel Dungeon 4.0.2를 기반으로 하며 GNU 일반 공중 사용 허가서(GPL) 버전 3 이상에 따라 배포됩니다.</p>
     <ul class="settings-links">
       <li><a href="/play/LICENSE.txt" target="_blank" rel="noopener">GPL 라이선스 전문</a></li>
-      <li><a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.15.12" target="_blank" rel="noopener">Noxac Pixel Dungeon 0.15.12 소스 코드</a></li>
+      <li><a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.16.0" target="_blank" rel="noopener">Noxac Pixel Dungeon 0.16.0 소스 코드</a></li>
       <li><a href="https://github.com/00-Evan/shattered-pixel-dungeon" target="_blank" rel="noopener">Shattered Pixel Dungeon 원본 소스</a></li>
     </ul>
   </dialog>

@@ -17,6 +17,7 @@ const DIRECT_TIMEOUT_MS = 3500;
 const COMMAND_RETRY_MS = 275;
 const ENTRY_TIMEOUT_MS = 16000;
 const HOST_TIMEOUT_MS = 14000;
+const ORIGINAL_ENTRY_TIMEOUT_MS = 150000;
 const MAX_COMMANDS = 16;
 const MAX_MESSAGE_BYTES = 24 * 1024;
 const MAX_CHANNEL_BUFFER = 128 * 1024;
@@ -101,11 +102,12 @@ function validKnowledge(knowledge) {
 
 export class PlaySession {
   constructor({ onInn = () => {}, onBattle = () => {}, onStatus = () => {}, onLoading = () => {},
-    relayOnly = false, iceServers = ICE_SERVERS, runtimeLoader = loadBattleRuntime } = {}) {
+    onOriginalParty = null, relayOnly = false, iceServers = ICE_SERVERS, runtimeLoader = loadBattleRuntime } = {}) {
     this.onInn = onInn;
     this.onBattle = onBattle;
     this.onStatus = onStatus;
     this.onLoading = onLoading;
+    this.onOriginalParty = onOriginalParty;
     this.runtimeLoader = runtimeLoader;
     this.relayOnly = relayOnly;
     this.iceServers = iceServers;
@@ -274,6 +276,9 @@ export class PlaySession {
     return !!action && !!this.battle?.action(action);
   }
 
+  originalPartyReady() { this.battle?.originalReady(); }
+  sendOriginalParty(data) { this.battle?.sendOriginal(data); }
+
   async suspendInn() {
     if (this.closed || this.battle || this.innSuspended || this.inn?.match) return false;
     this.innSuspended = true;
@@ -351,7 +356,8 @@ export class PlaySession {
     const appearance = this.appearance;
     const wasOnline = this.online;
     this.innSync = request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST',
-      enter ? { name, appearance, after: this.after, dungeonProtocol: 9 } : { after: this.after }).then(fresh => {
+      enter ? { name, appearance, after: this.after, dungeonProtocol: this.onOriginalParty ? 10 : 9 } :
+        { after: this.after }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
       if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;
       // The roster read can have started before movement reached the server.
@@ -425,7 +431,8 @@ export class PlaySession {
     this.#stopInnMoves();
     const battle = new BattleSession({ key: this.key, matchId, matchRole, localPlayer, localMode,
       theme: this.theme, friendlyFire: this.friendlyFire, relayOnly: this.relayOnly, iceServers: this.iceServers,
-      runtimeLoader: this.runtimeLoader, onLoading: this.onLoading, listener: frame => this.#battleFrame(battle, frame) });
+      runtimeLoader: this.runtimeLoader, onLoading: this.onLoading, listener: frame => this.#battleFrame(battle, frame),
+      originalParty: matchId && this.onOriginalParty ? event => this.#originalPartyEvent(battle, event) : null });
     this.battle = battle;
     this.#status(matchId ? '파티 던전에 들어가는 중…' :
       localMode === 'practice' ? '길잡이와 던전에 들어가는 중…' : '혼자 던전에 들어가는 중…');
@@ -449,6 +456,23 @@ export class PlaySession {
     this.onBattle(frame);
   }
 
+  #originalPartyEvent(battle, event) {
+    if (this.closed || battle !== this.battle) return;
+    if (event.type === 'paired' && !this.leftInn) {
+      this.leftInn = true;
+      this.online = false;
+      this.inn = null;
+      this.#leaveInn();
+    }
+    const handled = this.onOriginalParty(event);
+    if (event.type === 'ended' && !handled) void this.leaveOriginalParty(event.notice);
+  }
+
+  async leaveOriginalParty(notice) {
+    await this.returnToInn();
+    if (notice && !this.closed && !this.battle) this.#status(notice);
+  }
+
   #leaveInn() { void request(INN + 'session', this.key, 'DELETE', undefined, true).catch(() => {}); }
 
   #status(message) {
@@ -459,7 +483,8 @@ export class PlaySession {
 }
 
 class BattleSession {
-  constructor({ key, matchId, matchRole, localPlayer, localMode, theme, friendlyFire, relayOnly, iceServers, runtimeLoader, onLoading, listener }) {
+  constructor({ key, matchId, matchRole, localPlayer, localMode, theme, friendlyFire, relayOnly, iceServers,
+    runtimeLoader, onLoading, listener, originalParty }) {
     this.key = key;
     this.matchId = matchId;
     this.matchRole = matchRole;
@@ -472,6 +497,7 @@ class BattleSession {
     this.runtimeLoader = runtimeLoader;
     this.onLoading = onLoading;
     this.listener = listener;
+    this.originalParty = originalParty;
     this.startedAt = now();
     this.frame = this.link = this.engine = this.peer = this.channel = this.runtime = null;
     this.loadAbort = new AbortController();
@@ -487,11 +513,18 @@ class BattleSession {
     this.packetSequence = this.commandSequence = 0;
     this.pending = [];
     this.unacked = [];
+    if (originalParty) {
+      this.original = {
+        seed: this.host ? String(newSeed()) : null, friendlyFire, launched: false, ready: false, peerReady: false,
+        deadline: this.startedAt + ENTRY_TIMEOUT_MS, peerAt: this.startedAt, nextSendAt: 0, lastByType: new Map(),
+      };
+    }
   }
 
   start() {
     this.timer = setInterval(() => this.#tick(), 25);
-    void this.runtimeLoader({ simulate: this.host, signal: this.loadAbort.signal, onLoading: update => {
+    if (this.originalParty) this.onLoading({ phase: 'loading', mode: 'party' });
+    else void this.runtimeLoader({ simulate: this.host, signal: this.loadAbort.signal, onLoading: update => {
       if (this.loadingFinished) return;
       this.loadingVersion = update.version ?? this.loadingVersion;
       this.onLoading({ ...update, mode: this.localMode, practice: this.localMode === 'practice', cancelled: false });
@@ -519,6 +552,22 @@ class BattleSession {
     return true;
   }
 
+  originalReady() {
+    if (!this.original?.launched || this.closed || this.terminal) return;
+    this.original.ready = true;
+    this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
+    this.original.nextSendAt = 0;
+    this.#tick();
+  }
+
+  sendOriginal(data) {
+    if (!this.original?.ready || !this.original.peerReady || this.closed || this.terminal || typeof data !== 'string' || !data ||
+        encoder.encode(data).byteLength > MAX_MESSAGE_BYTES) return;
+    this.original.nextSendAt = now() + 100;
+    this.#sendOriginal('payload', { data });
+    this.#flushRelay(now());
+  }
+
   resume() {
     this.nextLinkSyncAt = 0;
     this.#tick();
@@ -530,7 +579,9 @@ class BattleSession {
     clearInterval(this.timer);
     this.#settleLoading('failed', true);
     this.engine?.close(now());
-    if (this.#direct()) this.#sendDirect(JSON.stringify({ type: 'leave', sequence: 0 }));
+    if (this.original) {
+      if (this.#direct()) this.#sendOriginal('leave');
+    } else if (this.#direct()) this.#sendDirect(JSON.stringify({ type: 'leave', sequence: 0 }));
     this.#closePeer();
     if (this.link) this.#leaveLink();
   }
@@ -538,7 +589,10 @@ class BattleSession {
   #tick() {
     if (this.closed || this.terminal) return;
     const time = now();
-    if ((!this.runtime || !this.frame) && time - this.startedAt >= ENTRY_TIMEOUT_MS) {
+    const entryExpired = this.original
+      ? !(this.original.ready && this.original.peerReady) && time >= this.original.deadline
+      : (!this.runtime || !this.frame) && time - this.startedAt >= ENTRY_TIMEOUT_MS;
+    if (entryExpired) {
       this.#finish(this.localPlayer ? '던전 데이터를 불러오지 못했습니다. 다시 시도해 주세요.' :
         '동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.');
       return;
@@ -565,7 +619,9 @@ class BattleSession {
     if (!this.syncInFlight && time >= this.nextLinkSyncAt) this.#sync(time, direct);
     if (!this.link.paired) return;
     this.#publishSignal(time);
-    if (this.host) {
+    if (this.original) {
+      this.#tickOriginal(time);
+    } else if (this.host) {
       if (this.engine) this.#advanceHost(time, switched || time >= this.nextHeartbeatAt);
     } else {
       if (direct && time >= this.nextPingAt) {
@@ -579,6 +635,59 @@ class BattleSession {
       this.#sendGuestCommands(time);
     }
     this.#flushRelay(time);
+  }
+
+  #tickOriginal(time) {
+    const original = this.original;
+    if (this.#direct() && original.ready && original.peerReady && time - original.peerAt >= HOST_TIMEOUT_MS) {
+      this.#finish('동료와의 연결이 끊겼습니다.');
+      return;
+    }
+    if (time < original.nextSendAt) return;
+    original.nextSendAt = time + HEARTBEAT_MS;
+    if (this.host && !original.peerReady) {
+      this.#sendOriginal('hello', { seed: original.seed, friendlyFire: original.friendlyFire });
+    } else if (!this.host && original.ready && !original.peerReady) {
+      this.#sendOriginal('ready');
+    } else if (this.#direct()) {
+      this.#sendOriginal('ping');
+    }
+  }
+
+  #sendOriginal(type, fields) {
+    this.#transmit({ kind: 'original', type, seq: ++this.packetSequence, ...fields });
+  }
+
+  #launchOriginal() {
+    if (this.original.launched) return;
+    this.original.launched = true;
+    this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
+    this.onLoading({ phase: 'ready', mode: 'party' });
+    this.originalParty({ type: 'start', link: this.link, seed: this.original.seed, friendlyFire: this.original.friendlyFire });
+  }
+
+  #receiveOriginal(wire) {
+    const original = this.original;
+    if (wire.kind !== 'original' || !Number.isSafeInteger(wire.seq) || wire.seq <= 0 ||
+        wire.seq <= (original.lastByType.get(wire.type) ?? 0)) return;
+    if (wire.type === 'hello' && !this.host && typeof wire.seed === 'string' && /^(0|[1-9][0-9]{0,9})$/.test(wire.seed) &&
+        Number(wire.seed) <= 0xFFFFFFFF && typeof wire.friendlyFire === 'boolean') {
+      if (original.seed !== null && original.seed !== wire.seed) return;
+      original.seed = wire.seed;
+      original.friendlyFire = wire.friendlyFire;
+      this.#launchOriginal();
+    } else if (wire.type === 'ready' && this.host) {
+      original.peerReady = true;
+      this.#launchOriginal();
+    } else if (wire.type === 'payload' && original.ready && typeof wire.data === 'string' && wire.data) {
+      original.peerReady = true;
+      this.originalParty({ type: 'payload', data: wire.data });
+    } else if (wire.type === 'leave') {
+      this.#finish('동료가 원정을 종료했습니다.');
+      return;
+    } else if (wire.type !== 'ping') return;
+    original.lastByType.set(wire.type, wire.seq);
+    original.peerAt = now();
   }
 
   #sync(time, direct) {
@@ -607,7 +716,11 @@ class BattleSession {
     this.link = link;
     if (!link.paired) return;
     if (!wasPaired) {
-      this.#createEngine();
+      if (this.original) {
+        this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
+        this.originalParty({ type: 'paired' });
+      }
+      else this.#createEngine();
       this.#openPeer();
     }
     if (this.peer && link.signal) this.#applySignal(link.signal);
@@ -671,6 +784,10 @@ class BattleSession {
     let wire;
     try { wire = JSON.parse(message); } catch { return; }
     if (!wire) return;
+    if (this.original) {
+      this.#receiveOriginal(wire);
+      return;
+    }
     if (wire.type === 'leave') {
       this.#finish('동료가 원정을 종료했습니다.');
     } else if (this.engine && wire.type === 'input' && Number.isSafeInteger(wire.sequence) &&
@@ -822,7 +939,7 @@ class BattleSession {
     const message = JSON.stringify(wire);
     const bytes = encoder.encode(message).byteLength;
     if (bytes > MAX_MESSAGE_BYTES) return;
-    this.relayPending = this.#sendDirect(message, bytes) ? null : { seq: wire.sequence, message };
+    this.relayPending = this.#sendDirect(message, bytes) ? null : { seq: wire.seq ?? wire.sequence, message };
   }
 
   #flushRelay(time) {
@@ -830,6 +947,7 @@ class BattleSession {
     const packet = this.relayPending;
     this.relayPending = null;
     this.relayInFlight = true;
+    if (this.original) this.nextRelayAt = time + RELAY_POLL_MS;
     void this.#linkRequest('relay', { id: this.matchId, ...packet }).catch(error => {
       if (this.closed || this.terminal || this.#direct()) return;
       if (linkEnded(error)) this.#finish('파티 연결이 종료되었습니다.');
@@ -862,6 +980,12 @@ class BattleSession {
     if (this.closed || this.terminal) return;
     this.terminal = true;
     clearInterval(this.timer);
+    if (this.original) {
+      if (!this.original.launched) this.#settleLoading('failed');
+      this.originalParty({ type: 'ended', notice });
+      this.#closePeer();
+      return;
+    }
     this.#settleLoading('failed');
     const state = this.runtime ? this.frame?.state : null;
     const time = this.frame?.serverTime() ?? 0;

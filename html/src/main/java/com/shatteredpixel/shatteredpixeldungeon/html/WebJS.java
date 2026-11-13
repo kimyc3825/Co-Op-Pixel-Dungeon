@@ -37,6 +37,11 @@ public class WebJS {
 	}
 
 	@JSFunctor
+	public interface PartyPayload extends JSObject {
+		void accept(String data);
+	}
+
+	@JSFunctor
 	public interface StateProvider extends JSObject {
 		String state();
 	}
@@ -130,6 +135,17 @@ public class WebJS {
 			+ " if (window.parent !== window && event.source === window.parent && event.origin === location.origin"
 			+ " && event.data && event.data.type === 'noxac-original-return-request') callback(); });")
 	public static native void onReturnRequest(Callback callback);
+
+	@JSBody(params = "data", script = "if (window.parent !== window) window.parent.postMessage("
+			+ "{type: 'noxac-original-party-send', data: data}, location.origin);")
+	public static native void sendPartyPayload(String data);
+
+	@JSBody(params = "callback", script = "window.addEventListener('message', function (event) {"
+			+ " if (window.parent !== window && event.source === window.parent && event.origin === location.origin"
+			+ " && event.data && event.data.type === 'noxac-original-party-payload'"
+			+ " && typeof event.data.data === 'string' && event.data.data.length <= 24576)"
+			+ " callback(event.data.data); });")
+	public static native void onPartyPayload(PartyPayload callback);
 
 	@JSBody(params = "dump", script = "window.spd = window.spd || {}; window.spd.seedCheckResult = dump;"
 			+ " console.log(dump); if (window.spd.loaded) window.spd.loaded();"

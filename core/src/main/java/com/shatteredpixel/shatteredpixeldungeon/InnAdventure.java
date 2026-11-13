@@ -36,6 +36,7 @@ public final class InnAdventure {
 
     private static Profile profile;
     private static volatile boolean atb;
+    private static volatile boolean practice;
     private static volatile AtbRun activeAtbRun;
     private static Preparation nextPreparation;
 
@@ -79,6 +80,17 @@ public final class InnAdventure {
 
     public static void configure(String name, String job, String hairColor, String outfitColor,
                                  String hairStyle, String accessory, boolean realTime, int hp, int food) {
+        InnOriginalParty.clear();
+        profile = makeProfile(name, job, hairColor, outfitColor, hairStyle, accessory);
+        InnAtb.reset();
+        activeAtbRun = null;
+        practice = false;
+        nextPreparation = realTime ? new Preparation(hp, food) : null;
+        atb = realTime;
+    }
+
+    public static Profile makeProfile(String name, String job, String hairColor, String outfitColor,
+                                      String hairStyle, String accessory) {
         HeroClass selected = HeroClass.WARRIOR;
         for (HeroClass heroClass : HeroClass.values()) {
             if (heroClass.name().equalsIgnoreCase(job)) {
@@ -86,11 +98,7 @@ public final class InnAdventure {
                 break;
             }
         }
-        profile = new Profile(name, selected, hairColor, outfitColor, hairStyle, accessory);
-        InnAtb.reset();
-        activeAtbRun = null;
-        nextPreparation = realTime ? new Preparation(hp, food) : null;
-        atb = realTime;
+        return new Profile(name, selected, hairColor, outfitColor, hairStyle, accessory);
     }
 
     public static Profile profile() {
@@ -101,12 +109,24 @@ public final class InnAdventure {
         return atb;
     }
 
+    public static void enablePractice() {
+        if (!atb) throw new IllegalStateException("Practice requires an ATB adventure");
+        practice = true;
+        nextPreparation = null;
+    }
+
+    public static boolean practice() {
+        return practice;
+    }
+
     /** Allocate the temporary checkpoint slot before generating the new expedition. */
     public static int startAtbRun() {
         int slot = GamesInProgress.firstSlot();
         if (!GamesInProgress.isAtbSlot(slot)) throw new IllegalStateException("ATB adventure is not active");
-        Dungeon.deleteGame(slot, true);
-        activeAtbRun = new AtbRun(slot, nextPreparation);
+        if (!practice) {
+            Dungeon.deleteGame(slot, true);
+            activeAtbRun = new AtbRun(slot, nextPreparation);
+        }
         nextPreparation = null;
         return slot;
     }
@@ -141,6 +161,7 @@ public final class InnAdventure {
 
     /** Retire this expedition before returning to the inn. */
     public static void retreat() {
+        InnOriginalParty.finish();
         AtbRun run = activeAtbRun;
         if (run == null) return;
         activeAtbRun = null;
@@ -149,9 +170,11 @@ public final class InnAdventure {
     }
 
     public static void clear() {
+        InnOriginalParty.clear();
         activeAtbRun = null;
         nextPreparation = null;
         atb = false;
+        practice = false;
         profile = null;
     }
 }

@@ -5,6 +5,7 @@ import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty;
 import com.shatteredpixel.shatteredpixeldungeon.journal.Journal;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ActionIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.TitleBackground;
@@ -26,6 +27,12 @@ public final class InnAdventureScene extends PixelScene {
         }
         Badges.loadGlobal();
         Journal.loadGlobal();
+
+        InnOriginalParty party = InnOriginalParty.current();
+        if (party != null && !party.host) {
+            Game.switchScene(InnPartyScene.class);
+            return;
+        }
 
         if (InnAdventure.atb()) {
             enter(InnAdventure.startAtbRun(), false);
@@ -56,7 +63,14 @@ public final class InnAdventureScene extends PixelScene {
         Dungeon.hero = null;
         Dungeon.daily = Dungeon.dailyReplay = false;
         ActionIndicator.clearAction();
-        if (!resume) Dungeon.initSeed();
+        if (!resume) {
+            Dungeon.initSeed();
+            InnOriginalParty party = InnOriginalParty.current();
+            if (party != null) {
+                Dungeon.seed = party.seed;
+                Dungeon.customSeedText = "";
+            }
+        }
         InterlevelScene.mode = resume ? InterlevelScene.Mode.CONTINUE : InterlevelScene.Mode.DESCEND;
         Game.switchScene(InterlevelScene.class);
     }

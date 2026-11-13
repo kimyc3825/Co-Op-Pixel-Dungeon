@@ -30,7 +30,7 @@ final class NativeGame extends ShatteredPixelDungeon {
 
     @Override
     protected void step() {
-        if (requestedReset && NativeClient.inSolo()) {
+        if (requestedReset && NativeClient.inOriginal()) {
             if (sceneClass == TitleScene.class) {
                 NativeClient.returnToInn();
             } else if (sceneClass == RankingsScene.class && (scene instanceof AmuletScene || scene instanceof SurfaceScene)) {
@@ -42,7 +42,7 @@ final class NativeGame extends ShatteredPixelDungeon {
 
     @Override
     public boolean handleRunDeath() {
-        if (!NativeClient.inSolo() || !(scene instanceof GameScene)) return false;
+        if (!NativeClient.inOriginal() || !(scene instanceof GameScene)) return false;
         scene.add(new Delayer(1.5f) {
             @Override
             protected void onComplete() {
@@ -54,13 +54,13 @@ final class NativeGame extends ShatteredPixelDungeon {
 
     @Override
     public String runExitLabel() {
-        if (!NativeClient.inSolo()) return null;
+        if (!NativeClient.inOriginal()) return null;
         return InnAdventure.atb() ? "여관으로 철수" : "저장하고 여관으로";
     }
 
     @Override
     public void finish() {
-        if (NativeClient.inSolo()) NativeClient.returnToInn();
+        if (NativeClient.inOriginal()) NativeClient.returnToInn();
         else super.finish();
     }
 

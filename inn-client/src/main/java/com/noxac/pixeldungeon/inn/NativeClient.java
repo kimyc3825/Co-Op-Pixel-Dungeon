@@ -4,22 +4,23 @@ package com.noxac.pixeldungeon.inn;
 import com.badlogic.gdx.Gdx;
 import com.google.gson.Gson;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.InnAdventureScene;
 
-import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.prefs.Preferences;
 
 final class NativeClient {
-    private enum View { INN, ENTERING, DUNGEON, SOLO }
+    private enum View { INN, ENTERING, ORIGINAL_PARTY, DUNGEON, SOLO }
     private record DefeatLine(String text, String author) {}
 
     private static final Preferences SETTINGS = Preferences.userNodeForPackage(NativeClient.class);
     private static InnApi api;
     private static LobbySession inn;
     private static volatile LobbySession.Snapshot innSnapshot;
+    private static DungeonSession party;
     private static DungeonSession dungeon;
     private static DungeonSession.Frame dungeonFrame;
     private static View view = View.INN;
@@ -30,7 +31,6 @@ final class NativeClient {
     private static String nickname;
     private static InnApi.Appearance appearance;
     private static boolean profileConfirmed;
-    private static String expeditionTheme = DungeonLayout.SEWERS;
     private static boolean friendlyFire;
     private static boolean testMode;
     private static boolean leftInn;
@@ -46,7 +46,6 @@ final class NativeClient {
         nickname = saved == null ? SETTINGS.get("nickname", "") : saved.name();
         if (!LobbySession.validName(nickname)) nickname = LobbySession.guestName();
         appearance = saved == null ? AvatarProfile.normalize(null) : saved.appearance();
-        expeditionTheme = DungeonLayout.themeOrDefault(SETTINGS.get("expeditionTheme", DungeonLayout.SEWERS));
         if (profileConfirmed) connectInn();
     }
 
@@ -60,7 +59,7 @@ final class NativeClient {
         innSnapshot = snapshot;
         if (view != View.INN || !snapshot.online() || snapshot.state().match() == null) return;
         String matchId = snapshot.state().match().id();
-        if (!matchId.equals(ignoredMatch)) enterDungeon(matchId, null);
+        if (!matchId.equals(ignoredMatch)) enterOriginalParty(matchId);
     }
 
     static LobbySession.Snapshot innSnapshot() { return innSnapshot; }
@@ -71,7 +70,6 @@ final class NativeClient {
     static boolean isTestMode() { return testMode; }
     static void setTestMode(boolean enabled) { testMode = enabled; }
 
-    static String expeditionTheme() { return expeditionTheme; }
     static boolean friendlyFire() { return friendlyFire; }
 
     static void toggleFriendlyFire() {
@@ -85,12 +83,6 @@ final class NativeClient {
     static boolean canChooseExpeditionTheme() {
         InnApi.State current = innSnapshot == null ? null : innSnapshot.state();
         return view == View.INN && !preparing && (current == null || !current.queued() && current.match() == null);
-    }
-
-    static void chooseExpeditionTheme(String theme) {
-        if (!canChooseExpeditionTheme()) return;
-        expeditionTheme = DungeonLayout.themeOrDefault(theme);
-        SETTINGS.put("expeditionTheme", expeditionTheme);
     }
 
     static void rename(String value) {
@@ -117,43 +109,62 @@ final class NativeClient {
     }
 
     static void enterPractice() {
-        if (view != View.INN || !profileConfirmed) return;
-        String id = innSnapshot != null && innSnapshot.online()
-            ? innSnapshot.state().selfId() : UUID.randomUUID().toString();
-        InnApi.Person player = new InnApi.Person(id, nickname, 0, 0, false, appearance);
-        enterDungeon(null, player);
+        if (!canEnterSolo()) return;
+        configureOriginal(nickname, appearance, true, null);
+        InnAdventure.enablePractice();
+        view = View.SOLO;
+        leftInn = true;
+        inn.enterDungeon(false, null);
+        ShatteredPixelDungeon.switchNoFade(InnAdventureScene.class);
     }
 
-    private static void enterDungeon(String matchId, InnApi.Person localPlayer) {
+    private static void enterOriginalParty(String matchId) {
         ignoredMatch = matchId;
         view = View.ENTERING;
         leftInn = false;
-        innNotice = matchId == null ? "길잡이와 던전에 들어가는 중…" : "파티 던전에 들어가는 중…";
-        dungeon = new DungeonSession(api, inn.sessionKey(), matchId, localPlayer, expeditionTheme, friendlyFire,
-            (source, frame) -> {
-                if (!shuttingDown) Gdx.app.postRunnable(() -> onDungeon(source, frame));
-            });
+        innNotice = "동료와 원본 던전에 들어가는 중…";
+        party = new DungeonSession(api, inn.sessionKey(), matchId, friendlyFire, new DungeonSession.OriginalListener() {
+            @Override
+            public void start(DungeonSession source, InnApi.LinkState link, boolean host, long seed,
+                              boolean partyFriendlyFire) {
+                if (!shuttingDown) Gdx.app.postRunnable(() -> startOriginalParty(source, link, host, seed, partyFriendlyFire));
+            }
+
+            @Override
+            public void receive(DungeonSession source, String payload) {
+                if (!shuttingDown) Gdx.app.postRunnable(() -> {
+                    if (source == party && view == View.ORIGINAL_PARTY) InnOriginalParty.receive(payload);
+                });
+            }
+
+            @Override
+            public void end(DungeonSession source, String message) {
+                if (!shuttingDown) Gdx.app.postRunnable(() -> originalPartyEnded(source, message));
+            }
+        });
     }
 
-    private static void onDungeon(DungeonSession source, DungeonSession.Frame frame) {
-        if (source != dungeon) return;
-        if (frame.state() == null) {
-            source.close();
-            dungeon = null;
-            view = View.INN;
-            if (ignoredMatch != null) inn.matchmaking(false);
-            notice(frame.notice());
-            return;
-        }
-        dungeonFrame = frame;
-        if (!leftInn && !frame.state().waitingForPartner() && "active".equals(frame.state().status())) {
-            leftInn = true;
-            inn.enterDungeon(ignoredMatch != null, null);
-        }
-        if (view == View.ENTERING) {
-            view = View.DUNGEON;
-            ShatteredPixelDungeon.switchNoFade(NativeDungeonScene.class);
-        }
+    private static void startOriginalParty(DungeonSession source, InnApi.LinkState link, boolean host, long seed,
+                                           boolean partyFriendlyFire) {
+        if (source != party || view != View.ENTERING) return;
+        InnApi.Appearance own = link.selfAppearance() == null ? appearance : link.selfAppearance();
+        InnApi.Appearance remote = AvatarProfile.normalize(link.partnerAppearance());
+        InnApi.Preparation preparation = host ? preparation() : null;
+        configureOriginal(link.selfName(), own, true, host ? link.selfPreparation() : null);
+        InnOriginalParty.configure(host, link.partnerName(), remote.job(), remote.hairColor(), remote.outfitColor(),
+            remote.hairStyle(), remote.accessory(), seed, partyFriendlyFire, source::sendOriginal);
+        view = View.ORIGINAL_PARTY;
+        leftInn = true;
+        inn.enterDungeon(true, preparation);
+        ShatteredPixelDungeon.switchNoFade(InnAdventureScene.class);
+        source.originalConfigured();
+    }
+
+    private static void originalPartyEnded(DungeonSession source, String message) {
+        if (source != party) return;
+        if (view == View.ORIGINAL_PARTY) InnOriginalParty.close();
+        else inn.matchmaking(false);
+        returnToInn(message);
     }
 
     static InnApi.DungeonState dungeonState() { return dungeonFrame == null ? null : dungeonFrame.state(); }
@@ -224,16 +235,23 @@ final class NativeClient {
     private static void enterOriginal(boolean atb) {
         if (!canEnterSolo()) return;
         InnApi.Preparation preparation = atb ? preparation() : null;
-        InnAdventure.configure(nickname, appearance.job(), appearance.hairColor(), appearance.outfitColor(),
-            appearance.hairStyle(), appearance.accessory(), atb,
-            InnApi.Preparation.health(preparation), InnApi.Preparation.rations(preparation));
+        configureOriginal(nickname, appearance, atb, preparation);
         view = View.SOLO;
         leftInn = true;
         inn.enterDungeon(false, preparation);
         ShatteredPixelDungeon.switchNoFade(InnAdventureScene.class);
     }
 
+    private static void configureOriginal(String name, InnApi.Appearance profile, boolean atb,
+                                          InnApi.Preparation preparation) {
+        InnAdventure.configure(name, profile.job(), profile.hairColor(), profile.outfitColor(),
+            profile.hairStyle(), profile.accessory(), atb,
+            InnApi.Preparation.health(preparation), InnApi.Preparation.rations(preparation));
+    }
+
     static boolean inSolo() { return view == View.SOLO; }
+
+    static boolean inOriginal() { return inSolo() || view == View.ORIGINAL_PARTY; }
 
     static void returnToInn() {
         returnToInn(null);
@@ -269,10 +287,12 @@ final class NativeClient {
                 .anyMatch(actor -> outcome.selfId().equals(actor.id()) && actor.hp() <= 0))) {
             defeatNotice = chooseDefeatLine();
         }
-        if (inSolo()) {
+        if (inOriginal()) {
             InnAdventure.retreat();
             InnAdventure.clear();
         }
+        if (party != null) party.close();
+        party = null;
         if (dungeon != null) dungeon.close();
         dungeon = null;
         dungeonFrame = null;
@@ -293,7 +313,8 @@ final class NativeClient {
 
     static void shutdown() {
         shuttingDown = true;
-        if (inSolo()) InnAdventure.clear();
+        if (inOriginal()) InnAdventure.clear();
+        if (party != null) party.close();
         if (dungeon != null) dungeon.close();
         if (inn != null) inn.close();
     }

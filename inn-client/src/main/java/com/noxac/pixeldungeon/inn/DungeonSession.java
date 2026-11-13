@@ -4,8 +4,11 @@ package com.noxac.pixeldungeon.inn;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletionException;
@@ -13,6 +16,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 final class DungeonSession implements AutoCloseable {
@@ -39,6 +43,13 @@ final class DungeonSession implements AutoCloseable {
     private record Command(long sequence, InnApi.Action action) {}
     private record Wire(String type, long sequence, List<Command> commands, InnApi.DungeonState state) {}
     private record Packet(long sequence, String message) {}
+    private record OriginalWire(String kind, String type, long seq, String seed, Boolean friendlyFire, String data) {}
+
+    interface OriginalListener {
+        void start(DungeonSession session, InnApi.LinkState link, boolean host, long seed, boolean friendlyFire);
+        void receive(DungeonSession session, String payload);
+        void end(DungeonSession session, String notice);
+    }
 
     private static final long RELAY_SYNC_MS = 165;
     private static final long DIRECT_SYNC_MS = 2_500;
@@ -46,6 +57,7 @@ final class DungeonSession implements AutoCloseable {
     private static final long DIRECT_TIMEOUT_MS = 3_500;
     private static final long COMMAND_RETRY_MS = 275;
     private static final long ENTRY_TIMEOUT_MS = 16_000;
+    private static final long ORIGINAL_BOOT_TIMEOUT_MS = 120_000;
     private static final long HOST_TIMEOUT_MS = 14_000;
     private static final int MAX_MESSAGE_LENGTH = 24 * 1024;
     private static final int MAX_COMMANDS = 16;
@@ -58,10 +70,12 @@ final class DungeonSession implements AutoCloseable {
     private final boolean friendlyFire;
     private final boolean solo;
     private final BiConsumer<DungeonSession, Frame> listener;
+    private final OriginalListener originalListener;
     private final ScheduledThreadPoolExecutor network = new ScheduledThreadPoolExecutor(1,
         task -> new Thread(task, "dungeon-link"));
     private final ArrayBlockingQueue<InnApi.Action> pending = new ArrayBlockingQueue<>(MAX_COMMANDS);
-    private final Gson gson = new Gson();
+    private final Gson gson = new Gson().newBuilder().disableHtmlEscaping().create();
+    private final AtomicReference<String> originalOutbound = new AtomicReference<>();
     private final long startedAt = System.nanoTime();
     private final long epoch = System.currentTimeMillis();
     private volatile boolean closed;
@@ -92,6 +106,16 @@ final class DungeonSession implements AutoCloseable {
     private final ArrayDeque<Command> unackedCommands = new ArrayDeque<>(MAX_COMMANDS);
     private Packet relayPending;
     private Frame frame;
+    private final Map<String, Long> originalReceived = new HashMap<>();
+    private long originalPairedAt;
+    private long originalSeenAt;
+    private long originalSeed;
+    private boolean originalFriendlyFire;
+    private boolean originalStarted;
+    private boolean originalConfigured;
+    private boolean originalPayloadReceived;
+    private String originalInbound;
+    private String originalSent;
 
     DungeonSession(InnApi api, String key, String matchId, InnApi.Person practicePlayer,
                    BiConsumer<DungeonSession, Frame> listener) {
@@ -110,6 +134,16 @@ final class DungeonSession implements AutoCloseable {
 
     DungeonSession(InnApi api, String key, String matchId, InnApi.Person localPlayer, String theme,
                    boolean friendlyFire, boolean solo, BiConsumer<DungeonSession, Frame> listener) {
+        this(api, key, matchId, localPlayer, theme, friendlyFire, solo, listener, null);
+    }
+
+    DungeonSession(InnApi api, String key, String matchId, boolean friendlyFire, OriginalListener listener) {
+        this(api, key, matchId, null, null, friendlyFire, false, null, listener);
+    }
+
+    private DungeonSession(InnApi api, String key, String matchId, InnApi.Person localPlayer, String theme,
+                           boolean friendlyFire, boolean solo, BiConsumer<DungeonSession, Frame> listener,
+                           OriginalListener originalListener) {
         this.api = api;
         this.key = key;
         this.matchId = matchId;
@@ -118,6 +152,7 @@ final class DungeonSession implements AutoCloseable {
         this.friendlyFire = friendlyFire;
         this.solo = solo;
         this.listener = listener;
+        this.originalListener = originalListener;
         network.execute(this::enter);
         network.scheduleAtFixedRate(this::tick, 0, 25, TimeUnit.MILLISECONDS);
     }
@@ -148,10 +183,26 @@ final class DungeonSession implements AutoCloseable {
         if (!closed) pending.offer(action);
     }
 
+    void originalConfigured() {
+        submit(() -> {
+            if (closed || terminal) return;
+            originalConfigured = true;
+            if (originalInbound != null) {
+                originalListener.receive(this, originalInbound);
+                originalInbound = null;
+            }
+        });
+    }
+
+    void sendOriginal(String payload) {
+        if (!closed && payload != null && !payload.isEmpty()) originalOutbound.set(payload);
+    }
+
     private void tick() {
         if (closed || terminal) return;
         long now = now();
-        if (frame == null && elapsedSince(startedAt) >= ENTRY_TIMEOUT_MS) {
+        boolean waiting = originalListener == null ? frame == null : originalPairedAt == 0;
+        if (waiting && elapsedSince(startedAt) >= ENTRY_TIMEOUT_MS) {
             finish("동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.");
             return;
         }
@@ -169,12 +220,15 @@ final class DungeonSession implements AutoCloseable {
             nextCommandAt = 0;
             nextPingAt = 0;
             relayPending = null;
+            originalSent = null;
             if (frame != null) publish(frame.state(), frame.hostAtReceipt(), frame.receivedAt(), frame.notice());
         }
         if (!syncInFlight && now >= nextSyncAt) sync(now, direct);
         if (!link.paired()) return;
         publishSignal(now);
-        if (host) {
+        if (originalListener != null) {
+            tickOriginal(now);
+        } else if (host) {
             advanceHost(now, switched || now >= nextHeartbeatAt);
         } else {
             if (direct && now >= nextPingAt) {
@@ -188,6 +242,52 @@ final class DungeonSession implements AutoCloseable {
             sendGuestCommands(now);
         }
         flushRelay(now);
+    }
+
+    private void tickOriginal(long now) {
+        boolean booted = host ? originalConfigured : originalPayloadReceived;
+        if ((!booted && now - originalPairedAt >= ORIGINAL_BOOT_TIMEOUT_MS) ||
+                (booted && direct() && now - originalSeenAt >= HOST_TIMEOUT_MS)) {
+            finish("동료와 원본 던전 연결이 끊겼습니다.");
+            return;
+        }
+
+        // Leave time for the browser runtime to finish loading before the host world starts.
+        if (host && !originalStarted && now >= nextPingAt) {
+            sendOriginalWire("hello", null);
+            nextPingAt = now + STATE_HEARTBEAT_MS;
+            return;
+        }
+        if (!host && originalConfigured && !originalPayloadReceived && now >= nextPingAt) {
+            sendOriginalWire("ready", null);
+            nextPingAt = now + STATE_HEARTBEAT_MS;
+            return;
+        }
+
+        if (originalConfigured && (host || originalPayloadReceived)) {
+            String payload = originalOutbound.get();
+            if (payload != null && (!payload.equals(originalSent) || now >= nextPingAt)) {
+                sendOriginalWire("payload", payload);
+                originalSent = payload;
+                nextPingAt = now + STATE_HEARTBEAT_MS;
+                return;
+            }
+        }
+        // A pending command stays in the relay slot until the other peer can read it.
+        if (now >= nextPingAt) {
+            sendOriginalWire("ping", null);
+            nextPingAt = now + STATE_HEARTBEAT_MS;
+        }
+    }
+
+    private void sendOriginalWire(String type, String payload) {
+        long sequence = ++packetSequence;
+        boolean hello = "hello".equals(type);
+        String message = gson.toJson(new OriginalWire("original", type, sequence,
+            hello ? Long.toString(originalSeed) : null, hello ? friendlyFire : null, payload));
+        if (message.getBytes(StandardCharsets.UTF_8).length <= MAX_MESSAGE_LENGTH) {
+            transmit(new Packet(sequence, message));
+        }
     }
 
     private void advanceHost(long now, boolean sendHeartbeat) {
@@ -259,7 +359,10 @@ final class DungeonSession implements AutoCloseable {
         if (!next.paired()) return;
         if (!paired) {
             host = "host".equals(next.role());
-            if (host) {
+            if (originalListener != null) {
+                originalPairedAt = now();
+                if (host) originalSeed = Integer.toUnsignedLong(ThreadLocalRandom.current().nextInt());
+            } else if (host) {
                 battle = new HostBattle(next.id(),
                     new InnApi.Person(next.selfId(), next.selfName(), 0, 0, false, next.selfAppearance()),
                     new InnApi.Person(next.partnerId(), next.partnerName(), 0, 0, false, next.partnerAppearance()),
@@ -342,6 +445,10 @@ final class DungeonSession implements AutoCloseable {
 
     private void receive(String message) {
         if (closed || terminal || link == null || !link.paired() || message.length() > MAX_MESSAGE_LENGTH) return;
+        if (originalListener != null) {
+            receiveOriginal(message);
+            return;
+        }
         Wire wire;
         try {
             wire = gson.fromJson(message, Wire.class);
@@ -366,6 +473,67 @@ final class DungeonSession implements AutoCloseable {
             lastSnapshotSequence = wire.sequence();
             acceptSnapshot(wire.state());
         }
+    }
+
+    private void receiveOriginal(String message) {
+        OriginalWire wire;
+        try {
+            wire = gson.fromJson(message, OriginalWire.class);
+        } catch (JsonParseException invalid) {
+            return;
+        }
+        if (wire == null || !"original".equals(wire.kind()) || wire.type() == null) return;
+        if (wire.seq() <= originalReceived.getOrDefault(wire.type(), 0L) ||
+                wire.seq() > 9_007_199_254_740_991L) return;
+        if ("leave".equals(wire.type())) {
+            finish("동료가 원정을 종료했습니다.");
+            return;
+        }
+        if ("ping".equals(wire.type())) {
+            originalReceived.put(wire.type(), wire.seq());
+            originalSeenAt = now();
+            return;
+        }
+
+        switch (wire.type()) {
+            case "hello" -> {
+                if (host || wire.seed() == null || wire.friendlyFire() == null ||
+                        !wire.seed().matches("0|[1-9][0-9]{0,9}")) return;
+                long sharedSeed;
+                try {
+                    sharedSeed = Long.parseLong(wire.seed());
+                } catch (NumberFormatException invalid) {
+                    return;
+                }
+                if (sharedSeed < 0 || sharedSeed > 0xFFFF_FFFFL) return;
+                if (!originalStarted) {
+                    originalSeed = sharedSeed;
+                    startOriginal(wire.friendlyFire());
+                } else if (sharedSeed != originalSeed || wire.friendlyFire() != originalFriendlyFire) {
+                    return;
+                }
+            }
+            case "ready" -> {
+                if (!host) return;
+                if (!originalStarted) startOriginal(friendlyFire);
+            }
+            case "payload" -> {
+                if (!originalStarted || wire.data() == null || wire.data().isEmpty()) return;
+                originalPayloadReceived = true;
+                if (originalConfigured) originalListener.receive(this, wire.data());
+                else originalInbound = wire.data();
+            }
+            default -> { return; }
+        }
+        originalReceived.put(wire.type(), wire.seq());
+        originalSeenAt = now();
+    }
+
+    private void startOriginal(boolean partyFriendlyFire) {
+        originalStarted = true;
+        originalFriendlyFire = partyFriendlyFire;
+        nextPingAt = 0;
+        originalListener.start(this, link, host, originalSeed, partyFriendlyFire);
     }
 
     private boolean validSnapshot(InnApi.DungeonState state) {
@@ -454,7 +622,9 @@ final class DungeonSession implements AutoCloseable {
 
     private void finish(String notice) {
         terminal = true;
-        if (frame == null) {
+        if (originalListener != null) {
+            originalListener.end(this, notice);
+        } else if (frame == null) {
             publish(null, 0, 0, notice);
         } else {
             InnApi.DungeonState state = frame.state();
@@ -518,7 +688,10 @@ final class DungeonSession implements AutoCloseable {
         submit(() -> {
             if (battle != null) battle.close(now());
             if (peer != null) {
-                if (direct()) peer.send(gson.toJson(new Wire("leave", 0, null, null)));
+                if (direct()) {
+                    peer.send(gson.toJson(originalListener == null ? new Wire("leave", 0, null, null)
+                        : new OriginalWire("original", "leave", ++packetSequence, null, null, null)));
+                }
                 peer.close();
             }
             if (link != null) api.leaveLink(key, matchId);

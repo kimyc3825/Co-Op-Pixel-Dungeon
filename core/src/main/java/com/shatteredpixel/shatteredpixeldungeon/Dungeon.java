@@ -64,6 +64,7 @@ import com.shatteredpixel.shatteredpixeldungeon.levels.HallsBossLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.HallsLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.LastLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
+import com.shatteredpixel.shatteredpixeldungeon.levels.InnPracticeLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.MiningLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.PrisonBossLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.PrisonLevel;
@@ -234,7 +235,7 @@ public class Dungeon {
 	public static void init() {
 
 		initialVersion = version = Game.versionCode;
-		challenges = SPDSettings.challenges();
+		challenges = InnAdventure.practice() ? 0 : SPDSettings.challenges();
 		mobsToChampion = 1;
 
 		Actor.clear();
@@ -300,6 +301,11 @@ public class Dungeon {
 		
 		Dungeon.level = null;
 		Actor.clear();
+		if (InnAdventure.practice()) {
+			Level practice = new InnPracticeLevel();
+			practice.create();
+			return practice;
+		}
 		
 		Level level;
 		if (branch == 0) {
@@ -481,12 +487,14 @@ public class Dungeon {
 		
 		Dungeon.level = level;
 		hero.pos = pos;
+		hero.fieldOfView = level.heroFOV;
 
 		if (hero.buff(AscensionChallenge.class) != null){
 			hero.buff(AscensionChallenge.class).onLevelSwitch();
 		}
 
 		Mob.restoreAllies( level, pos );
+		InnOriginalParty.enterFloor(level, pos);
 		if (ShatteredPixelDungeon.isInnTestMode()) InnCompanion.ensurePresent(level, pos);
 
 		Actor.init();
@@ -915,6 +923,7 @@ public class Dungeon {
 	}
 	
 	public static void fail( Object cause ) {
+		if (InnAdventure.practice()) return;
 		if (WndResurrect.instance == null) {
 			updateLevelExplored();
 			Statistics.gameWon = false;

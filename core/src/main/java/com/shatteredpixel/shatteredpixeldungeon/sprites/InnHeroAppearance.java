@@ -10,20 +10,23 @@ import com.watabou.gltextures.SmartTexture;
 import com.watabou.gltextures.TextureCache;
 
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
 /** Composes the inn profile into the original game's full armor and animation sheet. */
 final class InnHeroAppearance {
     private static final String DIRECTORY = "sprites/inn-avatars/";
-    private static final Map<HeroClass, SmartTexture> textures = new EnumMap<>(HeroClass.class);
+    private static final Map<InnAdventure.Profile, Map<HeroClass, SmartTexture>> textures = new HashMap<>();
     private static LayerLayout layout;
-    private static InnAdventure.Profile cachedProfile;
 
     private InnHeroAppearance() {}
 
     static Object texture(HeroClass heroClass) {
-        InnAdventure.Profile profile = InnAdventure.profile();
+        return texture(heroClass, InnAdventure.profile());
+    }
+
+    static Object texture(HeroClass heroClass, InnAdventure.Profile profile) {
         if (profile == null) return heroClass.spritesheet();
         if (layout == null) {
             FileHandle metadata = Gdx.files.internal(DIRECTORY + "layers.txt");
@@ -33,14 +36,12 @@ final class InnHeroAppearance {
         int[] layers = layout.rows(profile);
         if (layers == null) return heroClass.spritesheet();
 
-        if (!profile.equals(cachedProfile)) {
-            for (SmartTexture previous : textures.values()) {
-                if (previous.bitmap != null) TextureCache.remove(previous.bitmap);
-            }
-            textures.clear();
-            cachedProfile = profile;
-        }
-        SmartTexture texture = textures.get(heroClass);
+        textures.entrySet().removeIf(entry -> entry.getKey() != InnAdventure.profile()
+                && (com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty.current() == null
+                || entry.getKey() != com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty.current().peer));
+        Map<HeroClass, SmartTexture> profileTextures = textures.computeIfAbsent(profile,
+                key -> new EnumMap<>(HeroClass.class));
+        SmartTexture texture = profileTextures.get(heroClass);
         // The original scenes can clear TextureCache between floors or on a scale change.
         if (texture != null && texture.bitmap != null) return texture;
 
@@ -49,7 +50,7 @@ final class InnHeroAppearance {
         SmartTexture original = TextureCache.get(heroClass.spritesheet());
         Pixmap composed = compose(asset, original.width, original.height, layers);
         texture = TextureCache.get(composed);
-        textures.put(heroClass, texture);
+        profileTextures.put(heroClass, texture);
         return texture;
     }
 

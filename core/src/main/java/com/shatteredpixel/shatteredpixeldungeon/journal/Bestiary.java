@@ -21,6 +21,8 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.journal;
 
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+
 import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.abilities.cleric.PowerOfMany;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.abilities.huntress.SpiritHawk;
@@ -303,6 +305,7 @@ public enum Bestiary {
 	}
 
 	public static void setSeen(Class<?> cls){
+		if (InnAdventure.practice()) return;
 		if (classConversions.containsKey(cls)){
 			cls = classConversions.get(cls);
 		}
@@ -332,7 +335,7 @@ public enum Bestiary {
 	}
 
 	public static void countEncounters(Class<?> cls, int encounters){
-		if (skipCountingEncounters){
+		if (skipCountingEncounters || InnAdventure.practice()){
 			return;
 		}
 		if (classConversions.containsKey(cls)){

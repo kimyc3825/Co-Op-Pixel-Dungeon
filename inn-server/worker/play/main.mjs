@@ -227,6 +227,12 @@ const play = new PlaySession({
     updateNotice(performance.now());
   },
   onLoading: updateLoading,
+  onOriginalParty(event) {
+    if (event.type === 'start') return original.startParty(event);
+    if (event.type === 'payload') original.receiveParty(event.data);
+    if (event.type === 'ended') return original.endParty(event.notice);
+    return false;
+  },
 });
 
 const original = new OriginalGame({
@@ -236,6 +242,9 @@ const original = new OriginalGame({
   getProfile: ownProfile,
   getPreparation: () => play.inn?.preparation,
   usePreparation: id => play.usePreparation(id),
+  onPartyReady: () => play.originalPartyReady(),
+  onPartySend: data => play.sendOriginalParty(data),
+  onPartyLeave: notice => play.leaveOriginalParty(notice),
   onChange(active, reason) {
     if (active) noticeUntil = 0;
     clearMovement();
@@ -489,7 +498,7 @@ function updateLoading(state) {
     if (failed) {
       text(fields['loading-phase'], '던전을 불러오지 못했습니다');
       text(fields['loading-tip'], '');
-      text(fields['loading-retry'], state.mode ? '다시 시도' : '다시 매칭');
+      text(fields['loading-retry'], state.mode && state.mode !== 'party' ? '다시 시도' : '다시 매칭');
     }
   }
   updateScene();
@@ -538,7 +547,7 @@ function updateInn() {
   fields['dungeon-theme'].disabled = rulesLocked;
   fields['friendly-fire'].checked = play.friendlyFire === true;
   fields['friendly-fire'].disabled = rulesLocked;
-  text(fields.match, queued ? '동료 찾는 중 · 취소' : '동료 찾기');
+  text(fields.match, queued ? '동료 찾는 중 · 취소' : '동료 찾기 · 원본 ATB');
   fields.match.dataset.waiting = String(queued);
   fields['expedition-toggle'].dataset.waiting = String(queued);
   text(fields['expedition-toggle'], queued ? '동료 찾는 중' : '원정');
@@ -1546,7 +1555,7 @@ for (const input of chatInputs) {
 }
 fields.match.addEventListener('click', () => void match());
 fields['prepare-expedition'].addEventListener('click', () => void run('prepare', () => play.prepare()));
-fields.guide.addEventListener('click', () => { if (play.practice()) focusBoard(); });
+fields.guide.addEventListener('click', () => original.start(true, true));
 fields.solo.addEventListener('click', () => original.start(true));
 for (const [id, action, returnFocus] of [
   ['drink', () => void run('drink', () => play.drink()), true],
@@ -1567,7 +1576,7 @@ fields['loading-retry'].addEventListener('click', () => {
   if (loading?.phase !== 'failed' || fields['loading-retry'].disabled) return;
   const { mode } = loading;
   updateLoading({ phase: 'ready' });
-  if (mode === 'practice') play.practice();
+  if (mode === 'practice') original.start(true, true);
   else if (mode === 'solo') play.solo();
   else void match();
   focusBoard();

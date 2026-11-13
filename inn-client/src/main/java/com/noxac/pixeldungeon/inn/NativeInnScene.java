@@ -386,20 +386,20 @@ public final class NativeInnScene extends PixelScene {
         boolean canChoose = NativeClient.canChooseExpeditionTheme();
         boolean canEnter = NativeClient.canEnterSolo();
         InnApi.Preparation preparation = current == null ? null : current.preparation();
-        String summary = "지역  " + NativeClient.expeditionThemeTitle(NativeClient.expeditionTheme());
+        String summary = "원본 던전 · 하수도 1층에서 시작";
         if (preparation != null) summary += "\n다음 원정 · " + preparation.description();
         modalOpen = true;
         add(new WndOptions(Icons.STAIRS.get(), "원정", summary,
-            current != null && current.queued() ? "동료 찾기 취소" : "동료 찾기 · 2인 원정",
-            "1인 원정 · 원본 ATB", "길잡이 연습", "지역 변경", friendlyFireCaption(),
+            current != null && current.queued() ? "동료 찾기 취소" : "동료 찾기 · 원본 2인 ATB",
+            "1인 원정 · 원본 ATB", "길잡이 연습", friendlyFireCaption(),
             NativeClient.isTestMode() ? "여관 길잡이 숨기기" : "여관 길잡이 부르기", "원본 1인 저장", "원정 준비") {
             @Override
             protected boolean enabled(int index) {
                 return switch (index) {
                     case 0 -> canQueue;
-                    case 1, 2, 6 -> canEnter;
-                    case 3, 4 -> canChoose;
-                    case 7 -> canChoose && current != null && preparation == null;
+                    case 1, 2, 5 -> canEnter;
+                    case 3 -> canChoose;
+                    case 6 -> canChoose && current != null && preparation == null;
                     default -> true;
                 };
             }
@@ -410,14 +410,13 @@ public final class NativeInnScene extends PixelScene {
                     case 0 -> match();
                     case 1 -> NativeClient.enterSoloAtb();
                     case 2 -> NativeClient.enterPractice();
-                    case 3 -> chooseTheme();
-                    case 4 -> {
+                    case 3 -> {
                         NativeClient.toggleFriendlyFire();
                         openExpeditions();
                     }
-                    case 5 -> toggleTestMode();
-                    case 6 -> NativeClient.enterSolo();
-                    case 7 -> NativeClient.prepareExpedition();
+                    case 4 -> toggleTestMode();
+                    case 5 -> NativeClient.enterSolo();
+                    case 6 -> NativeClient.prepareExpedition();
                     default -> { }
                 }
             }
@@ -531,29 +530,6 @@ public final class NativeInnScene extends PixelScene {
             }
         });
         return toast;
-    }
-
-    private void chooseTheme() {
-        if (modalOpen || !NativeClient.canChooseExpeditionTheme()) return;
-        closeComposer();
-        destination = null;
-        keyboard.reset();
-        modalOpen = true;
-        add(new WndOptions("원정 지역", "길잡이 연습에 적용됩니다. 2인 원정은 파티장의 선택을 따릅니다.",
-                NativeClient.expeditionThemeTitle(DungeonLayout.SEWERS),
-                NativeClient.expeditionThemeTitle(DungeonLayout.PRISON)) {
-            @Override
-            protected void onSelect(int index) {
-                NativeClient.chooseExpeditionTheme(index == 1 ? DungeonLayout.PRISON : DungeonLayout.SEWERS);
-                openExpeditions();
-            }
-
-            @Override
-            public void destroy() {
-                modalOpen = false;
-                super.destroy();
-            }
-        });
     }
 
     private void toggleHelp() {

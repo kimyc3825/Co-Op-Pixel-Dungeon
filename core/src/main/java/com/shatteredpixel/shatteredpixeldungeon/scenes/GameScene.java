@@ -29,6 +29,7 @@ import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty;
 import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.Rankings;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
@@ -73,6 +74,7 @@ import com.shatteredpixel.shatteredpixeldungeon.journal.Document;
 import com.shatteredpixel.shatteredpixeldungeon.journal.Journal;
 import com.shatteredpixel.shatteredpixeldungeon.journal.Notes;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
+import com.shatteredpixel.shatteredpixeldungeon.levels.InnPracticeLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.RegularLevel;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Terrain;
 import com.shatteredpixel.shatteredpixeldungeon.levels.rooms.Room;
@@ -797,6 +799,7 @@ public class GameScene extends PixelScene {
 
 		if (!invVisible) toggleInvPane();
 		fadeIn();
+		if (InnAdventure.practice()) GLog.i(InnPracticeLevel.hint());
 
 		//re-show WndResurrect if needed
 		if (!Dungeon.hero.isAlive()){
@@ -920,6 +923,15 @@ public class GameScene extends PixelScene {
 				if (Dungeon.hero.innAtbActive()) Dungeon.hero.innEncounter().advance(Dungeon.level, elapsed);
 			}
 			Actor.updateAtb(elapsed, atbBlocked);
+			InnOriginalParty party = InnOriginalParty.current();
+			if (party != null && party.host) {
+				if (party.isClosed()) {
+					InnAdventure.retreat();
+					Game.instance.finish();
+					return;
+				}
+				party.updateHost(elapsed, atbBlocked);
+			}
 		}
 
 		if (notifyDelay > 0) notifyDelay -= Game.elapsed;

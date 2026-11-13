@@ -21,6 +21,8 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.journal;
 
+import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+
 import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.items.Amulet;
@@ -306,6 +308,7 @@ public enum Catalog {
 	}
 	
 	public static void setSeen(Class<?> cls){
+		if (InnAdventure.practice()) return;
 		for (Catalog cat : values()) {
 			if (cat.seen.containsKey(cls) && !cat.seen.get(cls)) {
 				cat.seen.put(cls, true);
@@ -329,6 +332,7 @@ public enum Catalog {
 	}
 
 	public static void countUses(Class<?> cls, int uses){
+		if (InnAdventure.practice()) return;
 		for (Catalog cat : values()) {
 			if (cat.useCount.containsKey(cls) && cat.useCount.get(cls) != Integer.MAX_VALUE) {
 				cat.useCount.put(cls, cat.useCount.get(cls)+uses);
