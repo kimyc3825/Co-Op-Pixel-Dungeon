@@ -1,6 +1,6 @@
 allprojects {
     ext {
-        appName = 'Noxac Pixel Dungeon'
+        appName = 'Co-Op-Pixel-Dungeon'
         appPackageName = 'com.noxac.pixeldungeon'
 
         // Save compatibility follows the imported game version.

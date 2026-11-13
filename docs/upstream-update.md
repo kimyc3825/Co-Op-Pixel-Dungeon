@@ -1,6 +1,6 @@
 # Shattered Pixel Dungeon 원본 업데이트
 
-Noxac은 원본 태그에서 분기한 Git 이력을 보존한다. 웹 여관과 파티 전투는 `inn-server`와 `inn-client`에 있다. Windows 시작, 저장, 길잡이처럼 원본 게임과 연결되는 부분은 `desktop`과 `core`에도 있다.
+Co-Op-Pixel-Dungeon은 원본 태그에서 분기한 Git 이력을 보존한다. 웹 여관은 `web-client`에 있고 Windows 클라이언트는 `inn-client`에 있다. Windows 시작, 저장, 길잡이처럼 원본 게임과 연결되는 부분은 `desktop`과 `core`에도 있다.
 
 공식 태그가 나오면 공개 저장소의 최신 Noxac 커밋을 기준으로 병합을 미리 확인한다. PowerShell과 Git 2.38 이상이 필요하다.
 

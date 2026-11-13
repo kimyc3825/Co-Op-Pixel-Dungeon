@@ -91,7 +91,7 @@ export function nextToward(map, x, y, targetX, targetY) {
 }
 
 function assetPath(name, version) {
-  return `/play/${version ? `runtime/${version}/` : ''}assets/${name}.png`;
+  return new URL(`${version ? `runtime/${version}/` : ''}assets/${name}.png`, import.meta.url).href;
 }
 
 function paint(context, color, x, y, width, height) {

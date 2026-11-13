@@ -20,7 +20,7 @@ export function getAvatar(value) {
   let image = jobImages.get(job);
   if (!image) {
     image = new Image();
-    image.src = `/play/assets/avatars/${job}.png`;
+    image.src = new URL(`assets/avatars/${job}.png`, import.meta.url).href;
     jobImages.set(job, image);
   }
 

@@ -56,7 +56,7 @@ const ATTACK_RESULTS = {
   ally_blocked: '아군에 막힘',
 };
 const ENCOUNTER_LABELS = { exploration: '탐색', alert: '적 경계', combat: '교전', pursuit: '추격' };
-const defeatLines = fetch('/play/defeat-lines.json')
+const defeatLines = fetch(new URL('defeat-lines.json', import.meta.url))
   .then(response => response.ok ? response.json() : [])
   .then(lines => Array.isArray(lines) ? lines.filter(line => typeof line?.text === 'string' && line.text && typeof line.author === 'string') : [])
   .catch(() => []);
@@ -522,7 +522,7 @@ function updateScene() {
   board.canvas.dataset.paused = String(isPaused(play.frame?.state));
   text(fields['scene-title'], title);
   text(fields['board-title'], dungeon ? `${title} 던전` : '여관 홀');
-  const tabTitle = `${original.active ? '원본 녹픽던' : title} · Noxac Pixel Dungeon`;
+  const tabTitle = `${original.active ? '던전' : title} · Co-Op-Pixel-Dungeon`;
   if (document.title !== tabTitle) document.title = tabTitle;
   board.canvas.setAttribute('aria-label', dungeon
     ? `${title} 지도. 클릭이나 방향키로 이동하고 Q로 평타, 1로 활을 조준합니다.` : '여관 지도. 클릭이나 방향키, WASD로 이동합니다.');

@@ -17,7 +17,7 @@ public final class InnLauncher {
             api = new InnApi(origin());
         } catch (IOException | IllegalArgumentException error) {
             JOptionPane.showMessageDialog(null, "여관 서버 주소를 확인하세요.",
-                "Noxac Pixel Dungeon", JOptionPane.ERROR_MESSAGE);
+                "Co-Op-Pixel-Dungeon", JOptionPane.ERROR_MESSAGE);
             return;
         }
         DesktopLauncher.launchInn(platform -> new NativeGame(platform, api));

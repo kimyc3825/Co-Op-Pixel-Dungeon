@@ -911,7 +911,7 @@ public class WndSettings extends WndTabbed {
 			add(separator = new ColorBlock(1, 1, 0xFF000000));
 			add(information = PixelScene.renderTextBlock(Messages.get(this, "license_info"), 6));
 			add(license = link("license_text", "https://www.gnu.org/licenses/gpl-3.0.html"));
-			add(source = link("source", "https://github.com/kimyc3825/noxac-pixel-dungeon/releases"));
+			add(source = link("source", "https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases"));
 			add(upstream = link("upstream", "https://github.com/00-Evan/shattered-pixel-dungeon"));
 		}
 

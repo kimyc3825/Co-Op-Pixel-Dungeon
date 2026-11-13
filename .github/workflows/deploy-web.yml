@@ -1,0 +1,45 @@
+name: Deploy web client to Sites
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sites-web-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'kimyc3825/Co-Op-Pixel-Dungeon' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COOP_CLIENT_REVISION: ${{ github.sha }}
+      SITE_ORIGIN: https://co-op-pixel-dungeon.kimyc3825.chatgpt.site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+      - name: Build dungeon and stage lobby
+        id: build
+        run: |
+          ./gradlew -PwebOnly html:dist
+          signature="$(node scripts/stage-web-client.mjs)"
+          printf 'signature=%s\n' "$signature" >> "$GITHUB_OUTPUT"
+      - name: Publish and verify the web client
+        env:
+          COOP_CLIENT_SIGNATURE: ${{ steps.build.outputs.signature }}
+          ORIGINAL_PUBLISH_TOKEN: ${{ secrets.ORIGINAL_PUBLISH_TOKEN }}
+        run: node scripts/publish-web-client.mjs "$SITE_ORIGIN"

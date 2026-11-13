@@ -85,7 +85,7 @@ def main():
                 if pixel != ".":
                     color = bytes.fromhex(PALETTE[pixel][1:])
                     atlas.putpixel((column * TILE + x, y), (*color, 255))
-    output = Path(__file__).resolve().parents[1] / "worker/play/assets/training.png"
+    output = Path(__file__).resolve().parents[1] / "play/assets/training.png"
     atlas.save(output, optimize=True)
 
 

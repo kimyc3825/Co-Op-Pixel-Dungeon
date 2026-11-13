@@ -1,4 +1,4 @@
-# Noxac Pixel Dungeon 여관
+# Co-Op-Pixel-Dungeon 여관
 
 ## Windows와 브라우저에서 플레이
 
@@ -16,7 +16,7 @@
 
 여관, 파티 원정, 길잡이 연습, 1인 원정에 같은 프로필 외관을 사용한다. 전사, 마법사, 도적, 사냥꾼, 결투자, 성직자의 원본 실루엣과 이동·공격 프레임을 바탕으로 머리와 옷, 장식 레이어를 합성한다. 원본 1인 게임에서 새로 시작할 때는 여관에서 고른 직업의 장비와 능력을 사용한다. 원본 저장 공간이 가득 차고 같은 직업의 저장이 없으면 이어갈 저장을 고르는 창이 열린다.
 
-외관 옵션과 픽셀 패턴은 `inn-server/scripts/generate-avatars.py`에서 관리한다. Python 3과 Pillow로 이 스크립트를 실행하면 두 클라이언트가 공유하는 직업별 PNG와 카탈로그가 다시 생성된다. 카탈로그의 각 항목은 ID와 표시 이름을 갖는다. 이미 저장한 프로필을 위해 기존 ID는 유지한다.
+외관 옵션과 픽셀 패턴은 `web-client/scripts/generate-avatars.py`에서 관리합니다. Python 3과 Pillow로 스크립트를 실행하면 두 클라이언트가 공유하는 직업별 PNG와 카탈로그가 생성됩니다. 저장된 프로필이 동작하도록 카탈로그의 기존 ID를 유지합니다.
 
 아틀라스는 각 행에 12×15픽셀 프레임 18개를 갖는다. 기본 그림, 옷색, 머리 모양과 머리색 조합, 장신구 순으로 행을 배치한다. 입장과 매칭 링크는 옵션 ID만 보내며, 웹과 Windows가 같은 레이어 순서로 그린다.
 
@@ -42,26 +42,23 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 .\gradlew.bat -p inn-client packageWindows
 ```
 
-출력은 `inn-client/build/jpackage/0.16.6/NoxacPixelDungeon/NoxacPixelDungeon.exe`다. 실행 폴더에 Java와 게임 에셋이 포함된다.
+출력은 `inn-client/build/jpackage/0.16.7/NoxacPixelDungeon/NoxacPixelDungeon.exe`입니다. 실행 폴더에 Java와 게임 에셋이 포함됩니다.
 
 원본 브라우저판은 저장소 루트에서 `.\gradlew.bat -PwebOnly html:dist`로 빌드한다. 결과는 `html/build/dist/web`에 생성된다.
 
-기본 서버는 [여관 운영](https://noxac-pixel-dungeon-inn.kimyc3825.chatgpt.site)이다. 로컬 개발에서는 `NOXAC_INN_URL`을 `http://127.0.0.1:8787`로 설정한다.
+기본 서버는 [여관 운영](https://co-op-pixel-dungeon.kimyc3825.chatgpt.site)입니다. 로컬 개발에서는 `NOXAC_INN_URL`로 서버 주소를 지정할 수 있습니다.
+
+## 웹 배포
+
+공개 저장소의 `main`에 푸시하면 GitHub Actions가 웹 여관과 던전 런타임을 빌드해 Sites에 게시합니다. 브라우저에서 제공하는 여관의 소스는 `web-client/play`에 있습니다.
 
 ## 네트워크와 전투
 
-Sites Worker와 D1이 여관, 파티 매칭, 링크 인증과 WebRTC 시그널링을 맡습니다. 0.16.2는 공유 시간 상태를 지원하는 프로토콜 11을 사용합니다. 같은 프로토콜의 참가자끼리 매칭합니다.
+Sites Worker와 D1이 여관 이동, 채팅, 파티 매칭, 링크 인증과 WebRTC 시그널링을 맡습니다. 같은 프로토콜의 참가자끼리 매칭합니다. Worker 소스와 운영 설정은 별도의 비공개 저장소에서 관리합니다.
 
 파티장의 원본 엔진이 층 생성, 충돌, 적 행동, 피해와 전리품을 한 번 처리합니다. 동료는 층 번호와 순서 번호가 있는 이동·평타 명령을 보내고, 파티장은 확인 번호와 최신 탐색 지형, 위치·체력·행동력, 표시할 전리품을 공유합니다. 층이 바뀌면 이전 층의 명령을 버립니다. 전송은 WebRTC 직접 연결을 사용하며 필요할 때 Worker가 중계합니다. Java 옵션 `-Dnoxac.inn.relayOnly=true`로 개발 중 중계를 시험할 수 있습니다.
 
 동료가 쓰러지면 해당 원정에서 쓰러진 상태를 유지합니다. 어느 쪽이 연결을 종료하면 해당 파티 원정을 종료합니다.
-
-```powershell
-Set-Location inn-server
-npm ci
-npm test
-npm run dev
-```
 
 여관은 `/api/v2/inn`, 연결은 `/api/v4/link`를 사용합니다. `GET /api/v4/health`로 연결 API의 준비 상태를 확인할 수 있습니다.
 

@@ -4,6 +4,7 @@ const decodedArt = new Map();
 const pendingEngines = new Map();
 const pendingArt = new Map();
 const ART = ['rat', 'items', 'tiles_sewers', 'tiles_prison', 'training'];
+const root = new URL('./', import.meta.url);
 
 export function runtimeImage(version, name) {
   return decodedArt.get(version)?.get(name) ?? null;
@@ -34,13 +35,13 @@ function loadOnce(pending, version, load) {
 
 async function checkManifest(signal) {
   const timeout = AbortSignal.timeout(5000);
-  const response = await fetch('/play/runtime-manifest.json', {
+  const response = await fetch(new URL('runtime-manifest.json', root), {
     cache: 'no-store', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   if (!response.ok) throw new Error('Dungeon runtime manifest unavailable');
   const manifest = await response.json();
   if (!/^[0-9a-f]{64}$/.test(manifest?.version ?? '') ||
-      manifest.entry !== `/play/runtime/${manifest.version}/battle.mjs`) {
+      manifest.entry !== new URL(`runtime/${manifest.version}/battle.mjs`, root).pathname) {
     throw new Error('Invalid dungeon runtime manifest');
   }
   return manifest;
@@ -61,9 +62,9 @@ export async function loadBattleRuntime({ simulate, signal, onLoading = () => {}
       if (!cached) {
         onLoading({ phase: 'loading', version, cached: false });
         // A failed dependency import can stay cached for its URL. Retry the whole module graph under a fresh path.
-        const base = version === failedVersion
-          ? `/play/runtime/${version}/retry/${crypto.randomUUID().replaceAll('-', '')}/`
-          : `/play/runtime/${version}/`;
+        const base = new URL(version === failedVersion
+          ? `runtime/${version}/retry/${crypto.randomUUID().replaceAll('-', '')}/`
+          : `runtime/${version}/`, root).href;
         await Promise.all([
           needEngine && loadOnce(pendingEngines, version, () => importEngine(base + 'battle.mjs', version)),
           needArt && loadOnce(pendingArt, version, () => decodeArt(base, version)),

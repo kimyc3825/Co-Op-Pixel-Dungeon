@@ -1,6 +1,9 @@
-# Shattered Pixel Dungeon
+# Co-Op-Pixel-Dungeon
 
-> **Noxac Pixel Dungeon** 개발 브랜치입니다. [Windows 여관 실행과 로비 프로토콜](docs/inn.md)
+Shattered Pixel Dungeon을 바탕으로 만든 웹·Windows 2인 협동 던전입니다.
+[여관에서 플레이](https://co-op-pixel-dungeon.kimyc3825.chatgpt.site/play/) · [Windows 다운로드](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases) · [빌드와 조작법](docs/inn.md)
+
+## 원본 프로젝트
 
 [Shattered Pixel Dungeon](https://shatteredpixel.com/shatteredpd/) is an open-source traditional roguelike dungeon crawler with randomized levels and enemies, and hundreds of items to collect and use. It's based on the [source code of Pixel Dungeon](https://github.com/00-Evan/pixel-dungeon-gradle), by [Watabou](https://watabou.itch.io/).
 

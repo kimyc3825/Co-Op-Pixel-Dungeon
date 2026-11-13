@@ -134,7 +134,7 @@ export class OriginalDownload {
 
   async #cacheWorker() {
     if (!navigator.serviceWorker) return null;
-    this.#registration ??= navigator.serviceWorker.register('/play/original-cache.js', { scope: ROOT }).catch(() => {
+    this.#registration ??= navigator.serviceWorker.register(new URL('original-cache.js', import.meta.url), { scope: ROOT }).catch(() => {
       this.#registration = undefined;
       return null;
     });

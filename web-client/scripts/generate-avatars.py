@@ -260,7 +260,7 @@ def build_adventure_atlas(source_path, output_path, job):
 def main():
     repo = Path(__file__).resolve().parents[2]
     upstream = repo / "core/src/main/assets/sprites"
-    play = repo / "inn-server/worker/play"
+    play = repo / "web-client/play"
     avatars = play / "assets/avatars"
     avatars.mkdir(parents=True, exist_ok=True)
     adventure_avatars = upstream / "inn-avatars"
