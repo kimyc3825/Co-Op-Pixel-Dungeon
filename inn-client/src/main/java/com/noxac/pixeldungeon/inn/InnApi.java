@@ -12,6 +12,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -36,7 +37,11 @@ final class InnApi {
             this(id, name, role, x, y, dialogue, List.of());
         }
     }
-    record Event(long id, String playerId, String name, String kind, String text, long time) {}
+    record Event(long id, String playerId, String name, String kind, String text, long time, String npcId) {
+        Event(long id, String playerId, String name, String kind, String text, long time) {
+            this(id, playerId, name, kind, text, time, null);
+        }
+    }
     record Match(String id, String role, String partnerName) {}
     record Preparation(String id, int hp, int food) {
         static int health(Preparation value) { return value == null ? 0 : value.hp(); }
@@ -178,14 +183,15 @@ final class InnApi {
     }
 
     record State(String selfId, List<Person> people, List<String> map, List<Event> events,
-                 long after, long now, boolean queued, Match match, List<Npc> npcs, Preparation preparation) {
+                 long after, long now, boolean queued, Match match, List<Npc> npcs, Preparation preparation,
+                 String layoutId, InnLayout.Gate expeditionGate) {
         State {
             if (npcs == null) npcs = List.of();
         }
 
         State(String selfId, List<Person> people, List<String> map, List<Event> events,
               long after, long now, boolean queued, Match match) {
-            this(selfId, people, map, events, after, now, queued, match, List.of(), null);
+            this(selfId, people, map, events, after, now, queued, match, List.of(), null, null, null);
         }
         Person self() {
             return people.stream().filter(person -> person.id().equals(selfId)).findFirst().orElseThrow();
@@ -196,12 +202,11 @@ final class InnApi {
                 .map(person -> person.id().equals(selfId)
                     ? new Person(selfId, person.name(), x, y, person.queued(), person.appearance()) : person)
                 .toList();
-            return new State(selfId, updated, map, events, after, now, queued, match, npcs, preparation);
+            return new State(selfId, updated, map, events, after, now, queued, match, npcs, preparation, layoutId, expeditionGate);
         }
 
         boolean walkable(int x, int y) {
-            return y >= 0 && y < map.size() && x >= 0 && x < map.get(y).length() &&
-                (map.get(y).charAt(x) == '.' || map.get(y).charAt(x) == 'D');
+            return InnLayout.walkable(map, x, y);
         }
 
         boolean canStep(int x, int y, int nextX, int nextY) {
@@ -230,6 +235,7 @@ final class InnApi {
     }
     private static final String API = "/api/v2/inn/";
     private static final String LINK = "/api/v4/link/";
+    private static final InnLayout LAYOUT = InnLayout.load();
     private final Gson gson = new Gson();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(4)).build();
     private final URI origin;
@@ -251,12 +257,13 @@ final class InnApi {
     }
 
     State enter(String name, String key, long after) throws IOException, InterruptedException {
-        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 11)));
+        return enter(name, AvatarProfile.normalize(null), key, after);
     }
 
     State enter(String name, Appearance appearance, String key, long after) throws IOException, InterruptedException {
         return decode(send("PUT", API + "session", key,
-            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 11)));
+            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 11,
+                "layout", LAYOUT.joinDescriptor())));
     }
 
     State sync(String key, long after) throws IOException, InterruptedException {
@@ -277,6 +284,10 @@ final class InnApi {
 
     void drink(String key) throws IOException, InterruptedException {
         send("POST", API + "drink", key, null);
+    }
+
+    CompletableFuture<Void> talkToNpc(String key, String npcId) {
+        return sendAsync(API + "interact", key, Map.of("npcId", npcId), value -> null);
     }
 
     void prepare(String key) throws IOException, InterruptedException {
@@ -323,22 +334,36 @@ final class InnApi {
     private State decode(String value) throws IOException {
         try {
             State state = gson.fromJson(value, State.class);
-            if (state != null && state.selfId() != null && state.people() != null &&
-                state.events() != null && state.map() != null && !state.map().isEmpty() &&
-                state.map().getFirst() != null && !state.map().getFirst().isEmpty() &&
-                state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
-                state.npcs().size() <= 16 && state.npcs().stream().allMatch(npc ->
-                    npc != null && npc.id() != null && npc.name() != null && npc.role() != null && npc.dialogue() != null &&
-                    npc.y() >= 0 && npc.y() < state.map().size() &&
-                    npc.x() >= 0 && npc.x() < state.map().get(npc.y()).length() &&
-                    state.map().get(npc.y()).charAt(npc.x()) == 'N') &&
-                state.people().stream().allMatch(person -> person != null && person.id() != null &&
-                    person.name() != null && state.walkable(person.x(), person.y())) &&
-                state.people().stream().anyMatch(person -> person.id().equals(state.selfId()))) {
-                return state;
+            if (state != null && state.layoutId() != null) {
+                if (!LAYOUT.id().equals(state.layoutId()) || state.people() == null) {
+                    throw new IOException("Inn layout does not match the session");
+                }
+                String selfId = state.selfId();
+                List<Person> people = state.people().stream().filter(person -> person != null &&
+                    (Objects.equals(person.id(), selfId) || InnLayout.walkable(LAYOUT.map(), person.x(), person.y()))).toList();
+                state = new State(state.selfId(), people, LAYOUT.map(), state.events(), state.after(), state.now(),
+                    state.queued(), state.match(), LAYOUT.npcs(), state.preparation(), LAYOUT.id(), LAYOUT.expeditionGate());
             }
+            return validateState(state);
         } catch (JsonParseException ignored) {
-            // Surface a protocol error without displaying response content.
+            throw new IOException("Invalid inn response");
+        }
+    }
+
+    private static State validateState(State state) throws IOException {
+        if (state != null && state.selfId() != null && state.people() != null &&
+            state.events() != null && state.map() != null && !state.map().isEmpty() &&
+            state.map().getFirst() != null && !state.map().getFirst().isEmpty() &&
+            state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
+            state.npcs().stream().allMatch(npc ->
+                npc != null && npc.id() != null && npc.name() != null && npc.role() != null && npc.dialogue() != null &&
+                npc.y() >= 0 && npc.y() < state.map().size() &&
+                npc.x() >= 0 && npc.x() < state.map().get(npc.y()).length() &&
+                state.map().get(npc.y()).charAt(npc.x()) == 'N') &&
+            state.people().stream().allMatch(person -> person != null && person.id() != null &&
+                person.name() != null && state.walkable(person.x(), person.y())) &&
+            state.people().stream().anyMatch(person -> person.id().equals(state.selfId()))) {
+            return state;
         }
         throw new IOException("Invalid inn response");
     }

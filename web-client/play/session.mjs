@@ -2,6 +2,7 @@
 import { isPotion, PRISON, SEWERS } from './rules.mjs';
 import { loadBattleRuntime } from './runtime-loader.mjs';
 import { normalizeAppearance } from './avatar-catalog.mjs';
+import { loadInnLayout, localInnState, walkable } from './inn-layout.mjs';
 
 const INN = '/api/v2/inn/';
 const LINK = '/api/v4/link/';
@@ -53,7 +54,6 @@ async function request(path, key, method, body, keepalive = false) {
 const active = status => status === 'active' || status === 'won';
 const linkEnded = error => error.status === 404 || error.status === 410 || error.code === 'link_inactive';
 const validName = value => value.length > 0 && [...value].length <= 20 && !/[\p{C}\p{Zl}\p{Zp}]/u.test(value);
-const walkable = (map, x, y) => map?.[y]?.[x] === '.' || map?.[y]?.[x] === 'D';
 const attackResults = new Set(['hit', 'out_of_reach', 'blocked', 'target_gone', 'miss', 'ally_blocked']);
 const mapCell = (map, x, y) => Number.isSafeInteger(x) && Number.isSafeInteger(y) && typeof map[y]?.[x] === 'string';
 
@@ -243,6 +243,12 @@ export class PlaySession {
 
   chat(message) { return this.#innAction('chat', 'POST', { message }); }
   drink() { return this.#innAction('drink', 'POST'); }
+  talkToNpc(npcId) {
+    if (this.inn?.layoutId && this.online && !this.battle && !this.closed && !this.innSuspended) {
+      // A dropped notification must not interrupt a locally displayed conversation.
+      void request(INN + 'interact', this.key, 'POST', { npcId }).catch(() => {});
+    }
+  }
   prepare() { return this.#innAction('preparation', 'POST'); }
   async usePreparation(id) {
     try {
@@ -355,9 +361,16 @@ export class PlaySession {
     const name = this.name;
     const appearance = this.appearance;
     const wasOnline = this.online;
-    this.innSync = request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST',
-      enter ? { name, appearance, after: this.after, dungeonProtocol: this.onOriginalParty ? 11 : 9 } :
-        { after: this.after }).then(fresh => {
+    this.innSync = loadInnLayout().then(async layout => {
+      const params = { after: this.after };
+      if (enter) {
+        const spawn = layout.spawns[newSeed() % layout.spawns.length];
+        Object.assign(params, { name, appearance, dungeonProtocol: this.onOriginalParty ? 11 : 9,
+          layout: { id: layout.id, x: spawn.x, y: spawn.y } });
+      }
+      return request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST', params)
+        .then(fresh => localInnState(fresh, layout));
+    }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
       if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;
       // The roster read can have started before movement reached the server.
@@ -373,7 +386,7 @@ export class PlaySession {
       this.onInn(this.inn);
       if (fresh.match && fresh.match.id !== this.ignoredMatch) this.#beginBattle({ matchId: fresh.match.id, matchRole: fresh.match.role });
       return true;
-    }, error => {
+    }).catch(error => {
       if (!this.closed && !this.battle && generation === this.generation) this.#innSyncError(error);
       return false;
     }).finally(() => { this.innSync = null; });

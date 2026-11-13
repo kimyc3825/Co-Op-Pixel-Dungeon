@@ -20,9 +20,32 @@
 
 아틀라스는 각 행에 12×15픽셀 프레임 18개를 갖는다. 기본 그림, 옷색, 머리 모양과 머리색 조합, 장신구 순으로 행을 배치한다. 입장과 매칭 링크는 옵션 ID만 보내며, 웹과 Windows가 같은 레이어 순서로 그린다.
 
-## 여관 배경 그림
+## 여관 배경 작업
 
-여관 홀의 배경, 불꽃 애니메이션, NPC 그림은 `web-client/scripts/generate-inn.mjs`가 그립니다. 저장소 루트에서 `node web-client/scripts/generate-inn.mjs`를 실행하면 두 클라이언트가 함께 쓰는 `inn-hall.png`, `inn-hall-fx.png`, `inn-npcs.png`와 `inn-hall.mjs`가 다시 생성됩니다. 그림은 서버가 내려주는 여관 맵과 정확히 같을 때만 쓰이고, 맵이 다르면 기존 방식으로 타일을 그립니다. 스크립트의 맵이나 애니메이션 영역을 바꾸면 `NativeInnBoard.java`의 `HALL_MAP`과 `HALL_FX`도 같은 값으로 맞춥니다.
+웹과 Windows는 같은 [inn-layout.json](../web-client/play/assets/inn-layout.json)을 사용합니다. `map`은 여관의 26×17 칸 배치입니다. 좌표는 왼쪽 위 `(0, 0)`부터 시작합니다.
+
+| 문자 | 용도 | 이동 가능 |
+| --- | --- | --- |
+| `#` | 벽 | × |
+| `.` | 바닥 | ○ |
+| `B` | 카운터 또는 벽난로 | × |
+| `T` | 탁자 | × |
+| `N` | NPC 자리 | × |
+| `D` | 출입구 바닥 | ○ |
+
+같은 파일에서 입장 좌표 `spawns`, 원정 출입구 범위 `expeditionGate`, NPC의 위치와 대사를 편집할 수 있습니다. 입장 좌표는 `.` 또는 `D` 칸에, NPC 좌표는 `N` 칸에 둡니다.
+
+웹의 바닥, 가구, 조명은 [inn-decor.mjs](../web-client/play/inn-decor.mjs)에서 그립니다. Windows판의 같은 작업은 [NativeInnBoard.java](../inn-client/src/main/java/com/noxac/pixeldungeon/inn/NativeInnBoard.java)의 `rebuildFloor`, `paintTerrain`, `paintHallFeatures`에서 합니다. 새 배치로 옮기는 벽난로, 바, 원정 출입구의 그림도 여기에서 조정합니다.
+
+현재 배치의 여관 홀은 미리 그린 그림 한 장을 씁니다. 배경, 불꽃 애니메이션, NPC 그림은 `web-client/scripts/generate-inn.mjs`가 그리며, 저장소 루트에서 `node web-client/scripts/generate-inn.mjs`를 실행하면 두 클라이언트가 함께 쓰는 `inn-hall.png`, `inn-hall-fx.png`, `inn-npcs.png`와 `inn-hall.mjs`가 다시 생성됩니다. 이 그림은 `map`이 스크립트의 맵과 정확히 같을 때만 쓰이고, 다르면 위 코드로 타일을 그립니다. 칸 배치를 바꾸면 스크립트의 `MAP`과 `NativeInnBoard.java`의 `HALL_MAP`, `HALL_FX`도 같은 값으로 맞춥니다.
+
+저장소 루트에서 다음 명령을 실행한 뒤 [여관 전체 지도 미리보기](http://127.0.0.1:8000/preview/)를 엽니다. Python 3과 브라우저가 필요하며, 공개 파일로 실제 웹 렌더러를 실행합니다.
+
+```sh
+python -m http.server 8000 --bind 127.0.0.1 --directory web-client
+```
+
+여관의 벽과 가구 충돌은 각 클라이언트가 판정합니다. 칸 배치나 NPC ID·좌표가 달라지면 별도의 여관으로 접속합니다. 같은 공간에서 만나려면 양쪽에 같은 배치를 사용하세요. 배경 그림, 외관 에셋, 대사 변경은 여관을 나누지 않습니다.
 
 ## 던전과 행동력
 
@@ -48,7 +71,7 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 .\gradlew.bat -p inn-client packageWindows
 ```
 
-출력은 `inn-client/build/jpackage/0.16.9/NoxacPixelDungeon/NoxacPixelDungeon.exe`입니다. 실행 폴더에 Java와 게임 에셋이 포함됩니다.
+출력은 `inn-client/build/jpackage/0.16.10/NoxacPixelDungeon/NoxacPixelDungeon.exe`입니다. 실행 폴더에 Java와 게임 에셋이 포함됩니다.
 
 원본 브라우저판은 저장소 루트에서 `.\gradlew.bat -PwebOnly html:dist`로 빌드한다. 결과는 `html/build/dist/web`에 생성된다.
 
@@ -62,7 +85,7 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 
 ## 네트워크와 전투
 
-Sites Worker와 D1이 여관 이동, 채팅, 파티 매칭, 링크 인증과 WebRTC 시그널링을 맡습니다. 같은 프로토콜의 참가자끼리 매칭합니다. Worker 소스와 운영 설정은 별도의 비공개 저장소에서 관리합니다.
+새 클라이언트는 여관 입장 시 배치 ID와 시작 좌표를 보냅니다. Sites Worker와 D1이 위치, 채팅, NPC 상호작용 알림과 프로필 옵션 ID를 중계하고 파티 매칭, 링크 인증과 WebRTC 시그널링을 맡습니다. 한 여관 안에서 같은 던전 프로토콜의 참가자끼리 매칭합니다. 구버전은 기본 배치를 사용하는 새 클라이언트와 같은 여관에 접속합니다. Worker 소스와 운영 설정은 별도의 비공개 저장소에서 관리합니다.
 
 파티장의 원본 엔진이 층 생성, 충돌, 적 행동, 피해와 전리품을 한 번 처리합니다. 동료는 층 번호와 순서 번호가 있는 이동·평타 명령을 보내고, 파티장은 확인 번호와 최신 탐색 지형, 위치·체력·행동력, 표시할 전리품을 공유합니다. 층이 바뀌면 이전 층의 명령을 버립니다. 전송은 WebRTC 직접 연결을 사용하며 필요할 때 Worker가 중계합니다. Java 옵션 `-Dnoxac.inn.relayOnly=true`로 개발 중 중계를 시험할 수 있습니다.
 

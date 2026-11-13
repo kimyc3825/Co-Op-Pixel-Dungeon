@@ -216,6 +216,14 @@ final class LobbySession implements AutoCloseable {
         });
     }
 
+    void talkToNpc(String npcId) {
+        submit(() -> {
+            if (!suspended && online && state != null && state.layoutId() != null) {
+                api.talkToNpc(key, npcId).exceptionally(error -> null);
+            }
+        });
+    }
+
     void prepare(Runnable finished) {
         if (!submit(() -> {
             try {

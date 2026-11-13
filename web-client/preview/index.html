@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>여관 배경 미리보기</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #171310; color: #f5d9a9; }
+    body { max-width: 832px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 .75rem; }
+    .inn-preview { position: relative; }
+    .game-board { display: block; width: 100%; height: auto; image-rendering: pixelated; outline: 1px solid #5b4234; }
+    .speech-board { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    canvas[hidden], #status[hidden] { display: none; }
+  </style>
+  <script type="module" src="./preview.mjs"></script>
+</head>
+<body>
+  <h1>여관 배경 미리보기</h1>
+  <div class="inn-preview">
+    <canvas class="game-board" id="inn" aria-label="여관 전체 지도" hidden></canvas>
+  </div>
+  <p id="status" role="status" hidden></p>
+</body>
+</html>
