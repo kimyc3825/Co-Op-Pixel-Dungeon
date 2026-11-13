@@ -482,7 +482,7 @@ function updateLoading(state) {
   fields['loading-retry'].hidden = fields['loading-close'].hidden = !failed;
   board.canvas.setAttribute('aria-busy', String(active));
   if (active) {
-    text(fields['loading-phase'], state.phase === 'checking' ? '게임 버전 확인 중' : '던전 불러오는 중');
+    text(fields['loading-phase'], state.phase === 'checking' ? '던전 버전 확인 중' : '던전 불러오는 중');
     if (loadingTipTimer === null) {
       closeGameWindows();
       clearMovement();

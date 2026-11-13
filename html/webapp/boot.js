@@ -79,12 +79,12 @@
 		if (pct === lastPercent) return;
 		lastPercent = pct;
 		barFill.style.width = pct + "%";
-		$("status").textContent = "원본 게임 불러오는 중… " + pct + "%";
+		$("status").textContent = "던전 불러오는 중… " + pct + "%";
 		notifyParent("noxac-original-progress", pct);
 	};
 	spd.loaded = function () {
 		spd.progress(1, 1);
-		$("status").textContent = "원본 게임을 시작하는 중…";
+		$("status").textContent = "던전을 시작하는 중…";
 		// the game draws its first frames a moment after the assets are ready
 		setTimeout(function () { $("loader").classList.add("hidden"); canvas.focus(); }, 400);
 	};

@@ -123,9 +123,9 @@ export class OriginalDownload {
 
   get label() {
     const job = this.#job;
-    if (!job?.running || job.stop) return '원본 게임 불러오는 중';
+    if (!job?.running || job.stop) return '던전 불러오는 중';
     const percent = job.total ? ` · ${Math.floor(job.loaded * 100 / job.total)}%` : '';
-    return `원본 게임 이어 받는 중${percent}`;
+    return `던전 이어 받는 중${percent}`;
   }
 
   #current() {

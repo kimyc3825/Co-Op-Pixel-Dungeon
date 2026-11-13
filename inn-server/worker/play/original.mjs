@@ -101,7 +101,7 @@ export class OriginalGame {
   async load() {
     const attempt = new AbortController();
     this.attempt = attempt;
-    this.setPhase('checking', '원본 게임 버전 확인 중');
+    this.setPhase('checking', '던전 버전 확인 중');
     try {
       if (!this.party) this.suspending ??= this.suspend().catch(() => false);
       const suspended = this.party || await this.suspending;
@@ -126,7 +126,7 @@ export class OriginalGame {
       this.body.prepend(frame);
       this.resetBootDeadline();
     } catch {
-      if (!attempt.signal.aborted) this.fail('원본 게임을 불러오지 못했습니다');
+      if (!attempt.signal.aborted) this.fail('던전을 불러오지 못했습니다');
     }
   }
 
@@ -166,7 +166,7 @@ export class OriginalGame {
     if (type === 'noxac-original-progress' && this.phase === 'loading' &&
         Number.isInteger(percent) && percent >= 0 && percent <= 100 && percent > this.progress) {
       this.progress = percent;
-      this.label.textContent = `원본 게임 불러오는 중 · ${percent}%`;
+      this.label.textContent = `던전 불러오는 중 · ${percent}%`;
       this.resetBootDeadline();
     } else if (type === 'noxac-original-ready' && this.phase === 'loading') {
       clearTimeout(this.deadline);
@@ -180,7 +180,7 @@ export class OriginalGame {
       this.onPartySend(data);
     } else if (type === 'noxac-original-error') {
       if (this.phase === 'retreating') void this.returnToInn();
-      else this.fail('원본 게임이 중단되었습니다');
+      else this.fail('던전 실행이 중단되었습니다');
     } else if (type === 'noxac-original-exit') {
       void this.returnToInn(reason === 'death' ? reason : undefined);
     }
@@ -188,7 +188,7 @@ export class OriginalGame {
 
   resetBootDeadline() {
     clearTimeout(this.deadline);
-    this.deadline = setTimeout(() => this.fail('원본 게임을 시작하지 못했습니다'), BOOT_TIMEOUT);
+    this.deadline = setTimeout(() => this.fail('던전을 시작하지 못했습니다'), BOOT_TIMEOUT);
   }
 
   requestReturn() {
