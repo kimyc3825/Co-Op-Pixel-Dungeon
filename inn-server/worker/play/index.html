@@ -10,7 +10,7 @@
   <script type="module" src="/play/main.mjs"></script>
 </head>
 <body>
-  <main id="play-shell" class="shell">
+  <main id="play-shell" class="shell" data-scene="inn">
     <header class="masthead">
       <div class="brand">
         <div><h1 id="scene-title">여관</h1><span class="status" id="connection" data-tone="idle">입장 대기</span></div>
@@ -48,13 +48,15 @@
             </dl>
           </aside>
           <aside id="inn-dialogue" class="inn-dialogue" aria-labelledby="npc-name" hidden>
-            <div>
-              <h3 id="npc-name"></h3><p id="npc-dialogue" aria-live="polite"></p>
-              <details id="npc-lessons" class="npc-lessons" hidden>
-                <summary>행동력과 전투 상태</summary>
-                <div id="npc-lessons-content"></div>
-              </details>
-            </div>
+            <header class="npc-title">
+              <span class="npc-portrait" aria-hidden="true"></span>
+              <h3 id="npc-name"></h3>
+            </header>
+            <p id="npc-dialogue" aria-live="polite"></p>
+            <details id="npc-lessons" class="npc-lessons" hidden>
+              <summary>행동력과 전투 상태</summary>
+              <div id="npc-lessons-content"></div>
+            </details>
             <button id="npc-close" type="button">닫기</button>
           </aside>
           <p id="battle-overlay" class="battle-overlay" hidden></p>
@@ -225,7 +227,7 @@
       <h2 id="settings-heading">설정</h2>
       <button aria-label="닫기">×</button>
     </form>
-    <p>Noxac Pixel Dungeon 0.16.3</p>
+    <p>Noxac Pixel Dungeon 0.16.4</p>
     <p>이 게임은 Evan Debenham의 Shattered Pixel Dungeon 4.0.2를 기반으로 하며 GNU 일반 공중 사용 허가서(GPL) 버전 3 이상에 따라 배포됩니다.</p>
     <ul class="settings-links">
       <li><a href="/play/LICENSE.txt" target="_blank" rel="noopener">GPL 라이선스 전문</a></li>

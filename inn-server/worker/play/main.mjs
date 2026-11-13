@@ -8,6 +8,7 @@ import { drawAvatar, getAvatar } from './avatar.mjs';
 import { loadBattleRuntime } from './runtime-loader.mjs';
 
 const byId = (id) => document.getElementById(id);
+const shell = byId('play-shell');
 const board = new Board(byId('board'));
 const fields = Object.fromEntries([
   'scene-title', 'connection', 'board-title', 'board-status', 'encounter-status', 'help', 'help-toggle', 'pause', 'battle-overlay', 'notice',
@@ -512,6 +513,7 @@ function updateScene() {
     if (!dungeon) fields['dungeon-panel'].parentElement.style.removeProperty('--items-atlas');
   }
   const title = dungeon ? (play.frame.state.theme === PRISON ? '버려진 감옥' : '하수도') : '여관';
+  shell.dataset.scene = dungeon ? 'dungeon' : 'inn';
   fields['inn-panel'].hidden = dungeon;
   fields['dungeon-panel'].hidden = !dungeon;
   fields['touch-battle'].hidden = !dungeon;
@@ -606,6 +608,7 @@ function showDialogue(npc) {
   fields['inn-dialogue'].hidden = !npc;
   if (!npc) return;
   destination = null;
+  fields['inn-dialogue'].dataset.role = npc.role;
   text(fields['npc-name'], npc.name);
   text(fields['npc-dialogue'], npc.dialogue);
   const lessons = Array.isArray(npc.lessons) ? npc.lessons : [];

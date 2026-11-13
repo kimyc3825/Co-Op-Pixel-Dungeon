@@ -6,19 +6,21 @@ import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputAdapter;
 import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
+import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSprite;
+import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
+import com.shatteredpixel.shatteredpixeldungeon.ui.RedButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
-import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndSettings;
-import com.shatteredpixel.shatteredpixeldungeon.windows.WndTitledMessage;
 import com.watabou.input.PointerEvent;
 import com.watabou.noosa.Camera;
 import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.Game;
 import com.watabou.noosa.Gizmo;
 import com.watabou.noosa.Group;
+import com.watabou.noosa.Image;
 import com.watabou.noosa.PointerArea;
 import com.watabou.noosa.TextInput;
 import com.watabou.noosa.ui.Component;
@@ -54,11 +56,11 @@ public final class NativeInnScene extends PixelScene {
     private ScrollPane chat;
     private Group chatHud;
     private Group help;
-    private FlatButton profile;
-    private FlatButton expeditions;
-    private FlatButton drink;
-    private FlatButton compose;
-    private FlatButton send;
+    private InnButton profile;
+    private InnButton expeditions;
+    private InnButton drink;
+    private InnButton compose;
+    private InnButton send;
     private TextInput editor;
     private RenderedTextBlock presence;
     private RenderedTextBlock notice;
@@ -88,7 +90,7 @@ public final class NativeInnScene extends PixelScene {
         float top = insets.top + EDGE;
         float right = w - insets.right - EDGE;
         float bottom = h - insets.bottom - EDGE;
-        boolean compactHud = right - left < 256;
+        boolean compactHud = right - left < 266;
         add(block(0, 0, w, h, BACKGROUND));
         board = new NativeInnBoard(0, 0, w, h,
             cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc);
@@ -99,20 +101,20 @@ public final class NativeInnScene extends PixelScene {
         add(label("여관", 11, GOLD, left + 5, top + 3));
         presence = label("서버 연결 중", 6, MUTED, left + 5, top + 16);
         add(presence);
-        button("F1 배낭", compactHud ? left : right - 140, compactHud ? top + 29 : top,
-            49, 17, false, this::openBackpack);
-        button("설정", compactHud ? left + 51 : right - 178, compactHud ? top + 29 : top,
-            36, 17, false, this::openSettings);
-        profile = button("모험가", right - 89, top, 47, 17, false, this::editProfile);
-        button("F8 도움말", right - 40, top, 40, 17, false, this::toggleHelp);
+        button("F1 배낭", compactHud ? left : right - 150, compactHud ? top + 29 : top,
+            49, 17, Icons.BACKPACK.get(), this::openBackpack);
+        button("설정", compactHud ? left + 51 : right - 188, compactHud ? top + 29 : top,
+            36, 17, Icons.PREFS.get(), this::openSettings);
+        profile = button("모험가", right - 99, top, 47, 17, Icons.TALENT.get(), this::editProfile);
+        button("F8 도움말", right - 50, top, 50, 17, Icons.INFO.get(), this::toggleHelp);
 
         float toolbarY = bottom - 18;
-        expeditions = button("원정", right - 52, toolbarY, 52, 18, true, this::openExpeditions);
-        drink = button("술 한 잔", right - 94, toolbarY, 40, 18, false, () -> {
+        expeditions = button("원정", right - 52, toolbarY, 52, 18, Icons.STAIRS.get(), this::openExpeditions);
+        drink = button("술 한 잔", right - 94, toolbarY, 40, 18, new ItemSprite(ItemSpriteSheet.POTION_AMBER), () -> {
             LobbySession session = NativeClient.inn();
             if (session != null) session.drink();
         });
-        button("대화", right - 130, toolbarY, 34, 18, false, this::toggleChat);
+        button("대화", right - 130, toolbarY, 34, 18, Icons.NEWS.get(), this::toggleChat);
 
         chatHud = new Group();
         add(chatHud);
@@ -128,8 +130,8 @@ public final class NativeInnScene extends PixelScene {
         chat = new ScrollPane(chatRows);
         chatHud.add(chat);
         chat.setRect(left + 4, chatY + 12, chatWidth - 8, chatHeight);
-        compose = button(chatHud, "대화 입력 · Enter", left + 3, toolbarY - 15, chatWidth - 6, 12, false, this::openComposer);
-        send = button(chatHud, "보내기", left + chatWidth - 28, toolbarY - 15, 25, 12, true, () -> submitPending = true);
+        compose = button(chatHud, "대화 입력 · Enter", left + 3, toolbarY - 15, chatWidth - 6, 12, this::openComposer);
+        send = button(chatHud, "보내기", left + chatWidth - 28, toolbarY - 15, 25, 12, () -> submitPending = true);
         send.visible = false;
         updateChatVisibility();
 
@@ -455,14 +457,7 @@ public final class NativeInnScene extends PixelScene {
             openLessons(npc);
             return;
         }
-        modalOpen = true;
-        add(new WndTitledMessage(Icons.INFO.get(), npc.name(), npc.dialogue()) {
-            @Override
-            public void destroy() {
-                modalOpen = false;
-                super.destroy();
-            }
-        });
+        showNpcWindow(npc, npc.name(), npc.dialogue(), selection -> {}, "닫기");
     }
 
     private void openLessons(InnApi.Npc npc) {
@@ -470,18 +465,18 @@ public final class NativeInnScene extends PixelScene {
         String[] options = new String[lessons.size() + 1];
         for (int i = 0; i < lessons.size(); i++) options[i] = lessons.get(i).title();
         options[lessons.size()] = "닫기";
-        showLessonWindow(npc.name(), npc.dialogue(), selection -> {
+        showNpcWindow(npc, npc.name(), npc.dialogue(), selection -> {
             if (selection >= lessons.size()) return;
             InnApi.Lesson lesson = lessons.get(selection);
-            showLessonWindow(lesson.title(), lesson.text(), action -> {
+            showNpcWindow(npc, lesson.title(), lesson.text(), action -> {
                 if (action == 0) openLessons(npc);
             }, "목록으로", "닫기");
         }, options);
     }
 
-    private void showLessonWindow(String title, String text, IntConsumer select, String... options) {
+    private void showNpcWindow(InnApi.Npc npc, String title, String text, IntConsumer select, String... options) {
         modalOpen = true;
-        add(new WndOptions(Icons.INFO.get(), title, text, options) {
+        add(new WndOptions(NativeInnBoard.npcPortrait(npc.role()), title, text, options) {
             @Override
             protected void onSelect(int index) {
                 select.accept(index);
@@ -630,12 +625,15 @@ public final class NativeInnScene extends PixelScene {
         return Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT);
     }
 
-    private FlatButton button(String text, float x, float y, float w, float h, boolean primary, Runnable click) {
-        return button(this, text, x, y, w, h, primary, click);
+    private InnButton button(String text, float x, float y, float w, float h, Image icon, Runnable click) {
+        InnButton button = button(this, text, x, y, w, h, click);
+        icon.scale.set(0.65f);
+        button.icon(icon);
+        return button;
     }
 
-    private FlatButton button(Group parent, String text, float x, float y, float w, float h, boolean primary, Runnable click) {
-        FlatButton button = new FlatButton(text, primary, click);
+    private InnButton button(Group parent, String text, float x, float y, float w, float h, Runnable click) {
+        InnButton button = new InnButton(text, click);
         parent.add(button);
         button.setRect(x, y, w, h);
         return button;
@@ -687,11 +685,11 @@ public final class NativeInnScene extends PixelScene {
         }
     }
 
-    private static final class FlatButton extends StyledButton {
+    private static final class InnButton extends RedButton {
         private final Runnable click;
 
-        FlatButton(String title, boolean primary, Runnable click) {
-            super(primary ? Chrome.Type.RED_BUTTON : Chrome.Type.GREY_BUTTON_TR, title, 7);
+        InnButton(String title, Runnable click) {
+            super(title, 7);
             this.click = click;
         }
 

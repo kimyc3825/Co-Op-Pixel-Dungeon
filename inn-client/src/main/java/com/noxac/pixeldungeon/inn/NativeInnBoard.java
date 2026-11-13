@@ -434,6 +434,12 @@ final class NativeInnBoard extends Group {
         };
     }
 
+    static Image npcPortrait(String role) {
+        Image portrait = new Image(NPC_SPRITES);
+        portrait.frame(npcColumn(role) * TILE, 0, TILE, TILE);
+        return portrait;
+    }
+
     private static void paintTerrain(Pixmap map, int column, int row, char kind) {
         int x = column * TILE;
         int y = row * TILE;
