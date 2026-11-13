@@ -39,9 +39,12 @@ public final class InnOriginalParty {
     private boolean[] explored;
     private int[] rememberedTerrain;
     private int ack;
+    private int guestTimeAck;
+    private volatile int inboundTimeSequence;
     private int revision;
     private float sendIn;
     private int nextSequence;
+    private int guestTimeSequence;
     private Command pending;
 
     private InnOriginalParty(boolean host, InnAdventure.Profile peer, long seed,
@@ -74,25 +77,32 @@ public final class InnOriginalParty {
         if (link == null || payload == null || payload.length() > MAX_PACKET || link.closed) return;
         String[] fields = payload.split("\\|", -1);
         try {
-            if (link.host && fields.length == 6 && fields[0].equals("C")) {
+            if (link.host && fields.length == 7 && fields[0].equals("C")) {
                 int floor = Integer.parseInt(fields[1]);
                 int seq = Integer.parseInt(fields[2]);
                 String kind = fields[3];
                 int first = Integer.parseInt(fields[4]);
                 int second = Integer.parseInt(fields[5]);
-                if (floor == link.floor && seq > 0 && (kind.equals("M") || kind.equals("A") || kind.equals("T"))) {
-                    Command previous = link.inbound;
-                    if (previous == null || seq > previous.seq) {
-                        link.inbound = new Command(floor, seq, kind, first, second);
-                    }
-                }
-            } else if (!link.host && fields.length == 15 && fields[0].equals("S")) {
+                int timeSequence = Integer.parseInt(fields[6]);
+                link.acceptCommand(floor, seq, kind, first, second, timeSequence);
+            } else if (!link.host && fields.length == 17 && fields[0].equals("S")) {
                 Snapshot state = Snapshot.parse(fields);
                 Snapshot previous = link.incoming;
                 if (state != null && (previous == null || state.revision > previous.revision)) link.incoming = state;
             }
         } catch (NumberFormatException ignored) {
             // A malformed peer packet does not affect the current run.
+        }
+    }
+
+    private synchronized void acceptCommand(int floor, int seq, String kind, int first, int second, int timeSequence) {
+        // A floor transition does not discard a new time toggle from the same expedition.
+        if (floor > 0 && floor <= this.floor && timeSequence > inboundTimeSequence) {
+            inboundTimeSequence = timeSequence;
+        }
+        if (floor == this.floor && seq > 0 && (kind.equals("M") || kind.equals("A") || kind.equals("T"))
+                && (inbound == null || seq > inbound.seq)) {
+            inbound = new Command(floor, seq, kind, first, second);
         }
     }
 
@@ -168,9 +178,17 @@ public final class InnOriginalParty {
         }
     }
 
-    public void updateHost(float elapsed, boolean paused) {
+    public void applyGuestTime() {
+        int requested = inboundTimeSequence;
+        if (requested <= guestTimeAck || finished || closed) return;
+        if (((requested - guestTimeAck) & 1) != 0) InnAtb.toggleSlowTime();
+        guestTimeAck = requested;
+        sendIn = 0;
+    }
+
+    public void updateHost(float elapsed, float gameElapsed, boolean paused) {
         if (member == null || level != Dungeon.level) return;
-        if (!paused) member.regenerate(elapsed);
+        if (!paused) member.regenerate(gameElapsed);
         sendIn -= elapsed;
         if (sendIn > 0 || closed || level.length() > MAX_CELLS || Actor.processing()) return;
         sendIn = UPDATE_INTERVAL;
@@ -186,21 +204,38 @@ public final class InnOriginalParty {
         Snapshot state = incoming;
         if (state == null || closed || !state.result.equals("play")) return;
         pending = new Command(state.floor, ++nextSequence, kind, first, second);
-        send.accept(pending.encode());
+        sendGuest(state);
+    }
+
+    public void toggleTime() {
+        Snapshot state = incoming;
+        if (host) {
+            InnAtb.toggleSlowTime();
+            sendIn = 0;
+        } else if (state != null && !closed && state.result.equals("play")) {
+            guestTimeSequence++;
+            sendGuest(state);
+        }
+    }
+
+    private void sendGuest(Snapshot state) {
+        String command = pending == null || pending.floor != state.floor
+                ? "C|" + state.floor + "|0|N|0|0" : pending.encode();
+        // Relay holds the latest packet, so movement and time toggles travel together.
+        send.accept(command + "|" + guestTimeSequence);
         sendIn = UPDATE_INTERVAL;
     }
 
     public void updateGuest(float elapsed) {
         Snapshot state = incoming;
-        if (pending == null || state == null || closed) return;
-        if (pending.floor != state.floor || pending.seq <= state.ack) {
+        if (state == null || closed) return;
+        if (pending != null && (pending.floor != state.floor || pending.seq <= state.ack)) {
             pending = null;
-            return;
         }
+        if (pending == null && guestTimeSequence <= state.timeAck) return;
         sendIn -= elapsed;
         if (sendIn <= 0) {
-            send.accept(pending.encode());
-            sendIn = UPDATE_INTERVAL;
+            sendGuest(state);
         }
     }
 
@@ -245,7 +280,7 @@ public final class InnOriginalParty {
         return "S|" + ++revision + "|" + floor + "|" + Dungeon.depth + "|" + Dungeon.branch + "|"
                 + level.width() + "|" + level.height() + "|" + ack + "|" + Math.round(member.energy() * 10)
                 + "|" + member.id() + "|" + encodeTiles(tiles) + "|" + actors + "|" + loot
-                + "|" + result + "|" + level.tilesTex();
+                + "|" + result + "|" + level.tilesTex() + "|" + (InnAtb.slowTime() ? 1 : 0) + "|" + guestTimeAck;
     }
 
     private static int heapImage(Heap heap) {
@@ -311,6 +346,8 @@ public final class InnOriginalParty {
 
     public static final class Snapshot {
         public final int revision, floor, depth, branch, width, height, ack, energy, player;
+        public final int timeAck;
+        public final boolean slowTime;
         public final int[] tiles;
         public final String actors, loot, result, texture;
 
@@ -329,12 +366,15 @@ public final class InnOriginalParty {
             loot = fields[12];
             result = fields[13];
             texture = fields[14];
+            slowTime = fields[15].equals("1");
+            timeAck = Integer.parseInt(fields[16]);
         }
 
         private static Snapshot parse(String[] fields) {
             int width = Integer.parseInt(fields[5]);
             int height = Integer.parseInt(fields[6]);
-            if (width < 3 || width > 256 || height < 3 || height > 256 || width * height > MAX_CELLS) return null;
+            if (width < 3 || width > 256 || height < 3 || height > 256 || width * height > MAX_CELLS
+                    || !(fields[15].equals("0") || fields[15].equals("1"))) return null;
             if (!fields[14].startsWith("environment/tiles_") || !fields[14].endsWith(".png")
                     || fields[14].contains("..") || fields[14].substring(12).contains("/")) return null;
             int[] tiles = decodeTiles(fields[10], width * height);

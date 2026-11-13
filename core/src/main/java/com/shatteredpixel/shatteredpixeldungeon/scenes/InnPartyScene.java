@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.shatteredpixel.shatteredpixeldungeon.scenes;
 
+import com.badlogic.gdx.Input;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
+import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
@@ -55,7 +57,9 @@ public final class InnPartyScene extends PixelScene {
     private FogOfWar fog;
     private RenderedTextBlock status;
     private RedButton attackButton;
+    private RedButton timeButton;
     private Integer attackTarget;
+    private boolean spaceHeld;
     private int revision;
     private int floor;
     private int player;
@@ -79,6 +83,16 @@ public final class InnPartyScene extends PixelScene {
         attackButton.setRect(uiCamera.width - 54, uiCamera.height - 22, 48, 16);
         attackButton.visible = attackButton.active = false;
         add(attackButton);
+        timeButton = new RedButton("1× (Space)", 7) {
+            @Override
+            protected void onClick() {
+                party.toggleTime();
+            }
+        };
+        timeButton.camera = uiCamera;
+        timeButton.setRect(uiCamera.width - 110, uiCamera.height - 22, 52, 16);
+        timeButton.visible = timeButton.active = false;
+        add(timeButton);
         KeyEvent.addKeyListener(keys);
         ScrollEvent.addScrollListener(scrolling);
     }
@@ -105,6 +119,9 @@ public final class InnPartyScene extends PixelScene {
 
     private void apply(InnOriginalParty.Snapshot state) {
         revision = state.revision;
+        InnAtb.setSlowTime(state.slowTime);
+        timeButton.text(state.slowTime ? "0.5× (Space)" : "1× (Space)");
+        timeButton.visible = timeButton.active = true;
         player = state.player;
         if (state.floor != floor) {
             floor = state.floor;
@@ -195,10 +212,13 @@ public final class InnPartyScene extends PixelScene {
         });
         erase(status);
         erase(attackButton);
+        erase(timeButton);
         add(world);
         add(status);
         add(attackButton);
+        add(timeButton);
         attackButton.givePointerPriority();
+        timeButton.givePointerPriority();
     }
 
     private void applyActors(InnOriginalParty.Snapshot state) {
@@ -309,6 +329,11 @@ public final class InnPartyScene extends PixelScene {
     }
 
     private boolean key(KeyEvent event) {
+        if (event.code == Input.Keys.SPACE) {
+            if (event.pressed && !spaceHeld) party.toggleTime();
+            spaceHeld = event.pressed;
+            return true;
+        }
         GameAction action = KeyBindings.getActionForKey(event);
         if (action == SPDAction.N || action == SPDAction.NE || action == SPDAction.NW
                 || action == SPDAction.S || action == SPDAction.SE || action == SPDAction.SW

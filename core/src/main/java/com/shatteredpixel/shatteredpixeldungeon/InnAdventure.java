@@ -81,6 +81,7 @@ public final class InnAdventure {
     public static void configure(String name, String job, String hairColor, String outfitColor,
                                  String hairStyle, String accessory, boolean realTime, int hp, int food) {
         InnOriginalParty.clear();
+        InnAtb.setSlowTime(false);
         profile = makeProfile(name, job, hairColor, outfitColor, hairStyle, accessory);
         InnAtb.reset();
         activeAtbRun = null;
@@ -171,6 +172,7 @@ public final class InnAdventure {
 
     public static void clear() {
         InnOriginalParty.clear();
+        InnAtb.setSlowTime(false);
         activeAtbRun = null;
         nextPreparation = null;
         atb = false;

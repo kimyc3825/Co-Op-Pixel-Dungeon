@@ -251,12 +251,12 @@ final class InnApi {
     }
 
     State enter(String name, String key, long after) throws IOException, InterruptedException {
-        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 10)));
+        return decode(send("PUT", API + "session", key, Map.of("name", name, "after", after, "dungeonProtocol", 11)));
     }
 
     State enter(String name, Appearance appearance, String key, long after) throws IOException, InterruptedException {
         return decode(send("PUT", API + "session", key,
-            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 10)));
+            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 11)));
     }
 
     State sync(String key, long after) throws IOException, InterruptedException {

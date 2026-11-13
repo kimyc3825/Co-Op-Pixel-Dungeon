@@ -162,7 +162,7 @@ public abstract class Actor implements Bundlable {
 	private static int nextID = 1;
 
 	private static volatile float now = 0;
-	private static final float SECONDS_PER_TURN = 0.8f;
+	private static final float SECONDS_PER_TURN = 1f;
 	private static final float MAX_ATB_LEAD = 1.5f;
 	private static float atbDeadline;
 	private static volatile boolean atbPaused;

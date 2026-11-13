@@ -21,6 +21,8 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.sprites;
 
+import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
+
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.spells.HolyLance;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.GnollGeomancer;
@@ -172,7 +174,12 @@ public class MissileSprite extends ItemSprite implements Tweener.Listener {
 			speed *= 1.5f;
 		}
 		
-		PosTweener tweener = new PosTweener( this, to, d.length() / speed );
+		PosTweener tweener = new PosTweener( this, to, d.length() / speed ) {
+			@Override
+			protected float tweenElapsed() {
+				return InnAtb.gameElapsed(super.tweenElapsed());
+			}
+		};
 		tweener.listener = this;
 		parent.add( tweener );
 	}

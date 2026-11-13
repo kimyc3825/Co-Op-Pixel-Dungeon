@@ -21,6 +21,8 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.sprites;
 
+import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
+
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
@@ -221,7 +223,12 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 
 		play( run );
 		
-		PosTweener nextMotion = new PosTweener( this, worldToCamera( to ), moveInterval );
+		PosTweener nextMotion = new PosTweener( this, worldToCamera( to ), moveInterval ) {
+			@Override
+			protected float tweenElapsed() {
+				return InnAtb.gameElapsed(super.tweenElapsed());
+			}
+		};
 		nextMotion.listener = this;
 		synchronized (this) {
 			motion = nextMotion;
@@ -649,6 +656,11 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 			}
 		}
 	}
+
+	@Override
+	protected float animationElapsed() {
+		return ch == null ? super.animationElapsed() : InnAtb.gameElapsed(super.animationElapsed());
+	}
 	
 	@Override
 	public void resetColor() {
@@ -888,6 +900,11 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 			end = pos;
 
 			this.height = height;
+		}
+
+		@Override
+		protected float tweenElapsed() {
+			return InnAtb.gameElapsed(super.tweenElapsed());
 		}
 
 		@Override

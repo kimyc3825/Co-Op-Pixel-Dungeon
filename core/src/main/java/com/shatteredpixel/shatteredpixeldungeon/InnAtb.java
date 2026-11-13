@@ -13,8 +13,25 @@ public final class InnAtb {
 
     private static float energy = CAPACITY;
     private static float delay;
+    private static volatile boolean slowTime;
 
     private InnAtb() {}
+
+    public static boolean slowTime() {
+        return slowTime;
+    }
+
+    public static void setSlowTime(boolean enabled) {
+        slowTime = enabled;
+    }
+
+    public static void toggleSlowTime() {
+        slowTime = !slowTime;
+    }
+
+    public static float gameElapsed(float elapsed) {
+        return InnAdventure.atb() && slowTime ? elapsed * 0.5f : elapsed;
+    }
 
     public static synchronized void reset() {
         energy = CAPACITY;

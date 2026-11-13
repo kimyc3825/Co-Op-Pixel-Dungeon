@@ -356,7 +356,7 @@ export class PlaySession {
     const appearance = this.appearance;
     const wasOnline = this.online;
     this.innSync = request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST',
-      enter ? { name, appearance, after: this.after, dungeonProtocol: this.onOriginalParty ? 10 : 9 } :
+      enter ? { name, appearance, after: this.after, dungeonProtocol: this.onOriginalParty ? 11 : 9 } :
         { after: this.after }).then(fresh => {
       if (this.closed || this.battle || generation !== this.generation) return false;
       if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;

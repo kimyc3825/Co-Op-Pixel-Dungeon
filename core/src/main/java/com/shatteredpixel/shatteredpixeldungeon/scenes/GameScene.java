@@ -221,6 +221,7 @@ public class GameScene extends PixelScene {
 
 	private Toolbar toolbar;
 	private final Signal.Listener<KeyEvent> atbKeys = this::handleAtbKey;
+	private boolean atbSpaceHeld;
 	private Toast prompt;
 
 	private AttackIndicator attack;
@@ -919,11 +920,6 @@ public class GameScene extends PixelScene {
 		if (InnAdventure.atb()) {
 			// UI windows hold the world and energy. Clamp delayed frames rather than fast-forwarding.
 			float elapsed = Math.min(0.1f, Game.elapsed);
-			if (!atbBlocked) {
-				InnAtb.advance(elapsed);
-				if (Dungeon.hero.innAtbActive()) Dungeon.hero.innEncounter().advance(Dungeon.level, elapsed);
-			}
-			Actor.updateAtb(elapsed, atbBlocked);
 			InnOriginalParty party = InnOriginalParty.current();
 			if (party != null && party.host) {
 				if (party.isClosed()) {
@@ -931,14 +927,21 @@ public class GameScene extends PixelScene {
 					Game.instance.finish();
 					return;
 				}
-				party.updateHost(elapsed, atbBlocked);
+				party.applyGuestTime();
 			}
+			float gameElapsed = InnAtb.gameElapsed(elapsed);
+			if (!atbBlocked) {
+				InnAtb.advance(gameElapsed);
+				if (Dungeon.hero.innAtbActive()) Dungeon.hero.innEncounter().advance(Dungeon.level, gameElapsed);
+			}
+			Actor.updateAtb(gameElapsed, atbBlocked);
+			if (party != null && party.host) party.updateHost(elapsed, gameElapsed, atbBlocked);
 		}
 
 		if (notifyDelay > 0) notifyDelay -= Game.elapsed;
 
 		if (!Emitter.freezeEmitters) {
-			waterOfs -= 5 * Game.elapsed;
+			waterOfs -= 5 * InnAtb.gameElapsed(Game.elapsed);
 			water.offsetTo( 0, waterOfs );
 			waterOfs = water.offsetY(); //re-assign to account for auto adjust
 		}
@@ -1537,20 +1540,33 @@ public class GameScene extends PixelScene {
 	}
 
 	private boolean handleAtbKey(KeyEvent event) {
-		if (!InnAdventure.atb() || Dungeon.hero == null || interfaceBlockingHero()) return false;
-		GameAction action = KeyBindings.getActionForKey(event);
-		if (action == SPDAction.BAG_1) {
-			if (!event.pressed) toggleBackpack();
+		if (!InnAdventure.atb() || Dungeon.hero == null) return false;
+		if (event.code == Input.Keys.SPACE) {
+			if (event.pressed && !atbSpaceHeld) toggleAtbTime();
+			atbSpaceHeld = event.pressed;
 			return true;
 		}
-		if (event.code == Input.Keys.SPACE && (action == SPDAction.WAIT || action == SPDAction.WAIT_OR_PICKUP)) {
+		if (interfaceBlockingHero()) return false;
+		if (event.code == Input.Keys.Z) {
 			if (event.pressed) {
 				cellSelector.resetKeyHold();
 				Dungeon.hero.requestInnTravelStop();
 			}
 			return true;
 		}
+		GameAction action = KeyBindings.getActionForKey(event);
+		if (action == SPDAction.BAG_1) {
+			if (!event.pressed) toggleBackpack();
+			return true;
+		}
 		return false;
+	}
+
+	public static void toggleAtbTime() {
+		if (!InnAdventure.atb() || Dungeon.hero == null || !Dungeon.hero.isAlive() || interfaceBlockingHero()) return;
+		InnOriginalParty party = InnOriginalParty.current();
+		if (party == null) InnAtb.toggleSlowTime();
+		else party.toggleTime();
 	}
 
 	private void toggleBackpack() {

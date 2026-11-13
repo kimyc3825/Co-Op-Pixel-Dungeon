@@ -838,7 +838,7 @@ public class Hero extends Char {
 			case MELEE:
 				atbIndependent = true;
 				atbMeleeAt = Actor.now() + time;
-				if (time > 0) InnAtb.spend(1);
+				if (time > 0) InnAtb.spend(atbCommittedMeleeCost);
 				break;
 			case WAIT:
 				if (time > 0) atbIndependent = false;
@@ -858,6 +858,7 @@ public class Hero extends Char {
 	private volatile boolean atbMoving;
 	private float atbMoveAt;
 	private float atbMeleeAt;
+	private float atbCommittedMeleeCost;
 	private volatile HeroAction atbWaiting;
 	private final AtomicReference<HeroAction> atbTravelToStop = new AtomicReference<>();
 	private AtbSpend atbWaitKind;
@@ -924,7 +925,22 @@ public class Hero extends Char {
 	}
 
 	private boolean atbHasMeleeEnergy() {
-		return buff(Talent.LethalMomentumTracker.class) != null || InnAtb.canSpend(1);
+		float cost = innMeleeCost();
+		return cost == 0 || InnAtb.canSpend(cost);
+	}
+
+	private float innMeleeCost() {
+		if (buff(Talent.LethalMomentumTracker.class) != null) return 0;
+		KindOfWeapon weapon = belongings.attackingWeapon();
+		if (RingOfForce.fightingUnarmed(this)) {
+			return RingOfForce.unarmedGetsWeaponAugment(this)
+					? ((Weapon) belongings.weapon).augment.delayFactor(1f) : 1f;
+		}
+		if (weapon instanceof Weapon) {
+			Weapon ordinary = (Weapon) weapon;
+			return ordinary.augment.delayFactor(ordinary.DLY);
+		}
+		return 1f;
 	}
 
 	public boolean waitingForInnAtbEnergy() {
@@ -1617,10 +1633,14 @@ public class Hero extends Char {
 		}
 
 		if (attackTarget.isAlive() && canAttack(attackTarget) && attackTarget.invisible == 0) {
-			if (innAtbActive() && (Actor.now() < atbMeleeAt || !atbHasMeleeEnergy())) {
-				attackTarget = null;
-				deferInnAtb(AtbSpend.MELEE);
-				return true;
+			if (innAtbActive()) {
+				float cost = innMeleeCost();
+				if (Actor.now() < atbMeleeAt || (cost > 0 && !InnAtb.canSpend(cost))) {
+					attackTarget = null;
+					deferInnAtb(AtbSpend.MELEE);
+					return true;
+				}
+				atbCommittedMeleeCost = cost;
 			}
 
 			if (heroClass != HeroClass.DUELIST
