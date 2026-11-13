@@ -712,12 +712,16 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 	}
 	
 	public void showAlert() {
+		showAlert(null);
+	}
+
+	public void showAlert(Group effects) {
 		synchronized (EmoIcon.class) {
 			if (!(emo instanceof EmoIcon.Alert)) {
 				if (emo != null) {
 					emo.killAndErase();
 				}
-				emo = new EmoIcon.Alert(this);
+				emo = new EmoIcon.Alert(this, effects);
 				emo.visible = visible;
 			}
 		}
@@ -729,6 +733,12 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 				emo.killAndErase();
 				emo = null;
 			}
+		}
+	}
+
+	public boolean isShowingAlert() {
+		synchronized (EmoIcon.class) {
+			return emo instanceof EmoIcon.Alert && emo.alive;
 		}
 	}
 

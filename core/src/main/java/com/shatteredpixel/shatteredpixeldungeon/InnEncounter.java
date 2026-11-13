@@ -4,6 +4,7 @@ package com.shatteredpixel.shatteredpixeldungeon;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
+import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPracticeTarget;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
 
@@ -54,6 +55,8 @@ public final class InnEncounter {
         changeLevel(currentLevel);
         if (currentLevel == null || currentLevel.heroFOV == null) return;
         boolean[] fov = currentLevel.heroFOV;
+        InnOriginalParty party = InnOriginalParty.current();
+        InnPartyMember partner = party == null ? null : party.activeMember(currentLevel);
         contact = pursuer = false;
         visibleEnemies.clear();
         knownEnemies.removeIf(mob -> noLongerHostile(mob) || !currentLevel.mobs.contains(mob));
@@ -62,14 +65,15 @@ public final class InnEncounter {
             if (noLongerHostile(mob)) continue;
             boolean visible = mob.pos >= 0 && mob.pos < fov.length && fov[mob.pos] && mob.invisible <= 0;
             if (visible) visibleEnemies.add(mob);
-            boolean tracking = (mob.state == mob.HUNTING || mob.state == mob.INVESTIGATING) && mob.isTargeting(hero)
+            boolean tracking = (mob.state == mob.HUNTING || mob.state == mob.INVESTIGATING)
+                    && (mob.isTargeting(hero) || partner != null && mob.isTargeting(partner))
                     || mob instanceof InnPracticeTarget && mob.HP < mob.HT && visible;
             if (!tracking) continue;
-            // Tracking the hero is real aggro. An off-screen enemy starts an encounter only if it sees the hero.
-            if (visible || mob.seesTarget(hero)) knownEnemies.add(mob);
+            boolean seesPartner = partner != null && mob.seesTarget(partner);
+            if (visible || mob.seesTarget(hero) || seesPartner) knownEnemies.add(mob);
             if (knownEnemies.contains(mob)) {
                 pursuer = true;
-                contact |= visible;
+                contact |= visible || seesPartner;
             }
         }
 

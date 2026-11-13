@@ -265,20 +265,25 @@ public final class InnPartyScene extends PixelScene {
     private void applyActors(InnOriginalParty.Snapshot state) {
         Set<Integer> present = new HashSet<>();
         Set<Integer> tiredActors = new HashSet<>();
+        Set<Integer> alertedActors = new HashSet<>();
         String[] rows = state.actors.split(";");
         for (String row : rows) {
-            if (!row.startsWith("!")) continue;
+            Set<Integer> ids;
+            if (row.startsWith(InnOriginalParty.FATIGUE_RECORD)) ids = tiredActors;
+            else if (row.startsWith(InnOriginalParty.DETECTION_RECORD)) ids = alertedActors;
+            else continue;
             for (String id : row.substring(1).split(",")) {
                 try {
-                    tiredActors.add(Integer.parseInt(id));
+                    ids.add(Integer.parseInt(id));
                 } catch (NumberFormatException ignored) {
-                    // Skip invalid fatigue records.
+                    // Skip invalid status records.
                 }
             }
         }
         for (String row : rows) {
             String[] columns = row.split(",", -1);
-            if (columns.length != 6 || row.startsWith("!")) continue;
+            if (columns.length != 6 || row.startsWith(InnOriginalParty.FATIGUE_RECORD)
+                    || row.startsWith(InnOriginalParty.DETECTION_RECORD)) continue;
             try {
                 int id = Integer.parseInt(columns[0]);
                 int cell = Integer.parseInt(columns[1]);
@@ -312,6 +317,8 @@ public final class InnPartyScene extends PixelScene {
                 }
                 view.sprite.alpha(hp == 0 ? 0.4f : 1f);
                 view.sprite.showInnMonsterSweat(hp > 0 && tiredActors.contains(id), fatigue);
+                if (hp > 0 && alertedActors.contains(id)) view.sprite.showAlert(fatigue);
+                else view.sprite.hideAlert();
             } catch (NumberFormatException ignored) {
                 // Skip invalid actor records.
             }
@@ -320,6 +327,7 @@ public final class InnPartyScene extends PixelScene {
         while (it.hasNext()) {
             Map.Entry<Integer, ActorView> entry = it.next();
             if (!present.contains(entry.getKey())) {
+                entry.getValue().sprite.hideAlert();
                 removeVisual(entry.getValue().sprite);
                 it.remove();
             }

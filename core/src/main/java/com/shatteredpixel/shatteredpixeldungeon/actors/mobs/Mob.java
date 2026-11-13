@@ -49,6 +49,7 @@ import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.SoulMark;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.SwarmIntelTracker;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Terror;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
+import com.shatteredpixel.shatteredpixeldungeon.actors.hero.abilities.Ratmogrify;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroClass;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroSubClass;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Talent;
@@ -139,6 +140,9 @@ public abstract class Mob extends Char {
 	protected int enemyID = -1; //used for save/restore
 	protected boolean enemySeen;
 	protected boolean alerted = false;
+
+	private static final float MIN_INN_DETECTION_INTERVAL = 0.12f;
+	private float lastInnDetectionAt = Float.NEGATIVE_INFINITY;
 
 	// Subclasses include quest monsters and variants with their own movement or attacks.
 	private final InnMobEnergy innEnergy = getClass() == Rat.class ? new InnMobEnergy(1f)
@@ -335,7 +339,13 @@ public abstract class Mob extends Char {
 		AiState curState = state;
 		boolean result;
 		if (waitForInnEnergy(0f, Actor.now())) {
-			enemySeen = enemyInFOV;
+			if (state == WANDERING && WANDERING.getClass() == Wandering.class) {
+				Wandering wandering = (Wandering) WANDERING;
+				if (wandering.detectEnemy(enemyInFOV, justAlerted)) wandering.noticeEnemy();
+				else enemySeen = false;
+			} else {
+				enemySeen = enemyInFOV;
+			}
 			result = true;
 		} else {
 			result = state.act( enemyInFOV, justAlerted );
@@ -390,6 +400,7 @@ public abstract class Mob extends Char {
 			timeSeenAt -= decrement;
 		}
 		if (innEnergy != null) innEnergy.fixTime(decrement);
+		lastInnDetectionAt -= decrement;
 		super.fixTime(decrement);
 	}
 
@@ -991,6 +1002,55 @@ public abstract class Mob extends Char {
 				&& (fieldOfView == null || ch.pos >= 0 && ch.pos < fieldOfView.length && fieldOfView[ch.pos]);
 	}
 
+	/** Recheck a passing player on the actor thread, independently of the mob's next action. */
+	public void checkInnApproach(Char mover) {
+		if ((state != SLEEPING && state != WANDERING) || alignment != Alignment.ENEMY
+				|| !isAlive() || sprite == null || usingStealthGamePlay
+				|| paralysed > 0 || buff(Sleep.class) != null || buff(Feint.AfterImage.FeintConfusion.class) != null
+				|| isCharmedBy(mover) || (this instanceof Rat && Dungeon.hero.armorAbility instanceof Ratmogrify
+						&& Dungeon.level.heroFOV[pos])
+				|| !mover.isAlive() || mover.alignment != Alignment.ALLY || mover.invisible > 0
+				|| distance(mover) > viewDistance || !canRollInnDetection(Actor.now())) {
+			return;
+		}
+		if (state == SLEEPING && SLEEPING.getClass() == Sleeping.class) {
+			Sleeping sleeping = (Sleeping) SLEEPING;
+			if (sleeping.canNotice(mover) && seesInnApproach(mover) && rollDetection(sleeping.detectionChance(mover))) {
+				enemy = mover;
+				sleeping.wake(true);
+				postpone(TIME_TO_WAKE_UP);
+			}
+		} else if (state == WANDERING && WANDERING.getClass() == Wandering.class) {
+			Wandering wandering = (Wandering) WANDERING;
+			if (seesInnApproach(mover) && (alerted || rollDetection(wandering.detectionChance(mover)))) {
+				enemy = mover;
+				wandering.noticeEnemy();
+			}
+		}
+	}
+
+	private boolean seesInnApproach(Char mover) {
+		Level level = Dungeon.level;
+		if (fieldOfView == null || fieldOfView.length != level.length()) {
+			fieldOfView = new boolean[level.length()];
+		}
+		level.updateFieldOfView(this, fieldOfView);
+		return fieldOfView[mover.pos];
+	}
+
+	private boolean rollDetection(float chance) {
+		if (InnAdventure.atb() && !usingStealthGamePlay && alignment == Alignment.ENEMY) {
+			float now = Actor.now();
+			if (!canRollInnDetection(now)) return false;
+			lastInnDetectionAt = now;
+		}
+		return Random.Float() < chance;
+	}
+
+	private boolean canRollInnDetection(float now) {
+		return now - lastInnDetectionAt >= MIN_INN_DETECTION_INTERVAL;
+	}
+
 	@Override
 	public void damage( int dmg, Object src ) {
 
@@ -1298,19 +1358,9 @@ public abstract class Mob extends Char {
 				Char closestHostile = null;
 
 				for (Char ch : Actor.chars()){
-					if (fieldOfView[ch.pos] && ch.invisible == 0 && ch.alignment != alignment && ch.alignment != Alignment.NEUTRAL){
+					if (fieldOfView[ch.pos] && ch.invisible == 0 && ch.alignment != alignment && ch.alignment != Alignment.NEUTRAL
+							&& canNotice(ch)){
 						float bestChance = detectionChance(ch);
-						//silent steps rogue talent, which also applies to rogue's shadow clone
-						if ((ch instanceof Hero || ch instanceof ShadowClone.ShadowAlly)
-								&& Dungeon.hero.hasTalent(Talent.SILENT_STEPS)){
-							if (distance(ch) >= 4 - Dungeon.hero.pointsInTalent(Talent.SILENT_STEPS)) {
-								bestChance = Float.POSITIVE_INFINITY;
-							}
-						}
-						//flying characters are naturally stealthy
-						if (ch.flying && distance(ch) >= 2){
-							bestChance = Float.POSITIVE_INFINITY;
-						}
 						if (bestChance < highestChance){
 							highestChance = bestChance;
 							closestHostile = ch;
@@ -1318,7 +1368,7 @@ public abstract class Mob extends Char {
 					}
 				}
 
-				if (closestHostile != null && Random.Float() < detectionChance(closestHostile)) {
+				if (closestHostile != null && rollDetection(detectionChance(closestHostile))) {
 					awaken(enemyInFOV);
 					if (state == SLEEPING){
 						spend(TICK); //wait if we can't wake up for some reason
@@ -1334,12 +1384,27 @@ public abstract class Mob extends Char {
 			return true;
 		}
 
+		private boolean canNotice(Char ch) {
+			int distance = distance(ch);
+			if (ch.flying && distance >= 2) return false;
+			if (ch instanceof Hero || ch instanceof ShadowClone.ShadowAlly) {
+				int silentSteps = Dungeon.hero.pointsInTalent(Talent.SILENT_STEPS);
+				return silentSteps == 0 || distance < 4 - silentSteps;
+			}
+			return true;
+		}
+
 		//chance is 1 in (distance + stealth)
 		protected float detectionChance( Char enemy ){
 			return 1 / (distance( enemy ) + enemy.stealth());
 		}
 
 		protected void awaken( boolean enemyInFOV ){
+			wake(enemyInFOV);
+			spend(TIME_TO_WAKE_UP);
+		}
+
+		private void wake(boolean enemyInFOV) {
 			if (enemyInFOV) {
 				enemySeen = true;
 				notice();
@@ -1350,8 +1415,6 @@ public abstract class Mob extends Char {
 				state = WANDERING;
 				target = Dungeon.level.randomDestination( Mob.this );
 			}
-
-			spend(TIME_TO_WAKE_UP);
 		}
 	}
 
@@ -1361,15 +1424,11 @@ public abstract class Mob extends Char {
 
 		@Override
 		public boolean act( boolean enemyInFOV, boolean justAlerted ) {
-			if (enemyInFOV && (justAlerted || Random.Float() < detectionChance(enemy))) {
+			return detectEnemy(enemyInFOV, justAlerted) ? noticeEnemy() : continueWandering();
+		}
 
-				return noticeEnemy();
-
-			} else {
-
-				return continueWandering();
-
-			}
+		private boolean detectEnemy(boolean enemyInFOV, boolean justAlerted) {
+			return enemyInFOV && (justAlerted || rollDetection(detectionChance(enemy)));
 		}
 
 		//chance is 1 in (distance/2 + stealth)

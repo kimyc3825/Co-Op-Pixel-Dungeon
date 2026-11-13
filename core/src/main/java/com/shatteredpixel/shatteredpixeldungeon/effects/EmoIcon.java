@@ -48,10 +48,15 @@ public class EmoIcon extends Image {
 	protected CharSprite owner;
 	
 	public EmoIcon( CharSprite owner ) {
+		this(owner, null);
+	}
+
+	private EmoIcon(CharSprite owner, Group effects) {
 		super();
 		
 		this.owner = owner;
-		GameScene.add( this );
+		if (effects == null) GameScene.add(this);
+		else effects.add(this);
 	}
 	
 	@Override
@@ -203,8 +208,11 @@ public class EmoIcon extends Image {
 	public static class Alert extends EmoIcon {
 		
 		public Alert( CharSprite owner ) {
-			
-			super( owner );
+			this(owner, null);
+		}
+
+		public Alert(CharSprite owner, Group effects) {
+			super(owner, effects);
 			
 			copy( Icons.get( Icons.ALERT ) );
 			

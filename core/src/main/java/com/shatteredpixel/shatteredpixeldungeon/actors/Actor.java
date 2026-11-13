@@ -29,6 +29,7 @@ import com.shatteredpixel.shatteredpixeldungeon.actors.blobs.Blob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Buff;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
+import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember;
 import com.shatteredpixel.shatteredpixeldungeon.effects.TargetedCell;
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TimekeepersHourglass;
 import com.shatteredpixel.shatteredpixeldungeon.plants.Swiftthistle;
@@ -375,7 +376,15 @@ public abstract class Actor implements Bundlable {
 				} else {
 					if (timed) atbActing = true;
 					try {
+						Char mover = timed && !frozen && (acting == hero || acting instanceof InnPartyMember)
+								? (Char) acting : null;
+						int before = mover == null ? -1 : mover.pos;
 						doNext = acting.act();
+						if (mover != null && mover.pos != before && !Game.switchingScene() && !freezesWorld(hero)) {
+							for (Mob mob : Dungeon.level.mobs.toArray(new Mob[0])) {
+								mob.checkInnApproach(mover);
+							}
+						}
 					} finally {
 						if (timed) atbActing = false;
 					}
@@ -387,8 +396,9 @@ public abstract class Actor implements Bundlable {
 					if (doNext && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
 						doNext = false;
 						current = null;
-					} else if (timed && acting instanceof Mob && hero != null && !Game.switchingScene()) {
-						if (doNext && hero.atbCanSkipIdle() && hero.fieldOfView != null) hero.checkVisibleMobs();
+					} else if (timed && hero != null && !Game.switchingScene() &&
+							(acting instanceof Mob || acting == hero && doNext)) {
+						if (acting instanceof Mob && doNext && hero.atbCanSkipIdle() && hero.fieldOfView != null) hero.checkVisibleMobs();
 						else hero.observeInnEncounter();
 						GameScene.refreshAtbAttackIndicator();
 					}

@@ -21,6 +21,8 @@ public final class InnOriginalParty {
     private static final int MAX_CELLS = 16000;
     private static final int MAX_PACKET = 20000;
     private static final float UPDATE_INTERVAL = 0.12f;
+    public static final String FATIGUE_RECORD = "!";
+    public static final String DETECTION_RECORD = "^";
 
     private static volatile InnOriginalParty current;
     public final boolean host;
@@ -153,6 +155,10 @@ public final class InnOriginalParty {
 
     public boolean isClosed() { return closed; }
 
+    InnPartyMember activeMember(Level currentLevel) {
+        return host && level == currentLevel && member != null && member.isAlive() ? member : null;
+    }
+
     public static void finish() {
         InnOriginalParty link = current;
         if (link != null && link.host) link.finished = true;
@@ -267,21 +273,26 @@ public final class InnOriginalParty {
 
         StringBuilder actors = new StringBuilder();
         StringBuilder fatigue = new StringBuilder();
+        StringBuilder detections = new StringBuilder();
         appendActor(actors, Dungeon.hero, Dungeon.hero.heroClass.name(), 1, Dungeon.hero.pos);
         appendActor(actors, member, peer.heroClass().name(), 1, member.isAlive() ? member.pos : level.entrance());
-        if (Dungeon.hero.isAlive() && Dungeon.hero.innExhausted()) appendFatigue(fatigue, Dungeon.hero);
-        if (member.innExhausted()) appendFatigue(fatigue, member);
+        if (Dungeon.hero.isAlive() && Dungeon.hero.innExhausted()) appendActorId(fatigue, Dungeon.hero);
+        if (member.innExhausted()) appendActorId(fatigue, member);
         for (Mob mob : level.mobs.toArray(new Mob[0])) {
             if (mob != member && mob.isAlive() && visible[mob.pos] && mob.sprite != null) {
                 appendActor(actors, mob, mob.sprite.getClass().getName(),
                         mob.alignment == Char.Alignment.ENEMY ? 2 : 0, mob.pos);
                 if (mob.alignment == Char.Alignment.ENEMY && mob.innExhausted()) {
-                    appendFatigue(fatigue, mob);
+                    appendActorId(fatigue, mob);
+                }
+                if (mob.alignment == Char.Alignment.ENEMY && mob.sprite.isShowingAlert()) {
+                    appendActorId(detections, mob);
                 }
             }
         }
         // Older clients skip this optional record and still render the normal actor records.
-        if (fatigue.length() > 0) actors.append(";!").append(fatigue);
+        if (fatigue.length() > 0) actors.append(';').append(FATIGUE_RECORD).append(fatigue);
+        if (detections.length() > 0) actors.append(';').append(DETECTION_RECORD).append(detections);
         StringBuilder loot = new StringBuilder();
         for (Heap heap : level.heaps.valueList()) {
             if (heap.hidden || !visible[heap.pos] || heap.peek() == null) continue;
@@ -314,7 +325,7 @@ public final class InnOriginalParty {
                 .append(ch.HT).append(',').append(kind).append(',').append(sprite);
     }
 
-    private static void appendFatigue(StringBuilder result, Char ch) {
+    private static void appendActorId(StringBuilder result, Char ch) {
         if (result.length() > 0) result.append(',');
         result.append(ch.id());
     }
