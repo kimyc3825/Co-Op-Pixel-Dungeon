@@ -261,14 +261,21 @@ public final class InnOriginalParty {
         }
 
         StringBuilder actors = new StringBuilder();
+        StringBuilder fatigue = new StringBuilder();
         appendActor(actors, Dungeon.hero, Dungeon.hero.heroClass.name(), 1, Dungeon.hero.pos);
         appendActor(actors, member, peer.heroClass().name(), 1, member.isAlive() ? member.pos : level.entrance());
         for (Mob mob : level.mobs.toArray(new Mob[0])) {
             if (mob != member && mob.isAlive() && visible[mob.pos] && mob.sprite != null) {
                 appendActor(actors, mob, mob.sprite.getClass().getName(),
                         mob.alignment == Char.Alignment.ENEMY ? 2 : 0, mob.pos);
+                if (mob.alignment == Char.Alignment.ENEMY && mob.innExhausted()) {
+                    if (fatigue.length() > 0) fatigue.append(',');
+                    fatigue.append(mob.id());
+                }
             }
         }
+        // Older clients skip this optional record and still render the normal actor records.
+        if (fatigue.length() > 0) actors.append(";!").append(fatigue);
         StringBuilder loot = new StringBuilder();
         for (Heap heap : level.heaps.valueList()) {
             if (heap.hidden || !visible[heap.pos] || heap.peek() == null) continue;

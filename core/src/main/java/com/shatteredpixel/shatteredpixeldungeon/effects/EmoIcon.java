@@ -95,6 +95,11 @@ public class EmoIcon extends Image {
 		private float elapsed;
 
 		public Sweat(CharSprite owner) {
+			this(owner, true);
+			GameScene.add(this);
+		}
+
+		public Sweat(CharSprite owner, boolean showLabel) {
 			this.owner = owner;
 			SmartTexture texture = drop();
 			for (int i = 0; i < drops.length; i++) {
@@ -104,14 +109,18 @@ public class EmoIcon extends Image {
 				add(drop);
 			}
 
-			label = PixelScene.renderTextBlock(6, false);
-			label.text(Messages.get(Sweat.class, "exhausted"));
-			label.hardlight(0xFFE3AE);
-			labelBack = new ColorBlock(label.width() + 4, label.height() + 2, 0xE0272523);
-			add(labelBack);
-			add(label);
+			if (showLabel) {
+				label = PixelScene.renderTextBlock(6, false);
+				label.text(Messages.get(Sweat.class, "exhausted"));
+				label.hardlight(0xFFE3AE);
+				labelBack = new ColorBlock(label.width() + 4, label.height() + 2, 0xE0272523);
+				add(labelBack);
+				add(label);
+			} else {
+				label = null;
+				labelBack = null;
+			}
 			position();
-			GameScene.add(this);
 		}
 
 		@Override
@@ -134,9 +143,11 @@ public class EmoIcon extends Image {
 				drop.alpha(1 - 0.45f * phase);
 			}
 
-			labelBack.x = PixelScene.align(camera, center - labelBack.width() / 2f);
-			labelBack.y = PixelScene.align(camera, head - labelBack.height() - 7);
-			label.setPos(labelBack.x + 2, labelBack.y + 1);
+			if (labelBack != null) {
+				labelBack.x = PixelScene.align(camera, center - labelBack.width() / 2f);
+				labelBack.y = PixelScene.align(camera, head - labelBack.height() - 7);
+				label.setPos(labelBack.x + 2, labelBack.y + 1);
+			}
 		}
 
 		private static SmartTexture drop() {

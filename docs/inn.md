@@ -28,6 +28,7 @@
 - 행동력 최대치는 10이며, 게임 시간으로 마지막 차감 0.5초 뒤부터 0.8초당 1을 회복합니다.
 - 한 칸 이동은 탐색·적 경계에서 무료이고, 교전·추격 중에는 1입니다. 파티장의 평타 비용은 무기의 기본 공격 간격과 무기 강화를 따릅니다. 동료의 일반 평타는 1입니다.
 - 원본 플레이어의 아이템과 직업 기술은 각 원본 행동의 시간 비용을 사용합니다.
+- 일반 주머니쥐와 하수구 게는 행동력 6으로 시작합니다. 이동은 각각 1과 0.5, 평타는 둘 다 1을 씁니다. 행동력이 부족하면 땀을 흘리며 쉬고, 잔량이 0에 도달하면 3까지 회복해야 다시 움직이거나 공격합니다. 파티장은 동료에게 몬스터의 피로 상태를 공유합니다.
 - 파티 동료는 방향키 또는 WASD로 이동하고, 적을 클릭하거나 가까운 적에게 **Q**를 눌러 평타를 칩니다. **Esc**로 여관에 돌아갑니다.
 
 ## 빌드
@@ -40,7 +41,7 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 .\gradlew.bat -p inn-client packageWindows
 ```
 
-출력은 `inn-client/build/jpackage/0.16.2/NoxacPixelDungeon/NoxacPixelDungeon.exe`다. 실행 폴더에 Java와 게임 에셋이 포함된다.
+출력은 `inn-client/build/jpackage/0.16.3/NoxacPixelDungeon/NoxacPixelDungeon.exe`다. 실행 폴더에 Java와 게임 에셋이 포함된다.
 
 원본 브라우저판은 저장소 루트에서 `.\gradlew.bat -PwebOnly html:dist`로 빌드한다. 결과는 `html/build/dist/web`에 생성된다.
 

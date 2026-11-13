@@ -140,6 +140,36 @@ public abstract class Mob extends Char {
 	protected boolean enemySeen;
 	protected boolean alerted = false;
 
+	// Subclasses include quest monsters and variants with their own movement or attacks.
+	private final InnMobEnergy innEnergy = getClass() == Rat.class ? new InnMobEnergy(1f)
+			: getClass() == Crab.class ? new InnMobEnergy(0.5f) : null;
+	private boolean innMovementRest;
+
+	private boolean usesInnEnergy() {
+		return innEnergy != null && alignment == Alignment.ENEMY && InnAdventure.atb();
+	}
+
+	public float innEnergyCapacity() {
+		return usesInnEnergy() ? InnMobEnergy.CAPACITY : 0f;
+	}
+
+	public float innEnergy() {
+		return usesInnEnergy() ? innEnergy.energy(Actor.now()) : 0f;
+	}
+
+	public boolean innExhausted() {
+		return usesInnEnergy() && isAlive() && innEnergy.exhausted(Actor.now());
+	}
+
+	private boolean waitForInnEnergy(float cost, float now) {
+		if (!usesInnEnergy()) return false;
+		float wait = innEnergy.waitFor(cost, now);
+		if (wait == 0f) return false;
+		// Actor rounds times within .001 of a whole turn.
+		spendConstant(Math.max(0f, -cooldown()) + Math.max(0.002f, wait));
+		return true;
+	}
+
 	protected static final float TIME_TO_WAKE_UP = 1f;
 
 	protected boolean firstAdded = true;
@@ -195,6 +225,7 @@ public abstract class Mob extends Char {
 		}
 
 		bundle.put(SWARM_TIME, timeSeenAt);
+		if (usesInnEnergy()) innEnergy.store(bundle, Actor.now());
 
 		bundle.put( USING_STEALTH, usingStealthGamePlay );
 		if (usingStealthGamePlay){
@@ -247,6 +278,7 @@ public abstract class Mob extends Char {
 		}
 
 		timeSeenAt = bundle.getFloat( SWARM_TIME );
+		if (usesInnEnergy()) innEnergy.restore(bundle, Actor.now());
 
 		//no need to actually save this, must be false
 		firstAdded = false;
@@ -265,6 +297,7 @@ public abstract class Mob extends Char {
 	protected boolean act() {
 		
 		super.act();
+		innMovementRest = false;
 		
 		boolean justAlerted = alerted;
 		alerted = false;
@@ -300,7 +333,13 @@ public abstract class Mob extends Char {
 		}
 
 		AiState curState = state;
-		boolean result = state.act( enemyInFOV, justAlerted );
+		boolean result;
+		if (waitForInnEnergy(0f, Actor.now())) {
+			enemySeen = enemyInFOV;
+			result = true;
+		} else {
+			result = state.act( enemyInFOV, justAlerted );
+		}
 
 		//if we just swapped into hunting, this gets processed again
 		processSwarmIntel(enemyInFOV && state == curState);
@@ -350,6 +389,7 @@ public abstract class Mob extends Char {
 		if (swarmAlertRange() > 0){
 			timeSeenAt -= decrement;
 		}
+		if (innEnergy != null) innEnergy.fixTime(decrement);
 		super.fixTime(decrement);
 	}
 
@@ -701,17 +741,12 @@ public abstract class Mob extends Char {
 			}
 
 			if (path != null) {
-				step = path.removeFirst();
+				step = path.getFirst();
 			} else {
 				return false;
 			}
 		}
-		if (step != -1) {
-			move( step );
-			return true;
-		} else {
-			return false;
-		}
+		return step != -1 && tryInnMove(step, true);
 	}
 	
 	protected boolean getFurther( int target ) {
@@ -720,12 +755,21 @@ public abstract class Mob extends Char {
 		}
 		
 		int step = Dungeon.flee( this, target, Dungeon.level.passable, fieldOfView, true );
-		if (step != -1) {
-			move( step );
-			return true;
-		} else {
+		return step != -1 && tryInnMove(step, false);
+	}
+
+	private boolean tryInnMove(int step, boolean advancePath) {
+		boolean usesEnergy = usesInnEnergy();
+		float now = Actor.now();
+		if (usesEnergy && waitForInnEnergy(innEnergy.moveCost, now)) {
+			innMovementRest = true;
 			return false;
 		}
+		if (advancePath && path != null) path.removeFirst();
+		int from = pos;
+		move(step);
+		if (usesEnergy && pos != from) innEnergy.spend(innEnergy.moveCost, now);
+		return true;
 	}
 
 	CharSprite movementShadow;
@@ -796,6 +840,11 @@ public abstract class Mob extends Char {
 	}
 	
 	protected boolean doAttack( Char enemy ) {
+		if (usesInnEnergy()) {
+			float now = Actor.now();
+			if (waitForInnEnergy(InnMobEnergy.ATTACK_COST, now)) return true;
+			innEnergy.spend(InnMobEnergy.ATTACK_COST, now);
+		}
 		
 		if (sprite != null && (sprite.visible || enemy.sprite.visible)) {
 			sprite.attack( enemy.pos );
@@ -1346,7 +1395,7 @@ public abstract class Mob extends Char {
 			if (target != -1 && getCloser( target )) {
 				spend( 1 / speed() );
 				return moveSprite( oldPos, pos );
-			} else {
+			} else if (!innMovementRest) {
 				target = randomDestination();
 				spend( TICK );
 			}
@@ -1400,8 +1449,11 @@ public abstract class Mob extends Char {
 					spend( 1 / speed() );
 					return moveSprite( oldPos,  pos );
 
-				} else {
+				} else if (innMovementRest) {
 
+					return true;
+
+				} else {
 					return handleUnreachableTarget(enemyInFOV, justAlerted);
 				}
 			}
@@ -1505,8 +1557,11 @@ public abstract class Mob extends Char {
 				spend( 1 / speed() );
 				return moveSprite( oldPos, pos );
 
-			} else {
+			} else if (innMovementRest) {
 
+				return true;
+
+			} else {
 				spend( TICK );
 				nowhereToRun();
 

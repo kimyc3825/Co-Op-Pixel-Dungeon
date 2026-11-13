@@ -50,7 +50,7 @@ public final class InnPartyScene extends PixelScene {
         return true;
     };
     private InnOriginalParty party;
-    private Group world, figures, loot;
+    private Group world, figures, loot, fatigue;
     private DungeonTerrainTilemap ground;
     private RaisedTerrainTilemap raised;
     private DungeonWallsTilemap walls;
@@ -203,6 +203,8 @@ public final class InnPartyScene extends PixelScene {
         world.add(walls);
         fog = new FogOfWar(state.width, state.height);
         world.add(fog);
+        fatigue = new Group();
+        world.add(fatigue);
         world.add(new PointerArea(ground) {
             @Override
             protected void onClick(PointerEvent event) {
@@ -223,9 +225,21 @@ public final class InnPartyScene extends PixelScene {
 
     private void applyActors(InnOriginalParty.Snapshot state) {
         Set<Integer> present = new HashSet<>();
-        for (String row : state.actors.split(";")) {
+        Set<Integer> tiredActors = new HashSet<>();
+        String[] rows = state.actors.split(";");
+        for (String row : rows) {
+            if (!row.startsWith("!")) continue;
+            for (String id : row.substring(1).split(",")) {
+                try {
+                    tiredActors.add(Integer.parseInt(id));
+                } catch (NumberFormatException ignored) {
+                    // Skip invalid fatigue records.
+                }
+            }
+        }
+        for (String row : rows) {
             String[] columns = row.split(",", -1);
-            if (columns.length != 6) continue;
+            if (columns.length != 6 || row.startsWith("!")) continue;
             try {
                 int id = Integer.parseInt(columns[0]);
                 int cell = Integer.parseInt(columns[1]);
@@ -258,6 +272,7 @@ public final class InnPartyScene extends PixelScene {
                     }
                 }
                 view.sprite.alpha(hp == 0 ? 0.4f : 1f);
+                view.sprite.showInnMonsterSweat(kind == 2 && hp > 0 && tiredActors.contains(id), fatigue);
             } catch (NumberFormatException ignored) {
                 // Skip invalid actor records.
             }

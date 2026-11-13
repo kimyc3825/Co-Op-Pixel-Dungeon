@@ -48,6 +48,7 @@ import com.watabou.glwrap.Matrix;
 import com.watabou.glwrap.Vertexbuffer;
 import com.watabou.noosa.Camera;
 import com.watabou.noosa.Game;
+import com.watabou.noosa.Group;
 import com.watabou.noosa.MovieClip;
 import com.watabou.noosa.NoosaScript;
 import com.watabou.noosa.audio.Sample;
@@ -118,6 +119,7 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 	protected Flare aura;
 	
 	protected EmoIcon emo;
+	private EmoIcon.Sweat innMonsterSweat;
 	protected CharHealthIndicator health;
 
 	private Tweener jumpTweener;
@@ -169,10 +171,24 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 
 	@Override
 	public void destroy() {
+		if (innMonsterSweat != null) {
+			innMonsterSweat.killAndErase();
+			innMonsterSweat.destroy();
+			innMonsterSweat = null;
+		}
 		super.destroy();
 		if (ch != null && ch.sprite == this){
 			ch.sprite = null;
 		}
+	}
+
+	public void showInnMonsterSweat(boolean tired, Group effects) {
+		if (tired && innMonsterSweat == null) {
+			innMonsterSweat = new EmoIcon.Sweat(this, false);
+			if (effects == null) GameScene.add(innMonsterSweat);
+			else effects.add(innMonsterSweat);
+		}
+		if (innMonsterSweat != null) innMonsterSweat.active = innMonsterSweat.visible = tired;
 	}
 
 	//used for just updating a sprite based on a given character, not linking them or placing in the game
@@ -769,6 +785,7 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 	
 	@Override
 	public void kill() {
+		showInnMonsterSweat(false, null);
 		super.kill();
 		
 		hideEmo();
