@@ -4,16 +4,20 @@ package com.noxac.pixeldungeon.inn;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputAdapter;
+import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Chrome;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSprite;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
+import com.shatteredpixel.shatteredpixeldungeon.ui.Button;
+import com.shatteredpixel.shatteredpixeldungeon.ui.IconButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
-import com.shatteredpixel.shatteredpixeldungeon.ui.RedButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.ScrollPane;
+import com.shatteredpixel.shatteredpixeldungeon.ui.StyledButton;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndOptions;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndSettings;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndTitledMessage;
 import com.watabou.input.PointerEvent;
 import com.watabou.noosa.Camera;
 import com.watabou.noosa.ColorBlock;
@@ -21,6 +25,7 @@ import com.watabou.noosa.Game;
 import com.watabou.noosa.Gizmo;
 import com.watabou.noosa.Group;
 import com.watabou.noosa.Image;
+import com.watabou.noosa.NinePatch;
 import com.watabou.noosa.PointerArea;
 import com.watabou.noosa.TextInput;
 import com.watabou.noosa.ui.Component;
@@ -31,13 +36,14 @@ import java.util.function.IntConsumer;
 
 public final class NativeInnScene extends PixelScene {
     private static final int BACKGROUND = 0xff1b1515;
-    private static final int BORDER = 0xff6b4b3d;
-    private static final int FIELD = 0xe6221a19;
     private static final int GOLD = 0xefbb77;
     private static final int CREAM = 0xf9e5c8;
     private static final int MUTED = 0xcab29d;
     private static final int GREEN = 0xb1d496;
     private static final float EDGE = 8;
+    private static final int TOOL_HEIGHT = 26;
+    private static final int TOOL_CAPTION_HEIGHT = 9;
+    private static final int TOOLBAR_WIDTH = 64;
 
     private record PredictedStep(String playerId, InnMotion.Cell origin, InnMotion.Cell target) {
         boolean startsAt(InnApi.State state) {
@@ -57,13 +63,14 @@ public final class NativeInnScene extends PixelScene {
     private Group chatHud;
     private Group help;
     private InnButton profile;
-    private InnButton expeditions;
-    private InnButton drink;
+    private ToolbarButton expeditions;
+    private ToolbarButton drink;
     private InnButton compose;
     private InnButton send;
     private TextInput editor;
     private RenderedTextBlock presence;
     private RenderedTextBlock notice;
+    private RenderedTextBlock expeditionStatus;
     private LobbySession.Snapshot displayed;
     private List<InnApi.Event> displayedChat = List.of();
     private InnMotion.Cell destination;
@@ -90,41 +97,41 @@ public final class NativeInnScene extends PixelScene {
         float top = insets.top + EDGE;
         float right = w - insets.right - EDGE;
         float bottom = h - insets.bottom - EDGE;
-        boolean compactHud = right - left < 266;
+        boolean compactHud = right - left < 242;
         add(block(0, 0, w, h, BACKGROUND));
         board = new NativeInnBoard(0, 0, w, h,
             cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc);
         add(board);
 
-        add(block(left, top, 76, 26, FIELD));
-        add(block(left, top, 76, 1, BORDER));
-        add(label("여관", 11, GOLD, left + 5, top + 3));
-        presence = label("서버 연결 중", 6, MUTED, left + 5, top + 16);
+        add(chrome(Chrome.Type.TOAST_TR_HEAVY, left, top, 76, 26));
+        add(label("여관", 9, GOLD, left + 5, top + 4));
+        presence = label("서버 연결 중", 6, MUTED, left + 5, top + 15);
         add(presence);
-        button("F1 배낭", compactHud ? left : right - 150, compactHud ? top + 29 : top,
-            49, 17, Icons.BACKPACK.get(), this::openBackpack);
-        button("설정", compactHud ? left + 51 : right - 188, compactHud ? top + 29 : top,
-            36, 17, Icons.PREFS.get(), this::openSettings);
-        profile = button("모험가", right - 99, top, 47, 17, Icons.TALENT.get(), this::editProfile);
-        button("F8 도움말", right - 50, top, 50, 17, Icons.INFO.get(), this::toggleHelp);
+        button("F1 배낭", compactHud ? left : right - 123, compactHud ? top + 29 : top,
+            41, 16, Icons.BACKPACK.get(), this::openBackpack);
+        button("설정", compactHud ? left + 43 : right - 158, compactHud ? top + 29 : top,
+            33, 16, Icons.PREFS.get(), this::openSettings);
+        profile = button("모험가", right - 80, top, 36, 16, Icons.TALENT.get(), this::editProfile);
+        button("F8 도움말", right - 42, top, 42, 16, Icons.INFO.get(), this::toggleHelp);
 
-        float toolbarY = bottom - 18;
-        expeditions = button("원정", right - 52, toolbarY, 52, 18, Icons.STAIRS.get(), this::openExpeditions);
-        drink = button("술 한 잔", right - 94, toolbarY, 40, 18, new ItemSprite(ItemSpriteSheet.POTION_AMBER), () -> {
+        float toolbarY = bottom - TOOL_HEIGHT - TOOL_CAPTION_HEIGHT;
+        expeditions = tool("원정", right - 24, toolbarY, 0, 24, Icons.STAIRS.get(), this::openExpeditions);
+        drink = tool("술 한잔", right - 44, toolbarY, 24, 20, new ItemSprite(ItemSpriteSheet.POTION_AMBER), () -> {
             LobbySession session = NativeClient.inn();
             if (session != null) session.drink();
         });
-        button("대화", right - 130, toolbarY, 34, 18, Icons.NEWS.get(), this::toggleChat);
+        tool("대화", right - TOOLBAR_WIDTH, toolbarY, 44, 20, Icons.NEWS.get(), this::toggleChat);
+        expeditionStatus = label("", 6, GOLD, right - TOOLBAR_WIDTH, toolbarY - 11);
+        add(expeditionStatus);
 
         chatHud = new Group();
         add(chatHud);
         float chatWidth = Math.min(165, right - left);
         float chatHeight = Math.min(50, (bottom - top) * .28f);
         float chatY = toolbarY - chatHeight - 28;
-        ColorBlock chatBackdrop = block(left, chatY, chatWidth, chatHeight + 26, FIELD);
+        NinePatch chatBackdrop = chrome(Chrome.Type.TOAST_TR_HEAVY, left, chatY, chatWidth, chatHeight + 26);
         chatHud.add(chatBackdrop);
         chatHud.add(new PointerArea(chatBackdrop));
-        chatHud.add(block(left, chatY, chatWidth, 1, BORDER));
         chatHud.add(label("여관 대화", 7, GOLD, left + 4, chatY + 3));
         chatRows = new ChatRows(chatWidth - 10);
         chat = new ScrollPane(chatRows);
@@ -221,8 +228,8 @@ public final class NativeInnScene extends PixelScene {
             board.showState(state, history, testMode, visualStep == null ? null : visualStep.target(), NativeClient.appearance());
             replace(presence, online ? "접속 " + state.people().size() + "명" : profileConfirmed ? "서버 연결 중" : "프로필 설정");
             presence.hardlight(online ? GREEN : MUTED);
-            expeditions.caption(state != null && state.match() != null ? "연결 중" :
-                state != null && state.queued() ? "동료 찾는 중" : "원정");
+            replace(expeditionStatus, state != null && state.match() != null ? "연결 중" :
+                state != null && state.queued() ? "동료 찾는 중" : "");
             drink.enabled(online);
             compose.enabled(online);
             send.enabled(online);
@@ -457,7 +464,25 @@ public final class NativeInnScene extends PixelScene {
             openLessons(npc);
             return;
         }
-        showNpcWindow(npc, npc.name(), npc.dialogue(), selection -> {}, "닫기");
+        modalOpen = true;
+        add(new WndTitledMessage(NativeInnBoard.npcPortrait(npc.role()), npc.name(), npc.dialogue()) {
+            {
+                IconButton close = new IconButton(Icons.CLOSE.get()) {
+                    @Override
+                    protected void onClick() {
+                        hide();
+                    }
+                };
+                close.setRect(width - 15, 0, 15, 15);
+                add(close);
+            }
+
+            @Override
+            public void destroy() {
+                modalOpen = false;
+                super.destroy();
+            }
+        });
     }
 
     private void openLessons(InnApi.Npc npc) {
@@ -554,10 +579,9 @@ public final class NativeInnScene extends PixelScene {
 
     private Group buildHelp(float x, float y, float w) {
         Group overlay = new Group();
-        ColorBlock back = block(x, y, w, 81, 0xe96b4b3d);
+        NinePatch back = chrome(Chrome.Type.TOAST_TR_HEAVY, x, y, w, 81);
         overlay.add(back);
         overlay.add(new PointerArea(back));
-        overlay.add(block(x + 1, y + 1, w - 2, 79, 0xe6211918));
         overlay.add(label("조작 방법", 8, GOLD, x + 5, y + 4));
         overlay.add(label("이동  WASD / 방향키 / 숫자패드", 6, CREAM, x + 5, y + 16));
         overlay.add(label("대화  Enter · Esc 취소", 6, CREAM, x + 5, y + 26));
@@ -626,17 +650,36 @@ public final class NativeInnScene extends PixelScene {
     }
 
     private InnButton button(String text, float x, float y, float w, float h, Image icon, Runnable click) {
-        InnButton button = button(this, text, x, y, w, h, click);
-        icon.scale.set(0.65f);
+        InnButton button = button(this, Chrome.Type.GREY_BUTTON, text, x, y, w, h, click);
+        icon.scale.set(0.5f);
         button.icon(icon);
         return button;
     }
 
     private InnButton button(Group parent, String text, float x, float y, float w, float h, Runnable click) {
-        InnButton button = new InnButton(text, click);
+        return button(parent, Chrome.Type.RED_BUTTON, text, x, y, w, h, click);
+    }
+
+    private InnButton button(Group parent, Chrome.Type type, String text, float x, float y, float w, float h, Runnable click) {
+        InnButton button = new InnButton(type, text, click);
         parent.add(button);
         button.setRect(x, y, w, h);
         return button;
+    }
+
+    private ToolbarButton tool(String text, float x, float y, int sourceX, int sourceWidth, Image icon, Runnable click) {
+        ToolbarButton button = new ToolbarButton(text, sourceX, sourceWidth, icon, click);
+        add(button);
+        button.setRect(x, y, sourceWidth, TOOL_HEIGHT + TOOL_CAPTION_HEIGHT);
+        return button;
+    }
+
+    private static NinePatch chrome(Chrome.Type type, float x, float y, float w, float h) {
+        NinePatch panel = Chrome.get(type);
+        panel.x = x;
+        panel.y = y;
+        panel.size(w, h);
+        return panel;
     }
 
     private static ColorBlock block(float x, float y, float w, float h, int color) {
@@ -685,16 +728,12 @@ public final class NativeInnScene extends PixelScene {
         }
     }
 
-    private static final class InnButton extends RedButton {
+    private static final class InnButton extends StyledButton {
         private final Runnable click;
 
-        InnButton(String title, Runnable click) {
-            super(title, 7);
+        InnButton(Chrome.Type type, String title, Runnable click) {
+            super(type, title, 7);
             this.click = click;
-        }
-
-        void caption(String value) {
-            if (!value.equals(text())) text(value);
         }
 
         void enabled(boolean enabled) {
@@ -705,6 +744,58 @@ public final class NativeInnScene extends PixelScene {
         protected void onPointerDown() {
             PointerEvent.clearKeyboardThisPress = false;
             super.onPointerDown();
+        }
+
+        @Override
+        protected void onClick() {
+            if (visible && active) click.run();
+        }
+    }
+
+    private static final class ToolbarButton extends Button {
+        private final Image slot;
+        private final Image icon;
+        private final RenderedTextBlock caption;
+        private final Runnable click;
+
+        ToolbarButton(String title, int sourceX, int sourceWidth, Image icon, Runnable click) {
+            this.icon = icon;
+            this.click = click;
+            slot = new Image(Assets.Interfaces.TOOLBAR, sourceX, 0, sourceWidth, TOOL_HEIGHT);
+            caption = renderTextBlock(6, false);
+            caption.text(title);
+            caption.hardlight(CREAM);
+            add(slot);
+            add(icon);
+            add(caption);
+        }
+
+        @Override
+        protected void layout() {
+            super.layout();
+            if (slot == null) return;
+            slot.x = align(x + (width - slot.width()) / 2);
+            slot.y = y;
+            icon.x = align(centerX() - icon.width() / 2);
+            icon.y = align(y + (TOOL_HEIGHT - icon.height()) / 2);
+            caption.setPos(align(centerX() - caption.width() / 2), y + TOOL_HEIGHT + 1);
+        }
+
+        void enabled(boolean enabled) {
+            active = enabled;
+            icon.alpha(enabled ? 1f : 0.4f);
+            caption.alpha(enabled ? 1f : 0.4f);
+        }
+
+        @Override
+        protected void onPointerDown() {
+            PointerEvent.clearKeyboardThisPress = false;
+            slot.brightness(1.4f);
+        }
+
+        @Override
+        protected void onPointerUp() {
+            slot.resetColor();
         }
 
         @Override

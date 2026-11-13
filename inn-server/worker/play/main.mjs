@@ -18,7 +18,7 @@ const fields = Object.fromEntries([
   'chat-message', 'chat-send', 'chat-log', 'dungeon-panel', 'party', 'party-rules', 'queued', 'attack', 'shoot', 'eat', 'return',
   'touch-controls', 'touch-battle', 'touch-attack', 'touch-shoot', 'touch-eat', 'backpack', 'backpack-hint', 'backpack-use', 'attack-log', 'aim-hint',
   'dungeon-chat-log', 'dungeon-chat-message', 'dungeon-chat-send',
-  'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close', 'npc-lessons', 'npc-lessons-content',
+  'inn-dialogue', 'npc-name', 'npc-dialogue', 'npc-close', 'npc-options',
   'loading-overlay', 'loading-ember', 'loading-phase', 'loading-tip', 'loading-retry', 'loading-close',
   'original-launch', 'expedition-window', 'expedition-toggle', 'backpack-window', 'backpack-toggle', 'inn-backpack-toggle', 'chat-toggle', 'hud-scrim',
   'prepare-expedition', 'preparation-result', 'settings-dialog',
@@ -97,6 +97,7 @@ const profileFields = [
 ];
 const profileCard = fields['name-form'].closest('.profile-card');
 const settingsDialog = fields['settings-dialog'];
+const npcDialog = fields['inn-dialogue'];
 const layout = profileCard.closest('.layout');
 const gameWindows = [
   [fields['expedition-window'], fields['expedition-toggle']],
@@ -455,7 +456,7 @@ function toggleHeroStatus() {
 }
 
 function gameUiBlocksMovement() {
-  return profileCard.open || settingsDialog.open || gameWindows.some(([panel]) => !panel.hidden) ||
+  return profileCard.open || settingsDialog.open || npcDialog.open || gameWindows.some(([panel]) => !panel.hidden) ||
     [...party.values()].some(({ details }) => !details.hidden);
 }
 
@@ -605,25 +606,37 @@ function updateSeekers(state, ready) {
 }
 
 function showDialogue(npc) {
-  fields['inn-dialogue'].hidden = !npc;
-  if (!npc) return;
-  destination = null;
-  fields['inn-dialogue'].dataset.role = npc.role;
-  text(fields['npc-name'], npc.name);
-  text(fields['npc-dialogue'], npc.dialogue);
+  if (!npc) {
+    if (npcDialog.open) npcDialog.close();
+    return;
+  }
+  clearMovement();
+  npcDialog.dataset.role = npc.role;
   const lessons = Array.isArray(npc.lessons) ? npc.lessons : [];
-  const notes = lessons.map(({ title, text: content }) => {
-    const section = document.createElement('section');
-    const heading = document.createElement('h4');
-    const paragraph = document.createElement('p');
-    heading.textContent = title;
-    paragraph.textContent = content;
-    section.append(heading, paragraph);
-    return section;
-  });
-  fields['npc-lessons'].open = false;
-  fields['npc-lessons'].hidden = notes.length === 0;
-  fields['npc-lessons-content'].replaceChildren(...notes);
+  const showTopics = () => showDialoguePage(npc.name, '무엇이 궁금한가?', [
+    ...lessons.map(({ title, text: content }) => [title, () => showDialoguePage(title, content, [['뒤로', showTopics]])]),
+    ['뒤로', showIntro],
+  ]);
+  const showIntro = () => showDialoguePage(npc.name, npc.dialogue, lessons.length ? [['행동력과 전투 상태', showTopics]] : []);
+  showIntro();
+  if (!npcDialog.open) npcDialog.showModal();
+  fields['npc-name'].focus({ preventScroll: true });
+}
+
+function showDialoguePage(title, message, choices) {
+  text(fields['npc-name'], title);
+  text(fields['npc-dialogue'], message);
+  const options = fields['npc-options'];
+  options.replaceChildren(...choices.map(([label, select]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', select);
+    return button;
+  }));
+  options.hidden = choices.length === 0;
+  npcDialog.scrollTop = 0;
+  if (npcDialog.open) fields['npc-name'].focus({ preventScroll: true });
 }
 
 function talkNearby() {
@@ -1485,7 +1498,7 @@ for (const button of document.querySelectorAll('[data-open-settings]')) {
   });
 }
 document.addEventListener('keydown', (event) => {
-  if (settingsDialog.open) return;
+  if (settingsDialog.open || npcDialog.open) return;
   const editing = typing(event.target);
   const close = event.code === 'Escape' || event.key === 'Escape' ||
     (event.code === 'Backspace' || event.key === 'Backspace') && !editing;
@@ -1574,7 +1587,21 @@ for (const [id, action, returnFocus] of [
 }
 fields.return.addEventListener('click', () => void run('return', async () => { await play.returnToInn(); focusBoard(); }));
 fields['help-toggle'].addEventListener('click', toggleHelp);
-fields['npc-close'].addEventListener('click', () => { showDialogue(); focusBoard(); });
+fields['npc-close'].addEventListener('click', () => showDialogue());
+npcDialog.addEventListener('close', () => {
+  if (!npcDialog.open && !original.active && !profileCard.open) focusBoard();
+});
+let npcBackdropPressed = false;
+const npcBackdropHit = (event) => {
+  if (event.target !== npcDialog) return false;
+  const { left, top, right, bottom } = npcDialog.getBoundingClientRect();
+  return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
+};
+npcDialog.addEventListener('pointerdown', (event) => { npcBackdropPressed = npcBackdropHit(event); });
+npcDialog.addEventListener('click', (event) => {
+  if (npcBackdropPressed && npcBackdropHit(event)) showDialogue();
+  npcBackdropPressed = false;
+});
 fields['loading-retry'].addEventListener('click', () => {
   if (loading?.phase !== 'failed' || fields['loading-retry'].disabled) return;
   const { mode } = loading;
@@ -1701,7 +1728,7 @@ function movementCode(event) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (original.active || settingsDialog.open || event.defaultPrevented) return;
+  if (original.active || settingsDialog.open || npcDialog.open || event.defaultPrevented) return;
   const enter = event.key === 'Enter' || event.code === 'Enter' || event.code === 'NumpadEnter';
   const escape = event.key === 'Escape' || event.code === 'Escape' ||
     (event.key === 'Backspace' || event.code === 'Backspace') && !typing(event.target);
@@ -1765,7 +1792,6 @@ window.addEventListener('keydown', (event) => {
   }
   if (!play.frame && !event.repeat) {
     if (event.code === 'KeyF' && event.target === board.canvas) { event.preventDefault(); talkNearby(); return; }
-    if (escape && !fields['inn-dialogue'].hidden) { event.preventDefault(); showDialogue(); focusBoard(); return; }
   }
   if (event.code === 'KeyE' && !event.repeat && !isRuntimeLoading()) {
     event.preventDefault();
@@ -1797,7 +1823,7 @@ window.addEventListener('keydown', (event) => {
     stopAndRememberRoute();
     return;
   }
-  if (enter && !aimCell && !loading && fields['inn-dialogue'].hidden &&
+  if (enter && !aimCell && !loading &&
       !event.target?.closest?.('button, a, summary, [role="button"]')) {
     const input = fields[play.frame ? 'dungeon-chat-message' : 'chat-message'];
     if (!input.disabled) {

@@ -18,7 +18,7 @@
       <div class="top-actions">
         <button type="button" id="pause" class="hud-button" hidden>일시정지 <kbd>P</kbd></button>
         <button type="button" id="help-toggle" class="hud-button" aria-controls="help" aria-expanded="false" aria-keyshortcuts="F8">조작법 <kbd>F8</kbd></button>
-        <button type="button" class="hud-button" data-open-settings aria-controls="settings-dialog" aria-haspopup="dialog">설정</button>
+        <button type="button" id="inn-settings" class="hud-button" data-open-settings aria-controls="settings-dialog" aria-haspopup="dialog">설정</button>
       </div>
     </header>
 
@@ -47,18 +47,15 @@
               <div><dt>기타</dt><dd>Z 자동 이동 중단 · C 줍기</dd></div>
             </dl>
           </aside>
-          <aside id="inn-dialogue" class="inn-dialogue" aria-labelledby="npc-name" hidden>
+          <dialog id="inn-dialogue" class="inn-dialogue" aria-labelledby="npc-name" aria-describedby="npc-dialogue">
             <header class="npc-title">
               <span class="npc-portrait" aria-hidden="true"></span>
-              <h3 id="npc-name"></h3>
+              <h3 id="npc-name" tabindex="-1" autofocus></h3>
+              <button id="npc-close" class="npc-close" type="button" aria-label="대화 닫기"></button>
             </header>
-            <p id="npc-dialogue" aria-live="polite"></p>
-            <details id="npc-lessons" class="npc-lessons" hidden>
-              <summary>행동력과 전투 상태</summary>
-              <div id="npc-lessons-content"></div>
-            </details>
-            <button id="npc-close" type="button">닫기</button>
-          </aside>
+            <p id="npc-dialogue"></p>
+            <div id="npc-options" class="npc-options" hidden></div>
+          </dialog>
           <p id="battle-overlay" class="battle-overlay" hidden></p>
           <aside id="loading-overlay" class="loading-overlay" aria-labelledby="loading-phase" hidden>
             <div id="loading-ember" class="loading-ember" aria-hidden="true"></div>
@@ -159,7 +156,7 @@
             <div class="original-entry">
               <button id="original-launch" class="wide" type="button">원본 1인 저장</button>
               <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/tree/main/html" target="_blank" rel="noopener">웹판 소스 코드</a>
-              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.16.4/NoxacPixelDungeon-Inn-0.16.4-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.16.4</a>
+              <a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/download/inn-v0.16.5/NoxacPixelDungeon-Inn-0.16.5-win-x64.zip" target="_blank" rel="noopener">Windows 배포판 0.16.5</a>
             </div>
           </section>
 
@@ -227,11 +224,11 @@
       <h2 id="settings-heading">설정</h2>
       <button aria-label="닫기">×</button>
     </form>
-    <p>Noxac Pixel Dungeon 0.16.4</p>
+    <p>Noxac Pixel Dungeon 0.16.5</p>
     <p>이 게임은 Evan Debenham의 Shattered Pixel Dungeon 4.0.2를 기반으로 하며 GNU 일반 공중 사용 허가서(GPL) 버전 3 이상에 따라 배포됩니다.</p>
     <ul class="settings-links">
       <li><a href="/play/LICENSE.txt" target="_blank" rel="noopener">GPL 라이선스 전문</a></li>
-      <li><a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.16.4" target="_blank" rel="noopener">Noxac Pixel Dungeon 0.16.4 소스 코드</a></li>
+      <li><a href="https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.16.5" target="_blank" rel="noopener">Noxac Pixel Dungeon 0.16.5 소스 코드</a></li>
       <li><a href="https://github.com/00-Evan/shattered-pixel-dungeon" target="_blank" rel="noopener">Shattered Pixel Dungeon 원본 소스</a></li>
     </ul>
   </dialog>
