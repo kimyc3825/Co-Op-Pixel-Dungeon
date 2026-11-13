@@ -52,6 +52,8 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 
 공개 저장소의 `main`에 푸시하면 GitHub Actions가 웹 여관과 던전 런타임을 빌드해 Sites에 게시합니다. 브라우저에서 제공하는 여관의 소스는 `web-client/play`에 있습니다.
 
+[웹 배포 실행 기록](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/actions/workflows/deploy-web.yml)에서 배포가 완료됐는지 확인할 수 있습니다. Windows 패키지는 [GitHub Releases](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases)에 게시합니다.
+
 ## 네트워크와 전투
 
 Sites Worker와 D1이 여관 이동, 채팅, 파티 매칭, 링크 인증과 WebRTC 시그널링을 맡습니다. 같은 프로토콜의 참가자끼리 매칭합니다. Worker 소스와 운영 설정은 별도의 비공개 저장소에서 관리합니다.
