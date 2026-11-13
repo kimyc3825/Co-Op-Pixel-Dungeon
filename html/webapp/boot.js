@@ -50,9 +50,14 @@
 	var finished = false;
 	var exiting = false;
 	spd.prepareForDetach = function () { exiting = true; };
+	function releaseGameShortcut() {
+		if (!exiting && spd.onShortcutFocusLoss) spd.onShortcutFocusLoss();
+	}
+	window.addEventListener("blur", releaseGameShortcut);
 	document.addEventListener("visibilitychange", function (event) {
 		// Detaching the frame can dispatch this after the backend input has been disposed.
 		if (exiting) event.stopImmediatePropagation();
+		else if (document.hidden) releaseGameShortcut();
 	}, true);
 	function notifyParent(type, percent, reason) {
 		if (window.parent === window) return;

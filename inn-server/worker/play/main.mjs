@@ -639,12 +639,25 @@ function showDialoguePage(title, message, choices) {
   if (npcDialog.open) fields['npc-name'].focus({ preventScroll: true });
 }
 
-function talkNearby() {
+function hasExpeditionGate(map) {
+  return map?.[14]?.slice(22, 25) === 'DDD';
+}
+
+function interactNearby() {
   const state = play.inn;
   const self = state?.people.find((person) => person.id === state.selfId);
   if (!self || !play.online || play.battle || state.match) return;
+  const byGate = hasExpeditionGate(state.map) && self.x >= 21 && self.x <= 24 && self.y >= 13 && self.y <= 15;
+  if (byGate && state.map[self.y][self.x] === 'D') {
+    toggleGameWindow(0);
+    return;
+  }
   const npc = state.npcs?.find((person) => Math.max(Math.abs(person.x - self.x), Math.abs(person.y - self.y)) === 1);
-  if (npc) showDialogue(npc);
+  if (npc) {
+    showDialogue(npc);
+  } else if (byGate) {
+    toggleGameWindow(0);
+  }
 }
 
 function updateChat(log, events) {
@@ -1642,6 +1655,8 @@ board.canvas.addEventListener('click', (event) => {
     const npc = board.npcAt(px, py);
     if (id) void match(id);
     else if (npc && play.online && !play.battle && !play.inn?.match) showDialogue(npc);
+    else if (play.online && !play.battle && !play.inn?.match &&
+        hasExpeditionGate(play.inn?.map) && x >= 22 && x <= 24 && y >= 10 && y <= 15) toggleGameWindow(0);
     else if (['.', 'D'].includes(play.inn?.map[y]?.[x])) destination = [x, y];
     return;
   }
@@ -1791,7 +1806,7 @@ window.addEventListener('keydown', (event) => {
     return;
   }
   if (!play.frame && !event.repeat) {
-    if (event.code === 'KeyF' && event.target === board.canvas) { event.preventDefault(); talkNearby(); return; }
+    if (event.code === 'KeyF' && event.target === board.canvas) { event.preventDefault(); interactNearby(); return; }
   }
   if (event.code === 'KeyE' && !event.repeat && !isRuntimeLoading()) {
     event.preventDefault();

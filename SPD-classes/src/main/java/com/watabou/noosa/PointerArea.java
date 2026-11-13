@@ -109,7 +109,7 @@ public class PointerArea extends Visual implements Signal.Listener<PointerEvent>
 			if (event == null && curEvent != null) {
 				onDrag(curEvent);
 
-			} else if (curEvent != null &&
+			} else if (event != null && curEvent == event &&
 					(event.type == PointerEvent.Type.UP || event.type == PointerEvent.Type.CANCEL)) {
 				onPointerUp( event );
 				curEvent = null;

@@ -52,6 +52,7 @@ public final class InnPartyScene extends PixelScene {
     private final Set<GameAction> movement = new HashSet<>();
     private final Set<GameAction> tappedMovement = new HashSet<>();
     private final Signal.Listener<KeyEvent> keys = this::key;
+    private final Signal.Listener<KeyEvent> space = this::space;
     private final Signal.Listener<ScrollEvent> scrolling = event -> {
         if (showingMenu()) return true;
         Camera.main.zoom(Math.max(minZoom, Math.min(maxZoom, Camera.main.zoom - Math.signum(event.amount))));
@@ -122,6 +123,7 @@ public final class InnPartyScene extends PixelScene {
         timeButton.visible = timeButton.active = false;
         add(timeButton);
         KeyEvent.addKeyListener(keys);
+        KeyEvent.captureKey(Input.Keys.SPACE, space);
         ScrollEvent.addScrollListener(scrolling);
     }
 
@@ -382,11 +384,6 @@ public final class InnPartyScene extends PixelScene {
 
     private boolean key(KeyEvent event) {
         if (showingMenu()) return true;
-        if (event.code == Input.Keys.SPACE) {
-            if (event.pressed && !spaceHeld) toggleTime();
-            spaceHeld = event.pressed;
-            return true;
-        }
         GameAction action = KeyBindings.getActionForKey(event);
         if (action == SPDAction.N || action == SPDAction.NE || action == SPDAction.NW
                 || action == SPDAction.S || action == SPDAction.SE || action == SPDAction.SW
@@ -403,6 +400,14 @@ public final class InnPartyScene extends PixelScene {
             return true;
         }
         return false;
+    }
+
+    private boolean space(KeyEvent event) {
+        boolean firstPress = event.pressed && !spaceHeld;
+        spaceHeld = event.pressed;
+        if (KeyBindings.bindingKey) return false;
+        if (firstPress && !showingMenu()) toggleTime();
+        return true;
     }
 
     private void toggleTime() {
@@ -451,7 +456,6 @@ public final class InnPartyScene extends PixelScene {
         if (showingMenu()) return;
         movement.clear();
         tappedMovement.clear();
-        spaceHeld = false;
         add(new WndGame());
     }
 
@@ -463,8 +467,15 @@ public final class InnPartyScene extends PixelScene {
     }
 
     @Override
+    public void onPause() {
+        spaceHeld = false;
+        super.onPause();
+    }
+
+    @Override
     public void destroy() {
         KeyEvent.removeKeyListener(keys);
+        KeyEvent.releaseCapturedKey(space);
         ScrollEvent.removeScrollListener(scrolling);
         super.destroy();
     }

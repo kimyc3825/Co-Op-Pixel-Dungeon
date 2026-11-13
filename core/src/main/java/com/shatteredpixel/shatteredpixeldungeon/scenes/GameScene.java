@@ -221,6 +221,7 @@ public class GameScene extends PixelScene {
 
 	private Toolbar toolbar;
 	private final Signal.Listener<KeyEvent> atbKeys = this::handleAtbKey;
+	private final Signal.Listener<KeyEvent> atbSpace = this::handleAtbSpace;
 	private boolean atbSpaceHeld;
 	private Toast prompt;
 
@@ -572,7 +573,10 @@ public class GameScene extends PixelScene {
 		} else {
 			toolbar.setRect( insets.left, uiCamera.height - toolbar.height() - insets.bottom, uiCamera.width - insets.right, toolbar.height() );
 		}
-		if (InnAdventure.atb()) KeyEvent.addKeyListener(atbKeys);
+		if (InnAdventure.atb()) {
+			KeyEvent.addKeyListener(atbKeys);
+			KeyEvent.captureKey(Input.Keys.SPACE, atbSpace);
+		}
 
 		if (insets.bottom > 0){
 			SkinnedBlock bar = new SkinnedBlock(uiCamera.width, insets.bottom, TextureCache.createSolid(0x88000000));
@@ -783,9 +787,11 @@ public class GameScene extends PixelScene {
 				GameLog.wipe();
 				GLog.p(Messages.get(GameScene.class, "tutorial_move_desktop"));
 			}
-			toolbar.visible = toolbar.active = false;
-			status.visible = status.active = false;
-			if (inventory != null) inventory.visible = inventory.active = false;
+			if (!InnAdventure.atb()) {
+				toolbar.visible = toolbar.active = false;
+				status.visible = status.active = false;
+				if (inventory != null) inventory.visible = inventory.active = false;
+			}
 		}
 
 		if (!SPDSettings.intro() &&
@@ -823,6 +829,7 @@ public class GameScene extends PixelScene {
 	
 	public void destroy() {
 		KeyEvent.removeKeyListener(atbKeys);
+		KeyEvent.releaseCapturedKey(atbSpace);
 		
 		//tell the actor thread to finish, then wait for it to complete any actions it may be doing.
 		if (!waitForActorThread( 4500, true )){
@@ -864,6 +871,7 @@ public class GameScene extends PixelScene {
 	
 	@Override
 	public synchronized void onPause() {
+		atbSpaceHeld = false;
 		try {
 			if (InnAdventure.atb()) {
 				Actor.updateAtb(0, true);
@@ -1386,6 +1394,7 @@ public class GameScene extends PixelScene {
 	public static void endIntro(){
 		if (scene != null){
 			SPDSettings.intro(false);
+			if (InnAdventure.atb()) return;
 			scene.add(new Tweener(scene, 2f){
 				@Override
 				protected void updateValues(float progress) {
@@ -1539,13 +1548,16 @@ public class GameScene extends PixelScene {
 		return false;
 	}
 
+	private boolean handleAtbSpace(KeyEvent event) {
+		boolean firstPress = event.pressed && !atbSpaceHeld;
+		atbSpaceHeld = event.pressed;
+		if (KeyBindings.bindingKey) return false;
+		if (firstPress) toggleAtbTime();
+		return true;
+	}
+
 	private boolean handleAtbKey(KeyEvent event) {
 		if (!InnAdventure.atb() || Dungeon.hero == null) return false;
-		if (event.code == Input.Keys.SPACE) {
-			if (event.pressed && !atbSpaceHeld) toggleAtbTime();
-			atbSpaceHeld = event.pressed;
-			return true;
-		}
 		if (interfaceBlockingHero()) return false;
 		if (event.code == Input.Keys.Z) {
 			if (event.pressed) {

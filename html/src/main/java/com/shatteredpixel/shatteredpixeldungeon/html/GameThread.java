@@ -138,6 +138,7 @@ public class GameThread implements ApplicationListener {
 				gameInput = Gdx.input.getInputProcessor();
 				Gdx.input.setInputProcessor(inputQueue);
 				WebKeyboard.install(inputQueue);
+				WebJS.onShortcutFocusLoss(inputQueue::releaseShortcut);
 				WebJS.onReturnRequest(() -> queue(game::returnToInn));
 				//smoke test mode, see AutoTest and the ?autotest section of index.html
 				if (WebBuildConfig.VERSION.endsWith("-INDEV") && WebJS.queryParam("autotest") != null) AutoTest.setEnabled(true);

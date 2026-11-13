@@ -31,9 +31,16 @@ final class NativeInnBoard extends Group {
     private static final long SPEECH_MILLIS = 4_500;
     private static final String SIGN = "inn/looking-sign.png";
     private static final String NPC_SPRITES = "inn/inn-npcs.png";
-    private static final int[] FLOOR = {0x61432f, 0x65452f, 0x6b4832, 0x5b3e2e};
-    private static final int[][] CANDLES = {{3, 3}, {7, 5}, {11, 9}, {15, 11}, {19, 9}};
-    private static final int[][] PATRONS = {{4, 3}, {8, 5}, {20, 9}, {14, 11}};
+    private static final int[] FLOOR = {0x785039, 0x754b35, 0x80553b, 0x69452f};
+    private static final int[][] CANDLES = {{3, 7}, {3, 11}, {10, 8}, {12, 10}, {16, 9}, {19, 5}};
+    private static final int[][] PATRONS = {{4, 7}, {11, 8}, {13, 10}, {17, 9}};
+    private static final int[] BOTTLES = {0x456353, 0x806243, 0x6c4345, 0x8b6b49, 0x46525e};
+    private static final int[] STONE = {0x3d4950, 0x424b54, 0x333d46, 0x485158};
+    private static final int GATE_X = 344, GATE_Y = 164;
+    private static final int[][] LIGHTS = {
+        {120, 23, 93, 106}, {53, 116, 44, 49}, {53, 182, 47, 45}, {169, 133, 57, 53},
+        {200, 164, 51, 49}, {264, 146, 50, 48}, {312, 82, 100, 56}, {382, 211, 59, 65}, {200, 239, 69, 53}
+    };
     private static final int HEARTH_WIDTH = 24, HEARTH_HEIGHT = 12;
     private static final int CANDLE_WIDTH = 7, CANDLE_HEIGHT = 9;
     private static final int NOTE_WIDTH = 12, NOTE_HEIGHT = 12;
@@ -45,6 +52,7 @@ final class NativeInnBoard extends Group {
     private final Consumer<InnMotion.Cell> goTo;
     private final Consumer<String> join;
     private final Consumer<InnApi.Npc> speak;
+    private final Runnable openGate;
     private final Camera boardCamera;
     private final int viewportWidth;
     private final int viewportHeight;
@@ -70,17 +78,25 @@ final class NativeInnBoard extends Group {
     private int zoomStep = 1;
     private float fitZoom;
     private float wheelDelta;
+    private boolean hearthHall;
 
     NativeInnBoard(float left, float top, float width, float height,
                    Consumer<InnMotion.Cell> goTo, Consumer<String> join) {
-        this(left, top, width, height, goTo, join, npc -> {});
+        this(left, top, width, height, goTo, join, npc -> {}, () -> {});
     }
 
     NativeInnBoard(float left, float top, float width, float height,
                    Consumer<InnMotion.Cell> goTo, Consumer<String> join, Consumer<InnApi.Npc> speak) {
+        this(left, top, width, height, goTo, join, speak, () -> {});
+    }
+
+    NativeInnBoard(float left, float top, float width, float height,
+                   Consumer<InnMotion.Cell> goTo, Consumer<String> join, Consumer<InnApi.Npc> speak,
+                   Runnable openGate) {
         this.goTo = goTo;
         this.join = join;
         this.speak = speak;
+        this.openGate = openGate;
         Camera main = Camera.main;
         float screenLeft = main.x + (left - main.scroll.x) * main.zoom;
         float screenTop = main.y + (top - main.scroll.y) * main.zoom;
@@ -125,9 +141,24 @@ final class NativeInnBoard extends Group {
                         return;
                     }
                 }
+                if (isGateTile(column, row) || hearthHall && point.x >= GATE_X + 3 && point.x < GATE_X + 47
+                        && point.y >= GATE_Y + 1 && point.y < GATE_Y + 70) {
+                    openGate.run();
+                    return;
+                }
                 if (state.walkable(column, row)) goTo.accept(new InnMotion.Cell(column, row));
             }
         });
+    }
+
+    boolean nearGate() {
+        if (state == null || !hearthHall) return false;
+        InnApi.Person self = state.self();
+        return self.x() >= 21 && self.x() <= 24 && self.y() >= 13 && self.y() <= 15;
+    }
+
+    private boolean isGateTile(int x, int y) {
+        return hearthHall && x >= 22 && x <= 24 && y >= 14 && y <= 15 && tileAt(map, x, y) == 'D';
     }
 
     void zoom(int steps) {
@@ -309,32 +340,50 @@ final class NativeInnBoard extends Group {
         fitZoom = fit < 1f ? fit : (float) Math.floor(fit);
         applyZoom();
         floorKey = new Pixmap(mapWidth, mapHeight, Pixmap.Format.RGBA8888);
+        hearthHall = tileAt(rows, 7, 1) == 'B' && tileAt(rows, 19, 5) == 'B'
+            && tileAt(rows, 22, 15) == 'D';
         for (int y = 0; y < rows.size(); y++) {
-            for (int x = 0; x < columns; x++) paintTerrain(floorKey, x, y, rows.get(y).charAt(x));
+            for (int x = 0; x < columns; x++) {
+                char tile = rows.get(y).charAt(x);
+                paintTerrain(floorKey, x, y, tile, hearthHall && x >= 20 && y >= 10);
+            }
         }
-        if (tileAt(rows, 3, 3) == 'T' && tileAt(rows, 8, 5) == 'T') {
+        if (hearthHall) {
+            paintRug(floorKey, 5 * TILE, 2 * TILE + 5, 5 * TILE, 4 * TILE - 8);
+            paintRug(floorKey, 11 * TILE + 2, 13 * TILE + 6, 4 * TILE - 4, 2 * TILE - 7);
+        } else if (tileAt(rows, 3, 3) == 'T' && tileAt(rows, 8, 5) == 'T') {
             paintRug(floorKey, 3 * TILE - 2, 3 * TILE - 2, 6 * TILE + 4, 3 * TILE + 4);
         }
-        if (tileAt(rows, 10, 9) == 'T' && tileAt(rows, 15, 11) == 'T') {
+        if (!hearthHall && tileAt(rows, 10, 9) == 'T' && tileAt(rows, 15, 11) == 'T') {
             paintRug(floorKey, 10 * TILE - 2, 9 * TILE - 2, 7 * TILE + 4, 3 * TILE + 4);
         }
-        if (tileAt(rows, 11, 15) == 'D' && tileAt(rows, 14, 15) == 'D') {
+        if (!hearthHall && tileAt(rows, 11, 15) == 'D' && tileAt(rows, 14, 15) == 'D') {
             paintRug(floorKey, 11 * TILE, 13 * TILE + 2, 4 * TILE, 2 * TILE - 2);
         }
         for (int y = 0; y < rows.size(); y++) {
-            for (int x = 0; x < columns; x++) paintFurniture(floorKey, x, y, rows.get(y).charAt(x));
+            for (int x = 0; x < columns; x++) {
+                char tile = rows.get(y).charAt(x);
+                if (hearthHall && tile == 'B') {
+                    if (x >= 15 && y == 1) paintShelf(floorKey, x, y);
+                    if (x >= 15 && y == 5) paintCounter(floorKey, x, y);
+                } else if (!hearthHall || tile != 'D' || x < 20) {
+                    paintFurniture(floorKey, x, y, tile);
+                }
+            }
         }
-        rebuildDecorations(rows);
+        if (hearthHall) paintHallFeatures(floorKey);
+        rebuildDecorations(rows, hearthHall);
+        if (hearthHall) paintLighting(floorKey);
         floor = new Image(floorKey);
         world.addToBack(floor);
     }
 
     private static char tileAt(List<String> rows, int x, int y) {
-        if (y >= rows.size() || x >= rows.get(y).length()) return '\0';
+        if (y < 0 || x < 0 || y >= rows.size() || x >= rows.get(y).length()) return '\0';
         return rows.get(y).charAt(x);
     }
 
-    private void rebuildDecorations(List<String> rows) {
+    private void rebuildDecorations(List<String> rows, boolean hearthHall) {
         for (AmbientSprite sprite : animatedDecorations) {
             decorations.erase(sprite);
             sprite.destroy();
@@ -342,18 +391,22 @@ final class NativeInnBoard extends Group {
         animatedDecorations.clear();
         if (decorationKey == null) decorationKey = makeDecorationAtlas();
 
-        if (tileAt(rows, 18, 0) == '#' && tileAt(rows, 20, 0) == '#' && tileAt(rows, 19, 1) == '.') {
+        if (hearthHall) {
+            addDecoration(108, 15, 0, HEARTH_WIDTH, HEARTH_HEIGHT, 135, 0);
+            addDecoration(379, 193, CANDLE_ROW, CANDLE_WIDTH, CANDLE_HEIGHT, 175, 99);
+            addDecoration(223, 7, CANDLE_ROW, CANDLE_WIDTH, CANDLE_HEIGHT, 175, 45);
+        } else if (tileAt(rows, 18, 0) == '#' && tileAt(rows, 20, 0) == '#' && tileAt(rows, 19, 1) == '.') {
             int x = 18 * TILE + 3;
             paintHearth(floorKey, x);
             addDecoration(x + 9, 3, 0, HEARTH_WIDTH, HEARTH_HEIGHT, 135, 0);
         }
         for (int[] cell : CANDLES) {
             int x = cell[0], y = cell[1];
-            if (tileAt(rows, x, y) == 'T') {
+            if (tileAt(rows, x, y) == 'T' || hearthHall && x == 19 && y == 5) {
                 addDecoration(x * TILE + 9, y * TILE - 1, CANDLE_ROW, CANDLE_WIDTH, CANDLE_HEIGHT, 175, x * 67);
             }
         }
-        if (tileAt(rows, 16, 16) == '#' && tileAt(rows, 14, 15) == 'D') {
+        if (!hearthHall && tileAt(rows, 16, 16) == '#' && tileAt(rows, 14, 15) == 'D') {
             int x = 16 * TILE + 4, y = 16 * TILE + 2;
             fill(floorKey, x + 2, y + 3, 5, 8, 0x33211b);
             fill(floorKey, x + 4, y + 5, 1, 6, 0x875a3d);
@@ -440,9 +493,25 @@ final class NativeInnBoard extends Group {
         return portrait;
     }
 
-    private static void paintTerrain(Pixmap map, int column, int row, char kind) {
+    private static void paintTerrain(Pixmap map, int column, int row, char kind, boolean stone) {
         int x = column * TILE;
         int y = row * TILE;
+        if (stone) {
+            fill(map, x, y, 16, 16, 0x262e34);
+            for (int course = 0; course < 2; course++) {
+                int shift = ((row + course) & 1) * 4;
+                for (int start = x - shift; start < x + TILE; start += 8) {
+                    int left = Math.max(x, start + 1);
+                    int right = Math.min(x + TILE, start + 8);
+                    int top = y + course * 8;
+                    fill(map, left, top + 1, right - left, 7,
+                        STONE[Math.floorMod(column + row * 3 + course + start / 8, STONE.length)]);
+                    fill(map, left, top + 1, right - left, 1, kind == '#' ? 0x62696d : 0x555b60);
+                }
+            }
+            if (kind == '#') fill(map, x, y + 14, 16, 2, 0x212729);
+            return;
+        }
         if (kind == '#') {
             fill(map, x, y, 16, 16, 0x2d2221);
             for (int course = 0; course < 3; course++) {
@@ -461,11 +530,151 @@ final class NativeInnBoard extends Group {
         }
         fill(map, x, y, 16, 16, FLOOR[(column + row * 3) % FLOOR.length]);
         for (int plank = 0; plank < 4; plank++) {
-            int seam = (3 + column * 7 + row * 5 + plank * 11) % 15;
-            fill(map, x, y + 4 * plank, 16, 1, 0x452f24);
-            fill(map, x + seam, y + 4 * plank + 1, 1, 3, 0x503526);
-            fill(map, x + (seam + 7) % 13, y + 4 * plank + 2, 3, 1, 0x75533b);
+            int seam = (3 + column * 11 + row * 5 + plank * 13) % 16;
+            fill(map, x, y + 4 * plank, 16, 1, 0x412b24);
+            if ((column + plank) % 3 != 0) fill(map, x + seam, y + 4 * plank + 1, 1, 3, 0x51362a);
+            fill(map, x + (seam + 7) % 12, y + 4 * plank + 2, 3, 1, 0x80583c);
         }
+    }
+
+    private static void paintHallFeatures(Pixmap map) {
+        paintWindow(map, 37, 5);
+        paintHallHearth(map);
+        paintBanner(map, 175, 8);
+        paintPlaques(map, 200, 9);
+        paintGate(map);
+    }
+
+    private static void paintWindow(Pixmap map, int x, int y) {
+        fill(map, x + 3, y + 1, 19, 23, 0x24202a);
+        fill(map, x + 6, y, 13, 24, 0x67636a);
+        fill(map, x + 4, y + 5, 17, 17, 0x747478);
+        fill(map, x + 6, y + 6, 13, 14, 0x172632);
+        fill(map, x + 8, y + 3, 9, 5, 0x253e4c);
+        fill(map, x + 7, y + 13, 11, 1, 0x547080);
+        fill(map, x + 12, y + 3, 1, 17, 0x747478);
+        fill(map, x + 8, y + 9, 1, 2, 0x819dad);
+        fill(map, x + 1, y + 22, 23, 2, 0x75685b);
+    }
+
+    private static void paintHallHearth(Pixmap map) {
+        int x = 94;
+        fill(map, x, 4, 51, 34, 0x302323);
+        fill(map, x + 2, 7, 47, 26, 0x7b665b);
+        for (int y = 8; y < 30; y += 5) {
+            fill(map, x + 3, y, 45, 1, 0x50433d);
+            fill(map, x + 4 + (y % 3) * 3, y + 1, 7, 3, 0x947d69);
+            fill(map, x + 37 - (y % 3) * 3, y + 1, 7, 3, 0xa28a73);
+        }
+        fill(map, x + 12, 16, 27, 14, 0x2a1917);
+        fill(map, x + 15, 13, 21, 5, 0x39201b);
+        fill(map, x, 5, 51, 4, 0xac8971);
+        fill(map, x, 7, 51, 2, 0x776052);
+        fill(map, x + 4, 30, 43, 3, 0x9c7d68);
+        fill(map, x + 8, 33, 35, 3, 0x554337);
+        fill(map, x + 9, 1, 4, 4, 0xd3ae70);
+        fill(map, x + 39, 1, 4, 4, 0xcfa97b);
+    }
+
+    private static void paintBanner(Pixmap map, int x, int y) {
+        fill(map, x, y, 22, 2, 0x8b6141);
+        fill(map, x + 3, y + 2, 16, 21, 0x672928);
+        fill(map, x + 5, y + 3, 12, 19, 0x8d382f);
+        fill(map, x + 3, y + 18, 2, 7, 0x452222);
+        fill(map, x + 17, y + 18, 2, 7, 0x452222);
+        fill(map, x + 8, y + 7, 6, 1, 0xd39952);
+        fill(map, x + 10, y + 5, 2, 10, 0xd39952);
+        fill(map, x + 8, y + 15, 6, 1, 0xc18243);
+    }
+
+    private static void paintPlaques(Pixmap map, int x, int y) {
+        for (int i = 0; i < 3; i++) {
+            int left = x + i * 8;
+            fill(map, left, y, 7, 7, 0x8f6846);
+            fill(map, left + 1, y + 1, 5, 5, 0xb58d5d);
+            fill(map, left + 2, y + 2, 3, 1, 0x654634);
+            fill(map, left + 2, y + 4, 3, 1, 0x674837);
+        }
+    }
+
+    private static void paintShelf(Pixmap map, int column, int row) {
+        int x = column * TILE, y = row * TILE;
+        fill(map, x, y - 6, 16, 21, 0x2d231e);
+        fill(map, x, y - 5, 16, 1, 0x8b654a);
+        for (int shelf = 0; shelf < 2; shelf++) {
+            int base = y + shelf * 8;
+            for (int i = 0; i < 3; i++) {
+                int bx = x + 2 + i * 4;
+                int height = 4 + ((column + i + shelf) & 1);
+                int color = BOTTLES[(column + i * 2 + shelf) % BOTTLES.length];
+                fill(map, bx + 1, base - height, 1, 2, color);
+                fill(map, bx, base - height + 2, 3, height - 2, color);
+                fill(map, bx + 1, base - 2, 1, 1, 0xb29364);
+            }
+            fill(map, x, base, 16, 2, 0x8b6243);
+        }
+        fill(map, x, y + 12, 16, 1, 0xb17e50);
+    }
+
+    private static void paintCounter(Pixmap map, int column, int row) {
+        int x = column * TILE, y = row * TILE;
+        fill(map, x, y + 4, 16, 12, 0x442c23);
+        fill(map, x, y + 3, 16, 7, 0xa67245);
+        fill(map, x, y + 3, 16, 1, 0xd39a60);
+        fill(map, x, y + 9, 16, 1, 0x624431);
+        fill(map, x + 1, y + 11, 14, 3, 0x775039);
+        if ((column & 1) == 0) {
+            fill(map, x + 4, y + 4, 3, 4, 0xd8bc83);
+            fill(map, x + 7, y + 5, 2, 2, 0xb38a5e);
+        }
+    }
+
+    private static void paintGate(Pixmap map) {
+        int x = GATE_X, y = GATE_Y;
+        fill(map, x, y + 12, 51, 56, 0x1a2928);
+        fill(map, x + 2, y + 4, 47, 14, 0x5e655d);
+        fill(map, x + 7, y, 37, 7, 0x555c55);
+        fill(map, x + 8, y + 3, 35, 3, 0x858374);
+        fill(map, x + 6, y + 13, 39, 48, 0x203930);
+        for (int rung = 0; rung < 8; rung++) {
+            int step = y + 27 + rung * 5;
+            fill(map, x + 8, step, 35, 4, (rung & 1) == 0 ? 0x2b413a : 0x344941);
+            fill(map, x + 8, step, 35, 1, 0x65766b);
+        }
+        fill(map, x + 4, y + 17, 4, 54, 0x686d64);
+        fill(map, x + 43, y + 17, 4, 54, 0x686d64);
+        for (int bar = 0; bar < 6; bar++) {
+            fill(map, x + 9 + bar * 6, y + 12, 2, 17, 0x77827a);
+            fill(map, x + 10 + bar * 6, y + 14, 1, 13, 0x46554e);
+        }
+        fill(map, x + 10, y + 24, 31, 1, 0x67776b);
+        fill(map, x + 20, y + 4, 10, 7, 0x796953);
+        fill(map, x + 23, y + 6, 4, 3, 0xb6a37e);
+    }
+
+    private static void paintLighting(Pixmap map) {
+        map.setBlending(Pixmap.Blending.None);
+        for (int y = 0; y < map.getHeight(); y++) {
+            for (int x = 0; x < map.getWidth(); x++) {
+                float warm = 0;
+                for (int[] lamp : LIGHTS) {
+                    float dx = (x - lamp[0]) / (float) lamp[2];
+                    float dy = (y - lamp[1]) / (float) lamp[3];
+                    warm = Math.max(warm, 1f - dx * dx - dy * dy);
+                }
+                float dx = (x - 369) / 68f, dy = (y - 205) / 75f;
+                float cool = Math.max(0, 1f - dx * dx - dy * dy);
+                float ambient = 0.35f + Math.max(warm * 0.54f, cool * 0.43f);
+                float edge = Math.min(Math.min(x, map.getWidth() - 1 - x), Math.min(y, map.getHeight() - 1 - y));
+                ambient *= 0.72f + Math.min(1, edge / 15f) * 0.28f;
+                int pixel = map.getPixel(x, y);
+                int red = Math.min(255, Math.round(((pixel >>> 24) & 255) * ambient + 35 * warm + 3 * cool));
+                int green = Math.min(255, Math.round(((pixel >>> 16) & 255) * ambient + 20 * warm + 9 * cool));
+                int blue = Math.min(255, Math.round(((pixel >>> 8) & 255) * ambient + 7 * warm + 13 * cool));
+                map.drawPixel(x, y, red << 24 | green << 16 | blue << 8 | 255);
+            }
+        }
+        map.setBlending(Pixmap.Blending.SourceOver);
     }
 
     private static void paintFurniture(Pixmap map, int column, int row, char kind) {
@@ -504,6 +713,21 @@ final class NativeInnBoard extends Group {
             for (int i = 9; i < width - 5; i += 8) {
                 fill(map, x + i, y + j - 1, 1, 3, 0x864841);
                 fill(map, x + i - 1, y + j, 3, 1, 0x864841);
+            }
+        }
+        if (height > 45) {
+            int cx = x + width / 2, cy = y + height / 2;
+            for (int offset = -10; offset <= 10; offset++) {
+                int half = 16 - Math.abs(offset) * 3 / 2;
+                fill(map, cx - half, cy + offset, half * 2 + 1, 1, 0xab6945);
+                if (half > 4) fill(map, cx - half + 2, cy + offset, half * 2 - 3, 1, 0x733b33);
+                if (half > 10) fill(map, cx - half + 7, cy + offset, half * 2 - 13, 1, 0xbb7748);
+            }
+            for (int side : new int[]{-1, 1}) {
+                for (int offset = -5; offset <= 5; offset++) {
+                    int half = 6 - Math.abs(offset);
+                    fill(map, cx + side * 25 - half, cy + offset, half * 2 + 1, 1, 0x9c583c);
+                }
             }
         }
     }

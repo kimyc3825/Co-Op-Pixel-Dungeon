@@ -3,7 +3,7 @@ import { BattleRules, PRISON } from './rules.mjs';
 import { runtimeImage } from './runtime-loader.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
 import { INN_MOVE_MS } from './session.mjs';
-import { animateInn, bardNotes, decorateInn, innRug } from './inn-decor.mjs';
+import { animateInn, bardNotes, decorateInn, innTile } from './inn-decor.mjs';
 
 const TILE = 32;
 const ATLAS_TILE = 16;
@@ -97,64 +97,6 @@ function assetPath(name, version) {
 function paint(context, color, x, y, width, height) {
   context.fillStyle = color;
   context.fillRect(x, y, width, height);
-}
-
-function innTile(context, map, x, y) {
-  const px = x * TILE;
-  const py = y * TILE;
-  const box = (color, left, top, width, height) => paint(context, color, px + left, py + top, width, height);
-  const shade = (x * 17 + y * 13) % 7;
-  const tile = map[y][x];
-  if (tile === '#') {
-    box('#352e26', 0, 0, 32, 32);
-    box('#4e4639', 0, 0, 32, 8);
-    box('#50473a', 0, 10, 32, 8);
-    box('#453e32', 0, 20, 32, 8);
-    for (let row = 0; row < 3; row++) {
-      const seam = (row % 2) * 8;
-      box('#352d25', seam, row * 10, 2, 8);
-      box('#352d25', 16 + seam, row * 10, 2, 8);
-    }
-    box('#8c6541', 0, 28, 32, 2);
-    box('#2c2019', 0, 30, 32, 2);
-    if (y === 0 && (x === 2 || x === 9)) {
-      box('#241b16', 10, 5, 12, 19);
-      box('#a2764c', 11, 8, 10, 12);
-      box('#d69c55', 13, 8, 6, 12);
-      box('#ffe79d', 15, 9, 3, 8);
-      box('#513824', 9, 20, 14, 3);
-    }
-    return;
-  }
-  box(['#61432f', '#65452f', '#6b4832', '#5b3e2e'][shade % 4], 0, 0, 32, 32);
-  for (let row = 0; row < 4; row++) {
-    box('#493426', 0, row * 8 + 7, 32, 1);
-    box('#78533b', 0, row * 8, 32, 1);
-    box('#493426', (shade * 3 + row * 13) % 31, row * 8 + 1, 1, 6);
-  }
-  innRug(context, x, y);
-  if (tile === 'D') {
-    box('#392c22', 0, 17, 32, 15);
-    box('#87644c', 0, 19, 32, 4);
-    box('#99825b', 0, 22, 32, 2);
-    return;
-  }
-  if (tile !== 'B' && tile !== 'T') return;
-  const left = map[y][x - 1] === tile ? 0 : 2;
-  const right = map[y][x + 1] === tile ? 32 : 30;
-  const top = tile === 'B' ? 2 : 5;
-  box('#35241e', left, top + 4, right - left, 25);
-  box('#94643f', left, top, right - left, 20);
-  box('#b28153', left, top, right - left, 3);
-  box('#70452e', left, top + 16, right - left, 3);
-  box('#583626', left, top + 21, right - left, 4);
-  if (shade % 2 === 0) {
-    box('#dfc89a', 12, top + 6, 8, 6);
-    box('#a97742', 14, top + 7, 4, 3);
-  } else {
-    box('#472f22', 20, top + 6, 7, 7);
-    box('#dca46b', 21, top + 6, 4, 5);
-  }
 }
 
 function tileArt(context, image, column, row, x, y, size) {

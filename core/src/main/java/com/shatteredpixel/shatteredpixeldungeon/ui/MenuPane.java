@@ -24,6 +24,7 @@ package com.shatteredpixel.shatteredpixeldungeon.ui;
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Challenges;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
+import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.items.Item;
@@ -380,7 +381,9 @@ public class MenuPane extends Component {
 		protected void createChildren() {
 			super.createChildren();
 
-			image = new Image( Assets.Interfaces.MENU_BTN, 17, 2, 12, 11 );
+			boolean inn = Game.instance instanceof ShatteredPixelDungeon
+					&& ((ShatteredPixelDungeon) Game.instance).runExitLabel() != null;
+			image = inn ? Icons.PREFS.get() : new Image(Assets.Interfaces.MENU_BTN, 17, 2, 12, 11);
 			add( image );
 		}
 
@@ -389,7 +392,8 @@ public class MenuPane extends Component {
 			super.layout();
 
 			image.x = x + 2;
-			image.y = y + 8;
+			image.y = y + (21 - image.height()) / 2f + 2;
+			PixelScene.align(image);
 		}
 
 		@Override

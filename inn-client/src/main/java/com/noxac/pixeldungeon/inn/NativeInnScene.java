@@ -100,7 +100,8 @@ public final class NativeInnScene extends PixelScene {
         boolean compactHud = right - left < 242;
         add(block(0, 0, w, h, BACKGROUND));
         board = new NativeInnBoard(0, 0, w, h,
-            cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc);
+            cell -> { if (editor == null && !modalOpen) destination = cell; }, this::joinSeeking, this::speakToNpc,
+            this::openExpeditions);
         add(board);
 
         add(chrome(Chrome.Type.TOAST_TR_HEAVY, left, top, 76, 26));
@@ -169,6 +170,8 @@ public final class NativeInnScene extends PixelScene {
                 openBackpack();
             } else if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) && !altHeld()) {
                 openComposer();
+            } else if (Gdx.input.isKeyJustPressed(Input.Keys.F) && board.nearGate()) {
+                openExpeditions();
             } else {
                 if (Gdx.input.isKeyJustPressed(Input.Keys.F8)) toggleHelp();
                 if (Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) destination = null;

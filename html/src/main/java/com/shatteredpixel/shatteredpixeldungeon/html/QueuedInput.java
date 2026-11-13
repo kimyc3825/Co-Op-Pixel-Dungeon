@@ -22,6 +22,7 @@
 package com.shatteredpixel.shatteredpixeldungeon.html;
 
 import com.badlogic.gdx.InputProcessor;
+import com.watabou.input.KeyEvent;
 
 import java.util.ArrayList;
 
@@ -52,6 +53,10 @@ public class QueuedInput implements InputProcessor {
 	private void add( Event e ){
 		received++;
 		events.add(e);
+	}
+
+	public void releaseShortcut() {
+		add(p -> KeyEvent.releaseKeyOnFocusLoss());
 	}
 
 	@Override

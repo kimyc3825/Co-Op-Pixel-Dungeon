@@ -30,10 +30,16 @@ public class KeyEvent {
 	
 	public int code;
 	public boolean pressed;
+	private final boolean focusRelease;
 	
 	public KeyEvent( int code, boolean pressed ) {
+		this(code, pressed, false);
+	}
+
+	private KeyEvent(int code, boolean pressed, boolean focusRelease) {
 		this.code = code;
 		this.pressed = pressed;
+		this.focusRelease = focusRelease;
 	}
 	
 	// **********************
@@ -41,6 +47,26 @@ public class KeyEvent {
 	// **********************
 	
 	private static Signal<KeyEvent> keySignal = new Signal<>( true );
+	private static int capturedKey;
+	private static Signal.Listener<KeyEvent> capturedListener;
+
+	/** A scene shortcut which receives its physical key before configurable actions. */
+	public static synchronized void captureKey(int code, Signal.Listener<KeyEvent> listener) {
+		capturedKey = code;
+		capturedListener = listener;
+	}
+
+	public static synchronized void releaseCapturedKey(Signal.Listener<KeyEvent> listener) {
+		if (capturedListener == listener) capturedListener = null;
+	}
+
+	static synchronized boolean captures(int code) {
+		return capturedListener != null && capturedKey == code;
+	}
+
+	public static synchronized void releaseKeyOnFocusLoss() {
+		if (capturedListener != null) addKeyEvent(new KeyEvent(capturedKey, false, true));
+	}
 	
 	public static void addKeyListener( Signal.Listener<KeyEvent> listener ){
 		keySignal.add(listener);
@@ -67,6 +93,8 @@ public class KeyEvent {
 		}
 
 		for (KeyEvent k : keyEvents){
+			if (captures(k.code) && capturedListener.onSignal(k)) continue;
+			if (k.focusRelease) continue;
 			if (KeyBindings.getActionForKey(k) == GameAction.LEFT_CLICK){
 				Game.inputHandler.emulateTouch(ControllerHandler.CONTROLLER_POINTER_ID, PointerEvent.LEFT, k.pressed);
 				if (KeyBindings.bindingKey) keySignal.dispatch(k);

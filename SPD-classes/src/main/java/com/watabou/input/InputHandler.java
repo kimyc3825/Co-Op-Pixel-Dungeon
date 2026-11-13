@@ -137,7 +137,7 @@ public class InputHandler extends InputAdapter {
 	
 	@Override
 	public synchronized boolean keyDown( int keyCode ) {
-		if (KeyBindings.isKeyBound( keyCode )) {
+		if (KeyEvent.captures(keyCode) || KeyBindings.isKeyBound( keyCode )) {
 			KeyEvent.addKeyEvent( new KeyEvent( keyCode, true ) );
 			return true;
 		} else {
@@ -147,7 +147,7 @@ public class InputHandler extends InputAdapter {
 	
 	@Override
 	public synchronized boolean keyUp( int keyCode ) {
-		if (KeyBindings.isKeyBound( keyCode )) {
+		if (KeyEvent.captures(keyCode) || KeyBindings.isKeyBound( keyCode )) {
 			KeyEvent.addKeyEvent( new KeyEvent( keyCode, false ) );
 			return true;
 		} else {

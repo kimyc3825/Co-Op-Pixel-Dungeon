@@ -136,6 +136,9 @@ public class WebJS {
 			+ " && event.data && event.data.type === 'noxac-original-return-request') callback(); });")
 	public static native void onReturnRequest(Callback callback);
 
+	@JSBody(params = "callback", script = "window.spd = window.spd || {}; window.spd.onShortcutFocusLoss = callback;")
+	public static native void onShortcutFocusLoss(Callback callback);
+
 	@JSBody(params = "data", script = "if (window.parent !== window) window.parent.postMessage("
 			+ "{type: 'noxac-original-party-send', data: data}, location.origin);")
 	public static native void sendPartyPayload(String data);

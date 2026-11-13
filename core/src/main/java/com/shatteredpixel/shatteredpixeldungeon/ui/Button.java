@@ -54,6 +54,13 @@ public class Button extends Component {
 		hotArea = new PointerArea( 0, 0, 0, 0 ) {
 			@Override
 			protected void onPointerDown( PointerEvent event ) {
+				if (!tracksLongClick()) {
+					if (curEvent == event) {
+						clickReady = true;
+						Button.this.onPointerDown();
+					}
+					return;
+				}
 				pressedButton = Button.this;
 				pressTime = 0;
 				clickReady = true;
@@ -61,6 +68,10 @@ public class Button extends Component {
 			}
 			@Override
 			protected void onPointerUp( PointerEvent event ) {
+				if (!tracksLongClick()) {
+					if (curEvent == event) Button.this.onPointerUp();
+					return;
+				}
 				if (pressedButton == Button.this){
 					pressedButton = null;
 				} else {
