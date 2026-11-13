@@ -168,6 +168,8 @@ public class CellSelector extends ScrollArea {
 		}
 		if (enabled && Dungeon.hero.ready && !GameScene.interfaceBlockingHero()
 				&& listener != null && cell != -1) {
+			if (Dungeon.hero.innExhausted() && !GameScene.isDefaultCellListener(listener)
+					&& button != PointerEvent.RIGHT) return;
 
 			switch (button){
 				default:

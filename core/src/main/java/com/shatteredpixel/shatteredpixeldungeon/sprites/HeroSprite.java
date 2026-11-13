@@ -171,8 +171,8 @@ public class HeroSprite extends CharSprite {
 		super.update();
 
 		itemRejectionLeft = Math.max(0f, itemRejectionLeft - Game.elapsed);
-		boolean tired = visible && hero.isAlive() && hero.innAtbActive() && (hero.waitingForInnAtbEnergy()
-				|| itemRejectionLeft > 0f && !InnAtb.canSpend(rejectedItemCost));
+		boolean tired = visible && hero.isAlive() && (hero.waitingForInnAtbEnergy()
+				|| hero.innAtbActive() && itemRejectionLeft > 0f && !InnAtb.canSpend(rejectedItemCost));
 		if (tired && sweat == null) {
 			sweat = new EmoIcon.Sweat(this);
 		}

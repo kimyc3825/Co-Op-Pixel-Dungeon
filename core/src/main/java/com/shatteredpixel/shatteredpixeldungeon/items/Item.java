@@ -186,6 +186,18 @@ public class Item implements Bundlable {
 			execute(hero, defaultAction());
 		}
 	}
+
+	public final boolean executeFromUi(Hero hero) {
+		if (hero.innExhausted()) return false;
+		execute(hero);
+		return true;
+	}
+
+	public final boolean executeFromUi(Hero hero, String action) {
+		if (hero.innExhausted()) return false;
+		execute(hero, action);
+		return true;
+	}
 	
 	protected void onThrow( int cell ) {
 		Heap heap = Dungeon.level.drop( this, cell );

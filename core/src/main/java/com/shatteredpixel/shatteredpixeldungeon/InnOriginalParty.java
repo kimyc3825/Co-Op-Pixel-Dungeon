@@ -198,6 +198,11 @@ public final class InnOriginalParty {
 
     public Snapshot latest() { return incoming; }
 
+    public boolean awaitingTimeChange() {
+        Snapshot state = incoming;
+        return state != null && guestTimeSequence > state.timeAck;
+    }
+
     public boolean[] explored() { return explored; }
 
     public void command(String kind, int first, int second) {
@@ -264,13 +269,14 @@ public final class InnOriginalParty {
         StringBuilder fatigue = new StringBuilder();
         appendActor(actors, Dungeon.hero, Dungeon.hero.heroClass.name(), 1, Dungeon.hero.pos);
         appendActor(actors, member, peer.heroClass().name(), 1, member.isAlive() ? member.pos : level.entrance());
+        if (Dungeon.hero.isAlive() && Dungeon.hero.innExhausted()) appendFatigue(fatigue, Dungeon.hero);
+        if (member.innExhausted()) appendFatigue(fatigue, member);
         for (Mob mob : level.mobs.toArray(new Mob[0])) {
             if (mob != member && mob.isAlive() && visible[mob.pos] && mob.sprite != null) {
                 appendActor(actors, mob, mob.sprite.getClass().getName(),
                         mob.alignment == Char.Alignment.ENEMY ? 2 : 0, mob.pos);
                 if (mob.alignment == Char.Alignment.ENEMY && mob.innExhausted()) {
-                    if (fatigue.length() > 0) fatigue.append(',');
-                    fatigue.append(mob.id());
+                    appendFatigue(fatigue, mob);
                 }
             }
         }
@@ -306,6 +312,11 @@ public final class InnOriginalParty {
         if (result.length() > 0) result.append(';');
         result.append(ch.id()).append(',').append(cell).append(',').append(Math.max(0, ch.HP)).append(',')
                 .append(ch.HT).append(',').append(kind).append(',').append(sprite);
+    }
+
+    private static void appendFatigue(StringBuilder result, Char ch) {
+        if (result.length() > 0) result.append(',');
+        result.append(ch.id());
     }
 
     static String encodeTiles(int[] tiles) {

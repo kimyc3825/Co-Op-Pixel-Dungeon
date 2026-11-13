@@ -179,8 +179,7 @@ public class Toolbar extends Component {
 								});
 							} else {
 
-								item.execute(Dungeon.hero);
-								if (item.usesTargeting) {
+								if (item.executeFromUi(Dungeon.hero) && item.usesTargeting) {
 									QuickSlotButton.useTargeting(idx);
 								}
 							}
@@ -229,8 +228,13 @@ public class Toolbar extends Component {
 				return Messages.titleCase(Messages.get(WndKeyBindings.class, "wait"));
 			}
 
+			@Override
+			protected boolean tracksLongClick() {
+				return !InnAdventure.atb();
+			}
+
+			@Override
 			protected boolean onLongClick() {
-				if (InnAdventure.atb()) return false;
 				if (Dungeon.hero != null && Dungeon.hero.ready && !GameScene.cancel()) {
 					examining = false;
 					Dungeon.hero.rest(true);
@@ -505,7 +509,7 @@ public class Toolbar extends Component {
 									super.onSelect(idx, alt);
 									Item item = items.get(idx);
 									if (alt && item.defaultAction() != null) {
-										item.execute(Dungeon.hero);
+										item.executeFromUi(Dungeon.hero);
 									} else {
 										InventoryPane.clearTargetingSlot();
 										Game.scene().addToFront(new WndUseItem(null, item));

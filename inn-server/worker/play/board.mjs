@@ -242,6 +242,7 @@ export class Board {
     this.canvas = canvas;
     this.context = canvas.getContext('2d');
     this.figures = new Map();
+    this.screenCaptions = new WeakMap();
     this.impacts = [];
     this.zoom = DEFAULT_ZOOM;
     this.viewX = this.viewY = 0;
@@ -570,7 +571,9 @@ export class Board {
     for (const { figure, npc, tool } of objects) {
       if (figure) this.drawFigureLabels(figure, now, gameNow);
       if (figure && figure === fatigued) this.drawSweat(figure, now);
-      if (npc) this.caption(npc.name, (npc.x + .5) * TILE, Math.max(9, npc.y * TILE - 5), '#f5d9a9');
+      if (npc && !this.speechCanvas) {
+        this.caption(npc.name, (npc.x + .5) * TILE, Math.max(9, npc.y * TILE - 5), '#f5d9a9');
+      }
       const prop = tool && TRAINING_PROPS.get(tool.id);
       if (prop) this.caption(prop[1], (tool.x + .5) * TILE, (tool.y + .97) * TILE, '#d4e7c5');
     }
@@ -589,7 +592,8 @@ export class Board {
     const speakers = figures.filter(({ speech }) => speech?.until > now);
     const names = figures.filter((figure) => this.hasScreenName(figure));
     const overlay = this.speechCanvas;
-    const hideSpeech = speakers.length === 0 && names.length === 0 && !fatigued;
+    const npcs = overlay && !this.dungeon ? this.snapshot?.npcs ?? [] : [];
+    const hideSpeech = speakers.length === 0 && names.length === 0 && npcs.length === 0 && !fatigued;
     if (overlay && overlay.hidden !== hideSpeech) overlay.hidden = hideSpeech;
     if (hideSpeech) return;
     speakers.sort((a, b) => b.speech.id - a.speech.id);
@@ -619,7 +623,7 @@ export class Board {
     if (textWidth < fontSize) return;
     const placed = [];
     context.save();
-    const captions = this.drawPlayerNames(context, names, width, height, scaleX, scaleY);
+    const captions = this.drawScreenNames(context, names.concat(npcs), width, height, scaleX, scaleY);
     context.textBaseline = 'top';
     context.font = `400 ${fontSize}px "Malgun Gothic", system-ui, sans-serif`;
     context.textAlign = 'left';
@@ -682,7 +686,7 @@ export class Board {
       (!this.dungeon || actor.kind === 'player' || actor.kind === 'guide');
   }
 
-  drawPlayerNames(context, names, width, height, scaleX, scaleY) {
+  drawScreenNames(context, names, width, height, scaleX, scaleY) {
     const fontSize = Math.round(Math.max(15, Math.min(28, 10.5 * scaleY)));
     const maxWidth = Math.min(width - 12, 196, Math.max(156, 1.8 * TILE * scaleX));
     const tops = new Map();
@@ -694,27 +698,30 @@ export class Board {
     context.lineJoin = 'round';
     context.lineWidth = 2;
     for (const figure of names) {
+      const npc = !figure.actor;
+      const actor = figure.actor ?? figure;
       const x = ((figure.x + .5) * TILE - this.viewX) * scaleX;
       const feet = ((figure.y + .87) * TILE - this.viewY) * scaleY;
       if (x < 0 || x > width || feet < 0 || feet - TILE * scaleY > height) continue;
-      const { actor } = figure;
-      const previous = figure.screenCaption;
-      if (!previous || previous.name !== actor.name || previous.fontSize !== fontSize || previous.maxWidth !== maxWidth) {
+      let caption = this.screenCaptions.get(figure);
+      if (!caption || caption.name !== actor.name || caption.fontSize !== fontSize || caption.maxWidth !== maxWidth) {
         const label = this.fitName(actor.name, context, maxWidth);
-        figure.screenCaption = { name: actor.name, fontSize, maxWidth, label, width: context.measureText(label).width };
+        caption = { name: actor.name, fontSize, maxWidth, label, width: context.measureText(label).width };
+        this.screenCaptions.set(figure, caption);
       }
-      const { label, width: labelWidth } = figure.screenCaption;
+      const { label, width: labelWidth } = caption;
       const half = labelWidth / 2 + 4;
       const center = Math.round(Math.max(half, Math.min(width - half, x)));
-      let bottom = Math.max(fontSize + 3, Math.round(feet - 31 * scaleY - 2));
+      const labelY = npc ? (figure.y * TILE - 5 - this.viewY) * scaleY : feet - 31 * scaleY - 2;
+      let bottom = Math.max(fontSize + 3, Math.round(labelY));
       for (const other of placed) {
         if (center - half < other.right && center + half > other.left &&
             bottom - fontSize < other.bottom && bottom > other.top) bottom = Math.max(fontSize + 3, other.top - 3);
       }
       const top = bottom - fontSize;
       placed.push({ left: center - half, right: center + half, top, bottom });
-      tops.set(figure, top);
-      context.fillStyle = actor.id === this.snapshot?.selfId ? '#ffe1a3' : '#e2efdb';
+      if (!npc) tops.set(figure, top);
+      context.fillStyle = npc ? '#f5d9a9' : actor.id === this.snapshot?.selfId ? '#ffe1a3' : '#e2efdb';
       context.strokeText(label, center, bottom);
       context.fillText(label, center, bottom);
     }

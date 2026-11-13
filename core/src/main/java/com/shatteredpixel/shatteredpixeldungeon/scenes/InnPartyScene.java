@@ -10,6 +10,7 @@ import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Terrain;
+import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.CharSprite;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.InnPartySprite;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSprite;
@@ -18,8 +19,13 @@ import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTileSheet;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonWallsTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.FogOfWar;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.RaisedTerrainTilemap;
+import com.shatteredpixel.shatteredpixeldungeon.ui.IconButton;
+import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RedButton;
+import com.shatteredpixel.shatteredpixeldungeon.ui.Window;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndGame;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndKeyBindings;
 import com.watabou.input.GameAction;
 import com.watabou.input.KeyBindings;
 import com.watabou.input.KeyEvent;
@@ -27,6 +33,7 @@ import com.watabou.input.PointerEvent;
 import com.watabou.input.ScrollEvent;
 import com.watabou.noosa.Camera;
 import com.watabou.noosa.Game;
+import com.watabou.noosa.Gizmo;
 import com.watabou.noosa.Group;
 import com.watabou.noosa.PointerArea;
 import com.watabou.utils.Reflection;
@@ -46,6 +53,7 @@ public final class InnPartyScene extends PixelScene {
     private final Set<GameAction> tappedMovement = new HashSet<>();
     private final Signal.Listener<KeyEvent> keys = this::key;
     private final Signal.Listener<ScrollEvent> scrolling = event -> {
+        if (showingMenu()) return true;
         Camera.main.zoom(Math.max(minZoom, Math.min(maxZoom, Camera.main.zoom - Math.signum(event.amount))));
         return true;
     };
@@ -56,6 +64,7 @@ public final class InnPartyScene extends PixelScene {
     private DungeonWallsTilemap walls;
     private FogOfWar fog;
     private RenderedTextBlock status;
+    private IconButton menuButton;
     private RedButton attackButton;
     private RedButton timeButton;
     private Integer attackTarget;
@@ -73,6 +82,20 @@ public final class InnPartyScene extends PixelScene {
         status.camera = uiCamera;
         status.setPos(5, 5);
         add(status);
+        menuButton = new IconButton(Icons.get(Icons.PREFS)) {
+            @Override
+            protected void onClick() {
+                openMenu();
+            }
+
+            @Override
+            protected String hoverText() {
+                return Messages.get(WndKeyBindings.class, "menu");
+            }
+        };
+        menuButton.camera = uiCamera;
+        menuButton.setRect(uiCamera.width - 23, 4, 19, 19);
+        add(menuButton);
         attackButton = new RedButton("공격 (Q)") {
             @Override
             protected void onClick() {
@@ -86,7 +109,12 @@ public final class InnPartyScene extends PixelScene {
         timeButton = new RedButton("1× (Space)", 7) {
             @Override
             protected void onClick() {
-                party.toggleTime();
+                toggleTime();
+            }
+
+            @Override
+            protected boolean tracksLongClick() {
+                return false;
             }
         };
         timeButton.camera = uiCamera;
@@ -114,14 +142,14 @@ public final class InnPartyScene extends PixelScene {
         super.update();
         party.updateGuest(Game.elapsed);
         repeatIn -= Game.elapsed;
-        if (repeatIn <= 0 && !party.awaitingAction()) moveHeld();
+        if (repeatIn <= 0 && !party.awaitingAction() && !showingMenu()) moveHeld();
     }
 
     private void apply(InnOriginalParty.Snapshot state) {
         revision = state.revision;
         InnAtb.setSlowTime(state.slowTime);
-        timeButton.text(state.slowTime ? "0.5× (Space)" : "1× (Space)");
-        timeButton.visible = timeButton.active = true;
+        updateTimeButton();
+        timeButton.visible = timeButton.active = state.result.equals("play");
         player = state.player;
         if (state.floor != floor) {
             floor = state.floor;
@@ -171,7 +199,7 @@ public final class InnPartyScene extends PixelScene {
             String energy = (state.energy / 10) + "." + (state.energy % 10);
             status.text(state.depth + "층 · HP " + self.actor.HP + "/" + self.actor.HT
                     + " · ATB " + energy + "/10" + (self.actor.HP <= 0 ? " · 쓰러짐" : "")
-                    + "\n방향키 이동 · 클릭/Q 평타 · Esc 여관");
+                    + "\n방향키 이동 · 클릭/Q 평타 · Esc 메뉴");
         }
     }
 
@@ -213,14 +241,23 @@ public final class InnPartyScene extends PixelScene {
             }
         });
         erase(status);
+        erase(menuButton);
         erase(attackButton);
         erase(timeButton);
         add(world);
         add(status);
+        add(menuButton);
         add(attackButton);
         add(timeButton);
         attackButton.givePointerPriority();
         timeButton.givePointerPriority();
+        menuButton.givePointerPriority();
+        for (var component : members.toArray(new Gizmo[0])) {
+            if (component instanceof Window) {
+                erase(component);
+                add(component);
+            }
+        }
     }
 
     private void applyActors(InnOriginalParty.Snapshot state) {
@@ -272,7 +309,7 @@ public final class InnPartyScene extends PixelScene {
                     }
                 }
                 view.sprite.alpha(hp == 0 ? 0.4f : 1f);
-                view.sprite.showInnMonsterSweat(kind == 2 && hp > 0 && tiredActors.contains(id), fatigue);
+                view.sprite.showInnMonsterSweat(hp > 0 && tiredActors.contains(id), fatigue);
             } catch (NumberFormatException ignored) {
                 // Skip invalid actor records.
             }
@@ -344,8 +381,9 @@ public final class InnPartyScene extends PixelScene {
     }
 
     private boolean key(KeyEvent event) {
+        if (showingMenu()) return true;
         if (event.code == Input.Keys.SPACE) {
-            if (event.pressed && !spaceHeld) party.toggleTime();
+            if (event.pressed && !spaceHeld) toggleTime();
             spaceHeld = event.pressed;
             return true;
         }
@@ -365,6 +403,20 @@ public final class InnPartyScene extends PixelScene {
             return true;
         }
         return false;
+    }
+
+    private void toggleTime() {
+        if (party == null) return;
+        party.toggleTime();
+        updateTimeButton();
+    }
+
+    private void updateTimeButton() {
+        String speed = InnAtb.slowTime() ? "0.5×" : "1×";
+        boolean pending = party.awaitingTimeChange();
+        String label = speed + (pending ? " …" : " (Space)");
+        if (!label.equals(timeButton.text())) timeButton.text(label);
+        timeButton.textColor(pending || InnAtb.slowTime() ? 0xFFCE78 : 0xFFFFFF);
     }
 
     private void attackSelected() {
@@ -392,7 +444,22 @@ public final class InnPartyScene extends PixelScene {
 
     @Override
     protected void onBackPressed() {
-        Game.instance.finish();
+        openMenu();
+    }
+
+    private void openMenu() {
+        if (showingMenu()) return;
+        movement.clear();
+        tappedMovement.clear();
+        spaceHeld = false;
+        add(new WndGame());
+    }
+
+    private boolean showingMenu() {
+        for (var component : members) {
+            if (component instanceof Window) return true;
+        }
+        return false;
     }
 
     @Override

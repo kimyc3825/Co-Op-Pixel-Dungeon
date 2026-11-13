@@ -174,7 +174,7 @@ public class Button extends Component {
 		
 		hotArea.active = visible;
 		
-		if (pressedButton == this && (pressTime += Game.elapsed) >= longClick) {
+		if (pressedButton == this && tracksLongClick() && (pressTime += Game.elapsed) >= longClick) {
 			pressedButton = null;
 			if (onLongClick()) {
 
@@ -194,6 +194,7 @@ public class Button extends Component {
 	protected void onClick() {} //left click, default key type
 	protected void onRightClick() {}
 	protected void onMiddleClick() {}
+	protected boolean tracksLongClick() { return true; }
 	protected boolean onLongClick() {
 		return false;
 	}

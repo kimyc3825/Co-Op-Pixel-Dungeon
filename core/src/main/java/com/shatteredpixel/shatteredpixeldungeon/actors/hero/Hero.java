@@ -885,7 +885,11 @@ public class Hero extends Char {
 	}
 
 	public boolean canSpendInnAtb(float cost) {
-		return !innAtbActive() || InnAtb.canSpend(cost);
+		return !innExhausted() && (!innAtbActive() || InnAtb.canSpend(cost));
+	}
+
+	public boolean innExhausted() {
+		return InnAdventure.atb() && Dungeon.hero == this && InnAtb.exhausted();
 	}
 
 	public boolean atbCanSkipIdle() {
@@ -893,6 +897,7 @@ public class Hero extends Char {
 	}
 
 	public float atbNextActionAt(float scheduled, float now) {
+		if (curAction != null && paralysed == 0 && innExhausted()) return Float.POSITIVE_INFINITY;
 		if (!innAtbActive() || paralysed > 0) return scheduled;
 		if (atbCanSkipIdle()) return Float.POSITIVE_INFINITY;
 		if (atbWaiting != null && curAction == atbWaiting) {
@@ -912,7 +917,7 @@ public class Hero extends Char {
 	}
 
 	private boolean atbHasMoveEnergy() {
-		return !innEncounter.phase().costsMovement() || buff(GreaterHaste.class) != null || InnAtb.canSpend(1);
+		return InnAtb.canSpend(!innEncounter.phase().costsMovement() || buff(GreaterHaste.class) != null ? 0 : 1);
 	}
 
 	public InnEncounter innEncounter() {
@@ -925,8 +930,7 @@ public class Hero extends Char {
 	}
 
 	private boolean atbHasMeleeEnergy() {
-		float cost = innMeleeCost();
-		return cost == 0 || InnAtb.canSpend(cost);
+		return InnAtb.canSpend(innMeleeCost());
 	}
 
 	private float innMeleeCost() {
@@ -945,7 +949,7 @@ public class Hero extends Char {
 
 	public boolean waitingForInnAtbEnergy() {
 		HeroAction waiting = atbWaiting;
-		return waiting != null && waiting == curAction && innAtbActive()
+		return innExhausted() || waiting != null && waiting == curAction && innAtbActive()
 				&& (atbWaitKind == AtbSpend.MELEE ? !atbHasMeleeEnergy() : !atbHasMoveEnergy());
 	}
 
@@ -1014,6 +1018,12 @@ public class Hero extends Char {
 			return false;
 		}
 		
+		if (curAction != null && innExhausted()) {
+			ready = true;
+			next();
+			return true;
+		}
+
 		boolean actResult;
 		if (curAction == null) {
 			
@@ -1635,7 +1645,7 @@ public class Hero extends Char {
 		if (attackTarget.isAlive() && canAttack(attackTarget) && attackTarget.invisible == 0) {
 			if (innAtbActive()) {
 				float cost = innMeleeCost();
-				if (Actor.now() < atbMeleeAt || (cost > 0 && !InnAtb.canSpend(cost))) {
+				if (Actor.now() < atbMeleeAt || !InnAtb.canSpend(cost)) {
 					attackTarget = null;
 					deferInnAtb(AtbSpend.MELEE);
 					return true;
@@ -1679,6 +1689,7 @@ public class Hero extends Char {
 	}
 	
 	public void rest( boolean fullRest ) {
+		if (innExhausted()) return;
 		busy();
 		spendInnAtb(TIME_TO_REST, AtbSpend.WAIT, true);
 		next();
@@ -2686,7 +2697,7 @@ public class Hero extends Char {
 
 	public boolean search( boolean intentional ) {
 		
-		if (!isAlive()) return false;
+		if (!isAlive() || intentional && innExhausted()) return false;
 		
 		boolean smthFound = false;
 

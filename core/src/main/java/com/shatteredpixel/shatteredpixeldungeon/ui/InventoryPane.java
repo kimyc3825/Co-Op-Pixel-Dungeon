@@ -564,8 +564,7 @@ public class InventoryPane extends Component {
 
 			if (selector == null && item.defaultAction() != null){
 				GameScene.centerNextWndOnInvPane();
-				item.execute(Dungeon.hero);
-				if (item != null && item.usesTargeting) {
+				if (item.executeFromUi(Dungeon.hero) && item.usesTargeting) {
 					targetingSlot = this;
 					InventoryPane.useTargeting();
 				}

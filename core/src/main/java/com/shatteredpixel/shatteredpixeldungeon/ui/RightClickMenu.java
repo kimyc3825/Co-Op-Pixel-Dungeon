@@ -126,9 +126,8 @@ public class RightClickMenu extends Component {
 						GameScene.nextWndOffset(childOffset);
 					}
 					if (item != null){
-						item.execute(Dungeon.hero, options[finalI]);
-
-						if (options[finalI].equals(item.defaultAction()) && item.usesTargeting){
+						if (item.executeFromUi(Dungeon.hero, options[finalI])
+								&& options[finalI].equals(item.defaultAction()) && item.usesTargeting){
 							InventoryPane.useTargeting();
 						}
 					}

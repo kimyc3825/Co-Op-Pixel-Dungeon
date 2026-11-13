@@ -58,11 +58,10 @@ public class WndUseItem extends WndInfoItem {
 					protected void onClick() {
 						hide();
 						if (owner != null && owner.parent != null) owner.hide();
-						if (Dungeon.hero.isAlive() && Dungeon.hero.belongings.contains(item)) {
-							item.execute(Dungeon.hero, action);
-						}
+						boolean executed = Dungeon.hero.isAlive() && Dungeon.hero.belongings.contains(item)
+								&& item.executeFromUi(Dungeon.hero, action);
 						Item.updateQuickslot();
-						if (action.equals(item.defaultAction()) && item.usesTargeting && owner == null) {
+						if (executed && action.equals(item.defaultAction()) && item.usesTargeting && owner == null) {
 							InventoryPane.useTargeting();
 						}
 					}

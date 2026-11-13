@@ -3,7 +3,6 @@ import { OriginalDownload } from './original-download.mjs';
 import { normalizeAppearance } from './avatar-catalog.mjs';
 
 const BOOT_TIMEOUT = 120_000;
-const SAVE_TIMEOUT = 8_000;
 const RETREAT_TIMEOUT = 3_000;
 
 export class OriginalGame {
@@ -39,19 +38,14 @@ export class OriginalGame {
     this.deadline = null;
     this.progress = -1;
     document.getElementById('original-launch').addEventListener('click', () => this.start());
-    this.back.addEventListener('click', () => {
-      if (this.phase === 'ready') this.requestReturn();
-      else void this.returnToInn();
-    });
+    this.back.addEventListener('click', () => void this.returnToInn());
     this.retry.addEventListener('click', () => {
-      if (this.phase === 'save-failed') this.requestReturn();
-      else if (this.phase === 'failed') void this.load();
+      if (this.phase === 'failed') void this.load();
     });
     window.addEventListener('message', (event) => this.onMessage(event));
   }
 
   get active() { return !this.screen.hidden; }
-  get atb() { return this.launchProfile?.get('atb') === '1'; }
 
   warm() { this.download.warm(); }
 
@@ -94,7 +88,6 @@ export class OriginalGame {
     this.shell.hidden = true;
     this.screen.hidden = false;
     this.onChange(true);
-    this.back.focus();
     void this.load();
   }
 
@@ -102,6 +95,7 @@ export class OriginalGame {
     const attempt = new AbortController();
     this.attempt = attempt;
     this.setPhase('checking', '던전 버전 확인 중');
+    this.back.focus();
     try {
       if (!this.party) this.suspending ??= this.suspend().catch(() => false);
       const suspended = this.party || await this.suspending;
@@ -119,6 +113,7 @@ export class OriginalGame {
       frame.allow = 'fullscreen; autoplay';
       frame.referrerPolicy = 'no-referrer';
       frame.tabIndex = -1;
+      frame.inert = true;
       // Keep the profile out of asset requests and their cache keys.
       frame.src = `${entry}#${this.launchProfile}`;
       this.frame = frame;
@@ -133,16 +128,16 @@ export class OriginalGame {
   setPhase(phase, label) {
     this.phase = phase;
     const loading = phase === 'checking' || phase === 'loading';
-    const failed = phase === 'failed' || phase === 'save-failed';
+    const failed = phase === 'failed';
     this.loading.hidden = phase === 'ready';
     this.ember.hidden = !loading;
     this.label.textContent = label ?? '';
     this.retry.hidden = !failed;
-    this.retry.textContent = phase === 'save-failed' ? '저장 다시 시도' : '다시 시도';
-    this.back.textContent = phase === 'save-failed' ? '저장 확인 없이 돌아가기' :
-      this.atb && phase === 'ready' ? '여관으로 철수' : '여관으로';
-    this.back.disabled = phase === 'saving' || phase === 'retreating' || phase === 'returning';
-    if (this.frame) this.frame.tabIndex = phase === 'ready' ? 0 : -1;
+    this.back.disabled = phase === 'retreating' || phase === 'returning';
+    if (this.frame) {
+      this.frame.tabIndex = phase === 'ready' ? 0 : -1;
+      this.frame.inert = phase !== 'ready';
+    }
     if (loading) {
       if (this.tipTimer === null) {
         this.tip.textContent = this.tips[this.tipIndex];
@@ -175,6 +170,7 @@ export class OriginalGame {
       }
       this.setPhase('ready');
       this.frame.focus();
+      this.frame.contentDocument?.getElementById('canvas')?.focus();
       if (this.party) this.onPartyReady();
     } else if (this.party && type === 'noxac-original-party-send' && this.phase === 'ready' && typeof data === 'string') {
       this.onPartySend(data);
@@ -191,16 +187,6 @@ export class OriginalGame {
     this.deadline = setTimeout(() => this.fail('던전을 시작하지 못했습니다'), BOOT_TIMEOUT);
   }
 
-  requestReturn() {
-    const retreating = this.atb;
-    this.setPhase(retreating ? 'retreating' : 'saving', retreating ? '원정 철수 중' : '게임 저장 중');
-    this.frame.contentWindow.postMessage({ type: 'noxac-original-return-request' }, window.location.origin);
-    this.deadline = setTimeout(() => {
-      if (retreating) void this.returnToInn();
-      else this.setPhase('save-failed', '저장 확인을 받지 못했습니다');
-    }, retreating ? RETREAT_TIMEOUT : SAVE_TIMEOUT);
-  }
-
   receiveParty(data) {
     if (this.party && this.phase === 'ready') this.frame.contentWindow.postMessage(
       { type: 'noxac-original-party-payload', data }, window.location.origin);
@@ -209,8 +195,11 @@ export class OriginalGame {
   endParty(notice) {
     if (!this.party || this.phase === 'returning') return false;
     this.partyNotice = notice;
-    if (this.phase === 'ready') this.requestReturn();
-    else if (this.phase !== 'retreating') void this.returnToInn();
+    if (this.phase === 'ready') {
+      this.setPhase('retreating', '원정 철수 중');
+      this.frame.contentWindow.postMessage({ type: 'noxac-original-return-request' }, window.location.origin);
+      this.deadline = setTimeout(() => void this.returnToInn(), RETREAT_TIMEOUT);
+    } else if (this.phase !== 'retreating') void this.returnToInn();
     return true;
   }
 

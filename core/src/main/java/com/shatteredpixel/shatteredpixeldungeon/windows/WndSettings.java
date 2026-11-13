@@ -77,6 +77,7 @@ public class WndSettings extends WndTabbed {
 		float height;
 
 		int width = PixelScene.landscape() ? WIDTH_L : WIDTH_P;
+		boolean showInput = DeviceCompat.hasHardKeyboard() || ControllerHandler.isControllerConnected();
 
 		display = new DisplayTab();
 		display.setSize(width, 0);
@@ -110,7 +111,7 @@ public class WndSettings extends WndTabbed {
 		input.setSize(width, 0);
 		height = Math.max(height, input.height());
 
-		if (DeviceCompat.hasHardKeyboard() || ControllerHandler.isControllerConnected()) {
+		if (showInput) {
 			add( input );
 			Image icon;
 			if (ControllerHandler.controllerActive || !DeviceCompat.hasHardKeyboard()){
@@ -186,11 +187,29 @@ public class WndSettings extends WndTabbed {
 		};
 		add( langsTab );
 
+		AboutTab about = new AboutTab();
+		about.setSize(width, 0);
+		height = Math.max(height, about.height());
+		add(about);
+		add(new IconTab(new Image("interfaces/inn_about.png")) {
+			@Override
+			protected void select(boolean value) {
+				super.select(value);
+				about.visible = about.active = value;
+				if (value) last_index = 6;
+			}
+
+			@Override
+			protected String hoverText() {
+				return Messages.get(AboutTab.class, "title");
+			}
+		});
+
 		resize(width, (int)Math.ceil(height));
 
 		layoutTabs();
 
-		if (tabs.size() == 5 && last_index >= 3){
+		if (!showInput && last_index >= 3){
 			//input tab isn't visible
 			select(last_index-1);
 		} else {
@@ -782,7 +801,6 @@ public class WndSettings extends WndTabbed {
 		CheckBox chkUpdates;
 		CheckBox chkBetas;
 		CheckBox chkWifi;
-		RedButton license;
 
 		@Override
 		protected void createChildren() {
@@ -841,22 +859,6 @@ public class WndSettings extends WndTabbed {
 				chkWifi.checked(SPDSettings.WiFi());
 				add(chkWifi);
 			}
-
-			license = new RedButton(Messages.get(this, "license")) {
-				@Override
-				protected void onClick() {
-					ShatteredPixelDungeon.scene().addToFront(new WndOptions(Icons.get(Icons.INFO),
-							Messages.get(DataTab.this, "license"), Messages.get(DataTab.this, "license_info"),
-							Messages.get(DataTab.this, "license_text"), Messages.get(DataTab.this, "source")) {
-						@Override
-						protected void onSelect(int index) {
-							ShatteredPixelDungeon.platform.openURI(index == 0 ? "https://www.gnu.org/licenses/gpl-3.0.html" :
-									"https://github.com/kimyc3825/noxac-pixel-dungeon/releases/tag/inn-v0.15.12");
-						}
-					});
-				}
-			};
-			add(license);
 		}
 
 		@Override
@@ -889,9 +891,51 @@ public class WndSettings extends WndTabbed {
 				pos = chkWifi.bottom();
 			}
 
-			license.setRect(0, pos + 3 * GAP, width, BTN_HEIGHT);
-			height = license.bottom();
+			height = pos;
+		}
+	}
 
+	private static class AboutTab extends Component {
+		private RenderedTextBlock title;
+		private RenderedTextBlock information;
+		private ColorBlock separator;
+		private RedButton license;
+		private RedButton source;
+		private RedButton upstream;
+
+		@Override
+		protected void createChildren() {
+			title = PixelScene.renderTextBlock(Messages.get(this, "title"), 9);
+			title.hardlight(TITLE_COLOR);
+			add(title);
+			add(separator = new ColorBlock(1, 1, 0xFF000000));
+			add(information = PixelScene.renderTextBlock(Messages.get(this, "license_info"), 6));
+			add(license = link("license_text", "https://www.gnu.org/licenses/gpl-3.0.html"));
+			add(source = link("source", "https://github.com/kimyc3825/noxac-pixel-dungeon/releases"));
+			add(upstream = link("upstream", "https://github.com/00-Evan/shattered-pixel-dungeon"));
+		}
+
+		private RedButton link(String text, String url) {
+			return new RedButton(Messages.get(this, text), 7) {
+				@Override
+				protected void onClick() {
+					ShatteredPixelDungeon.platform.openURI(url);
+				}
+			};
+		}
+
+		@Override
+		protected void layout() {
+			title.setPos((width - title.width()) / 2, y + GAP);
+			PixelScene.align(title);
+			separator.size(width, 1);
+			separator.y = title.bottom() + 3 * GAP;
+			information.maxWidth((int) width);
+			information.setPos(0, separator.y + separator.height() + 3 * GAP);
+			license.setRect(0, information.bottom() + 4 * GAP, width, BTN_HEIGHT);
+			source.setRect(0, license.bottom() + GAP, width, BTN_HEIGHT);
+			upstream.setRect(0, source.bottom() + GAP, width, BTN_HEIGHT);
+			height = upstream.bottom();
 		}
 	}
 

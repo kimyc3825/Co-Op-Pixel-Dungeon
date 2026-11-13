@@ -247,7 +247,7 @@ public class TalentButton extends Button {
 	}
 
 	public void upgradeTalent(){
-		if (Dungeon.hero.talentPointsAvailable(tier) > 0 && parent != null) {
+		if (!Dungeon.hero.innExhausted() && Dungeon.hero.talentPointsAvailable(tier) > 0 && parent != null) {
 			Dungeon.hero.upgradeTalent(talent);
 			float oldWidth = fill.width();
 			pointsInTalent++;

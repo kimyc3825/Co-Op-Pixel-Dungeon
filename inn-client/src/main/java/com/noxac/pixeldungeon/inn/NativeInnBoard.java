@@ -684,13 +684,14 @@ final class NativeInnBoard extends Group {
             baseSprite = npcColumn >= 0 ? NPC_SPRITES : own ? Assets.Sprites.WARRIOR : Assets.Sprites.ROGUE;
             sprite = new Image(baseSprite);
             marker = new ColorBlock(1, 1, own ? 0xffefbb77 : companion ? 0xff98d4eb : 0x99231613);
-            nameplateEdge = player ? new ColorBlock(1, 1, own ? 0xefba8b57 : 0xea8e7259) : null;
-            nameplate = new ColorBlock(1, 1, player ? 0xf0241c1a : 0xe1231817);
-            label = PixelScene.renderTextBlock(player ? 8 : 5, !player);
+            nameplateEdge = new ColorBlock(1, 1,
+                own ? 0xefba8b57 : companion ? 0xd65c8394 : player ? 0xea8e7259 : 0xd684684d);
+            nameplate = new ColorBlock(1, 1, 0xf0241c1a);
+            label = PixelScene.renderTextBlock(8, false);
             add(marker);
             add(sprite);
             add(mug);
-            if (nameplateEdge != null) add(nameplateEdge);
+            add(nameplateEdge);
             add(nameplate);
             add(label);
             label.setHightlighting(false);
@@ -728,7 +729,7 @@ final class NativeInnBoard extends Group {
 
         void placeSpeech(long now) {
             if (speech != null) {
-                float anchor = nameplateEdge == null ? nameplate.y : nameplateEdge.y;
+                float anchor = nameplateEdge.y;
                 if (sign != null && sign.visible) anchor = Math.min(anchor, sign.y);
                 speech.place(sprite.x + sprite.width() / 2, anchor, sprite.y, depth, now);
             }
@@ -775,20 +776,18 @@ final class NativeInnBoard extends Group {
             marker.size(10, 2);
             marker.x = center - marker.width() / 2;
             marker.y = depth;
-            int side = player ? 3 : 1;
-            int pad = player ? 2 : 1;
+            int side = 3;
+            int pad = 2;
             float labelX = pixel(Math.clamp(center - label.width() / 2,
                 side + 1, Math.max(side + 1, mapWidth - label.width() - side - 1)));
-            float labelY = pixel(Math.max(pad + 1, sprite.y - label.height() - (companion ? 8 : player ? 4 : 2)));
+            float labelY = pixel(Math.max(pad + 1, sprite.y - label.height() - (companion ? 8 : 4)));
             label.setPos(labelX, labelY);
             nameplate.size(label.width() + side * 2, label.height() + pad * 2);
             nameplate.x = labelX - side;
             nameplate.y = labelY - pad;
-            if (nameplateEdge != null) {
-                nameplateEdge.size(nameplate.width() + 2, nameplate.height() + 2);
-                nameplateEdge.x = nameplate.x - 1;
-                nameplateEdge.y = nameplate.y - 1;
-            }
+            nameplateEdge.size(nameplate.width() + 2, nameplate.height() + 2);
+            nameplateEdge.x = nameplate.x - 1;
+            nameplateEdge.y = nameplate.y - 1;
             mug.visible = pose.drinkSeconds() >= 0;
             mug.x = center + (pose.facingLeft() ? -6 : 4);
             mug.y = sprite.y + (float) Math.min(pose.drinkSeconds() * 8, 6);

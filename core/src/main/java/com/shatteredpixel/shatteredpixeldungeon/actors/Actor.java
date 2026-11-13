@@ -284,7 +284,7 @@ public abstract class Actor implements Bundlable {
 		float heroAt = Float.POSITIVE_INFINITY;
 		if (hero != null && !idle) {
 			if (frozen) {
-				heroAt = now;
+				heroAt = hero.atbNextActionAt(now, now);
 			} else if (hero.sprite == null || !hero.sprite.isMoving) {
 				heroAt = hero.atbNextActionAt(heroActor.time, now);
 			}

@@ -99,8 +99,7 @@ public class QuickSlotButton extends Button {
 					Item item = select(slotNum);
 					if (Dungeon.hero.belongings.contains(item) && !GameScene.cancel()) {
 						GameScene.centerNextWndOnInvPane();
-						item.execute(Dungeon.hero);
-						if (item.usesTargeting) {
+						if (item.executeFromUi(Dungeon.hero) && item.usesTargeting) {
 							useTargeting();
 						}
 					}

@@ -29,6 +29,7 @@ import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.HeroSelectScene;
+import com.shatteredpixel.shatteredpixeldungeon.scenes.InnPartyScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.InterlevelScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.RankingsScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.TitleScene;
@@ -48,8 +49,8 @@ public class WndGame extends Window {
 	private int pos;
 	
 	public WndGame() {
-		
 		super();
+		boolean guest = Game.scene() instanceof InnPartyScene;
 
 		String exitLabel = Game.instance instanceof ShatteredPixelDungeon
 				? ((ShatteredPixelDungeon) Game.instance).runExitLabel() : null;
@@ -60,13 +61,14 @@ public class WndGame extends Window {
 			@Override
 			protected void onClick() {
 				hide();
-				GameScene.show(new WndSettings());
+				if (guest) Game.scene().add(new WndSettings());
+				else GameScene.show(new WndSettings());
 			}
 		});
 		curBtn.icon(Icons.get(Icons.PREFS));
 
 		// Challenges window
-		if (Dungeon.challenges > 0) {
+		if (!guest && Dungeon.challenges > 0) {
 			addButton( curBtn = new RedButton( Messages.get(this, "challenges") ) {
 				@Override
 				protected void onClick() {
@@ -78,7 +80,7 @@ public class WndGame extends Window {
 		}
 
 		// Restart
-		if (exitLabel == null && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
+		if (!guest && exitLabel == null && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
 
 			addButton( curBtn = new RedButton( Messages.get(this, "start") ) {
 				@Override
@@ -104,7 +106,7 @@ public class WndGame extends Window {
 		addButton(curBtn = new RedButton(exitLabel != null ? exitLabel : Messages.get(this, "menu")) {
 			@Override
 			protected void onClick() {
-				if (InnAdventure.atb()) {
+				if (guest || InnAdventure.atb()) {
 					Game.instance.finish();
 					return;
 				}
@@ -112,11 +114,16 @@ public class WndGame extends Window {
 					Dungeon.saveAll();
 				} catch (IOException e) {
 					ShatteredPixelDungeon.reportException(e);
+					if (exitLabel != null) {
+						GameScene.show(new WndMessage(Messages.get(WndGame.this, "inn_save_failed")));
+						return;
+					}
 				}
-				Game.switchScene(TitleScene.class);
+				if (exitLabel != null) Game.instance.finish();
+				else Game.switchScene(TitleScene.class);
 			}
 		});
-		curBtn.icon(Icons.get(Icons.DISPLAY));
+		curBtn.icon(Icons.get(exitLabel != null ? Icons.EXIT : Icons.DISPLAY));
 		if (exitLabel == null && SPDSettings.intro()) curBtn.enable(false);
 
 		resize( WIDTH, pos );

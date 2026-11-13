@@ -12,8 +12,7 @@ import com.watabou.utils.Random;
 
 /** The network-controlled companion in the host's original actor queue. */
 public final class InnPartyMember extends DirectableAlly {
-    private volatile float energy = InnAtb.CAPACITY;
-    private float refillDelay;
+    private final InnAtb.Budget budget = new InnAtb.Budget();
     private float attackAt;
     private float moveAt;
 
@@ -44,18 +43,15 @@ public final class InnPartyMember extends DirectableAlly {
 
     public void waitForInput() { spendConstant(0.08f); }
 
-    public float energy() { return energy; }
+    public float energy() { return budget.energy(); }
 
-    public synchronized void regenerate(float elapsed) {
-        float available = Math.max(0, elapsed - refillDelay);
-        refillDelay = Math.max(0, refillDelay - elapsed);
-        energy = Math.min(InnAtb.CAPACITY, energy + available / 0.8f);
+    @Override
+    public boolean innExhausted() {
+        return isAlive() && budget.exhausted();
     }
 
-    private synchronized void spendEnergy(int cost) {
-        if (cost == 0) return;
-        energy -= cost;
-        refillDelay = 0.5f;
+    public void regenerate(float elapsed) {
+        budget.advance(elapsed);
     }
 
     public boolean execute(String kind, int first, int second, boolean friendlyFire) {
@@ -83,8 +79,8 @@ public final class InnPartyMember extends DirectableAlly {
 
         if (rooted || !level.passable[cell] || level.pit[cell] || Actor.findChar(cell) != null) return true;
         int cost = Dungeon.hero.innEncounter().phase().costsMovement() ? 1 : 0;
-        if (Actor.now() < moveAt || energy < cost || sprite.isMoving) return false;
-        spendEnergy(cost);
+        if (Actor.now() < moveAt || !budget.canSpend(cost) || sprite.isMoving) return false;
+        budget.spend(cost);
         sprite.move(pos, cell);
         move(cell);
         moveAt = Actor.now() + 0.225f / speed();
@@ -95,8 +91,8 @@ public final class InnPartyMember extends DirectableAlly {
     private boolean strike(Char target, boolean friendlyFire) {
         if (target == this || !target.isAlive() || !canAttack(target) || isCharmedBy(target)
                 || (target.alignment != Alignment.ENEMY && !(friendlyFire && target == Dungeon.hero))) return true;
-        if (Actor.now() < attackAt || energy < 1 || sprite.isMoving) return false;
-        spendEnergy(1);
+        if (Actor.now() < attackAt || !budget.canSpend(1) || sprite.isMoving) return false;
+        budget.spend(1);
         attackAt = Actor.now() + attackDelay();
         int targetCell = target.pos;
         attack(target);
