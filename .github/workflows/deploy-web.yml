@@ -42,4 +42,11 @@ jobs:
         env:
           COOP_CLIENT_SIGNATURE: ${{ steps.build.outputs.signature }}
           ORIGINAL_PUBLISH_TOKEN: ${{ secrets.ORIGINAL_PUBLISH_TOKEN }}
-        run: node scripts/publish-web-client.mjs "$SITE_ORIGIN"
+        run: |
+          main_ref="$(git ls-remote --exit-code origin refs/heads/main)"
+          read -r main_revision _ <<< "$main_ref"
+          if [[ "$main_revision" != "$COOP_CLIENT_REVISION" ]]; then
+            echo "Skipping revision $COOP_CLIENT_REVISION because main has advanced to $main_revision."
+            exit 0
+          fi
+          node scripts/publish-web-client.mjs "$SITE_ORIGIN"
