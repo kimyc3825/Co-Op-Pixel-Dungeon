@@ -4,6 +4,7 @@ import { runtimeImage } from './runtime-loader.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
 import { INN_MOVE_MS } from './session.mjs';
 import { animateInn, bardNotes, decorateInn, innTile } from './inn-decor.mjs';
+import { HALL_FX, HALL_FX_FRAMES, HALL_MAP } from './inn-hall.mjs';
 
 const TILE = 32;
 const ATLAS_TILE = 16;
@@ -22,7 +23,7 @@ const INN_VIEW_WIDTH = 15 * TILE;
 const INN_VIEW_HEIGHT = 10 * TILE;
 const INN_ZOOM = [.55, .75, 1, 1.25, 1.5, 2];
 const DEFAULT_ZOOM = INN_ZOOM.indexOf(1);
-const INN_ASSETS = ['warrior', 'rogue', 'looking-sign', 'inn-npcs'];
+const INN_ASSETS = ['warrior', 'rogue', 'looking-sign', 'inn-npcs', 'inn-hall', 'inn-hall-fx'];
 const DUNGEON_ASSETS = ['rat', 'items', 'tiles_sewers', 'tiles_prison', 'training'];
 const TRAINING_PROPS = new Map([['ration-rack', [1, '식량']], ['recovery-kit', [2, '회복']]]);
 const NPC_ROLES = ['guard', 'innkeeper', 'vendor', 'bard', 'adventurer'];
@@ -211,6 +212,9 @@ export class Board {
     const image = new Image();
     if (name.startsWith('tiles_')) image.addEventListener('load', () => {
       if (this.textureName === name) this.terrain = null;
+    });
+    if (name === 'inn-hall') image.addEventListener('load', () => {
+      if (!this.dungeon) this.terrain = null;
     });
     image.src = assetPath(name, version);
     return image;
@@ -404,6 +408,23 @@ export class Board {
 
   cancel(now) { this.figures.get(this.snapshot?.selfId)?.cancel(now); }
 
+  // The painted hall replaces the drawn tiles only where it fits the served map.
+  hallArt() {
+    const art = this.images['inn-hall'];
+    return !this.dungeon && art?.naturalWidth && this.map.length === HALL_MAP.length &&
+      this.map.every((row, y) => row === HALL_MAP[y]) ? art : null;
+  }
+
+  animateHall(context, now) {
+    const sheet = this.images['inn-hall-fx'];
+    if (!sheet?.naturalWidth) return;
+    const scale = TILE / ATLAS_TILE;
+    for (const [x, y, width, height, sheetY] of HALL_FX) {
+      const frame = Math.floor((now + x * 53) / 135) % HALL_FX_FRAMES;
+      context.drawImage(sheet, frame * width, sheetY, width, height, x * scale, y * scale, width * scale, height * scale);
+    }
+  }
+
   getTerrain() {
     if (this.terrain) return this.terrain;
     const image = document.createElement('canvas');
@@ -422,6 +443,13 @@ export class Board {
       foreground.height = this.map.length * WALL_HEIGHT;
       foregroundContext = foreground.getContext('2d');
       foregroundContext.imageSmoothingEnabled = false;
+    }
+    const hall = this.hallArt();
+    if (hall) {
+      context.drawImage(hall, 0, 0, this.worldWidth, this.worldHeight);
+      this.wallEdges = { image: null, rows: [] };
+      this.terrain = image;
+      return image;
     }
     this.map.forEach((row, y) => {
       [...row].forEach((cell, x) => {
@@ -461,7 +489,10 @@ export class Board {
     context.translate(-this.viewX, -this.viewY);
     context.imageSmoothingEnabled = false;
     context.drawImage(this.getTerrain(), 0, 0);
-    if (!this.dungeon) animateInn(context, this.map, now);
+    if (!this.dungeon) {
+      if (this.hallArt()) this.animateHall(context, now);
+      else animateInn(context, this.map, now);
+    }
     const snapshot = this.snapshot;
     const selfFigure = this.figures.get(snapshot?.selfId);
     const self = selfFigure?.actor;

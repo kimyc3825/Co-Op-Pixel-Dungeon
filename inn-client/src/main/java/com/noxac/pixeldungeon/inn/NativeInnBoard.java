@@ -31,6 +31,22 @@ final class NativeInnBoard extends Group {
     private static final long SPEECH_MILLIS = 4_500;
     private static final String SIGN = "inn/looking-sign.png";
     private static final String NPC_SPRITES = "inn/inn-npcs.png";
+    // Painted by web-client/scripts/generate-inn.mjs. Keep the map and effect regions in sync with its output.
+    private static final String HALL = "inn/inn-hall.png";
+    private static final String HALL_FX_SHEET = "inn/inn-hall-fx.png";
+    private static final List<String> HALL_MAP = List.of(
+        "##########################", "#.....BBB......BBBBBBBBB.#", "#........................#",
+        "#......................N.#", "#................N.......#", "#..............BBBBBBBBB.#",
+        "#........................#", "#..TT....................#", "#.........TT.............#",
+        "#.......N.......TT.......#", "#...........TT......######", "#..TT...............#....#",
+        "#....N..............#....#", "#....................N...#", "#.....................DDD#",
+        "#..........DDDD.......DDD#", "##########################");
+    // {x, y, width, height, sheetY}; the sheet holds four frames side by side.
+    private static final int[][] HALL_FX = {
+        {106, 10, 28, 20, 0}, {69, 3, 5, 5, 20}, {165, 3, 5, 5, 25}, {227, 3, 5, 5, 30}, {300, 75, 3, 2, 35},
+        {62, 111, 3, 2, 37}, {174, 127, 3, 2, 39}, {270, 143, 3, 2, 41}, {206, 159, 3, 2, 43}, {62, 175, 3, 2, 45},
+        {356, 252, 40, 2, 47}, {357, 162, 5, 5, 49}
+    };
     private static final int[] FLOOR = {0x785039, 0x754b35, 0x80553b, 0x69452f};
     private static final int[][] CANDLES = {{3, 7}, {3, 11}, {10, 8}, {12, 10}, {16, 9}, {19, 5}};
     private static final int[][] PATRONS = {{4, 7}, {11, 8}, {13, 10}, {17, 9}};
@@ -79,6 +95,7 @@ final class NativeInnBoard extends Group {
     private float fitZoom;
     private float wheelDelta;
     private boolean hearthHall;
+    private boolean paintedHall;
 
     NativeInnBoard(float left, float top, float width, float height,
                    Consumer<InnMotion.Cell> goTo, Consumer<String> join) {
@@ -330,7 +347,8 @@ final class NativeInnBoard extends Group {
         if (floor != null) {
             world.erase(floor);
             floor.destroy();
-            TextureCache.remove(floorKey);
+            if (floorKey != null) TextureCache.remove(floorKey);
+            floorKey = null;
         }
         map = rows;
         int columns = rows.getFirst().length();
@@ -339,9 +357,16 @@ final class NativeInnBoard extends Group {
         float fit = Math.min((float) viewportWidth / mapWidth, (float) viewportHeight / mapHeight);
         fitZoom = fit < 1f ? fit : (float) Math.floor(fit);
         applyZoom();
-        floorKey = new Pixmap(mapWidth, mapHeight, Pixmap.Format.RGBA8888);
         hearthHall = tileAt(rows, 7, 1) == 'B' && tileAt(rows, 19, 5) == 'B'
             && tileAt(rows, 22, 15) == 'D';
+        paintedHall = rows.equals(HALL_MAP);
+        if (paintedHall) {
+            floor = new Image(HALL);
+            world.addToBack(floor);
+            rebuildDecorations(rows, hearthHall);
+            return;
+        }
+        floorKey = new Pixmap(mapWidth, mapHeight, Pixmap.Format.RGBA8888);
         for (int y = 0; y < rows.size(); y++) {
             for (int x = 0; x < columns; x++) {
                 char tile = rows.get(y).charAt(x);
@@ -390,6 +415,17 @@ final class NativeInnBoard extends Group {
         }
         animatedDecorations.clear();
         if (decorationKey == null) decorationKey = makeDecorationAtlas();
+        if (paintedHall) {
+            for (int[] effect : HALL_FX) {
+                AmbientSprite sprite = new AmbientSprite(HALL_FX_SHEET, effect[0], effect[1], effect[4],
+                    effect[2], effect[3], 135, effect[0] * 53);
+                animatedDecorations.add(sprite);
+                decorations.add(sprite);
+            }
+            bardNotes = addDecoration(0, 0, NOTE_ROW, NOTE_WIDTH, NOTE_HEIGHT, 370, 0);
+            bardNotes.visible = false;
+            return;
+        }
 
         if (hearthHall) {
             addDecoration(108, 15, 0, HEARTH_WIDTH, HEARTH_HEIGHT, 135, 0);
@@ -434,7 +470,11 @@ final class NativeInnBoard extends Group {
         private int lastFrame = -1;
 
         AmbientSprite(int x, int y, int row, int width, int height, int period, int phase) {
-            super(NativeInnBoard.this.decorationKey);
+            this(NativeInnBoard.this.decorationKey, x, y, row, width, height, period, phase);
+        }
+
+        AmbientSprite(Object texture, int x, int y, int row, int width, int height, int period, int phase) {
+            super(texture);
             this.x = x;
             this.y = y;
             this.row = row;

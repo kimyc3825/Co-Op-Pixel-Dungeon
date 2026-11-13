@@ -36,7 +36,7 @@ tasks.named('processResources') {
     }
     def webClient = rootProject.file('../web-client/play')
     from(new File(webClient, 'assets')) {
-        include 'inn-npcs.png', 'training.png', 'avatars/*.png', 'avatars/catalog.json'
+        include 'inn-npcs.png', 'inn-hall.png', 'inn-hall-fx.png', 'training.png', 'avatars/*.png', 'avatars/catalog.json'
         into 'inn'
     }
     from(new File(webClient, 'defeat-lines.json')) { into 'inn' }
