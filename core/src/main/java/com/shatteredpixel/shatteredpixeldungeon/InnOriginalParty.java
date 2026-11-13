@@ -192,9 +192,9 @@ public final class InnOriginalParty {
         sendIn = 0;
     }
 
-    public void updateHost(float elapsed, float gameElapsed, boolean paused) {
+    public void updateHost(float elapsed, float gameElapsed) {
         if (member == null || level != Dungeon.level) return;
-        if (!paused) member.regenerate(gameElapsed);
+        member.regenerate(gameElapsed);
         sendIn -= elapsed;
         if (sendIn > 0 || closed || level.length() > MAX_CELLS || Actor.processing()) return;
         sendIn = UPDATE_INTERVAL;

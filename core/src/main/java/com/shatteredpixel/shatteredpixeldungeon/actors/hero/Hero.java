@@ -865,7 +865,7 @@ public class Hero extends Char {
 
 	public void requestInnTravelStop() {
 		HeroAction action = curAction;
-		if (action instanceof HeroAction.Move || action instanceof HeroAction.LvlTransition) {
+		if (action instanceof HeroAction.Move || action instanceof HeroAction.LvlTransition || action instanceof HeroAction.Jump) {
 			atbTravelToStop.set(action);
 		}
 		resting = false;
@@ -1053,6 +1053,8 @@ public class Hero extends Char {
 			
 			if (curAction instanceof HeroAction.Move) {
 				actResult = actMove( (HeroAction.Move)curAction );
+			} else if (curAction instanceof HeroAction.Jump) {
+				actResult = actChasmJump((HeroAction.Jump) curAction);
 				
 			} else if (curAction instanceof HeroAction.Interact) {
 				actResult = actInteract( (HeroAction.Interact)curAction );
@@ -1177,6 +1179,12 @@ public class Hero extends Char {
 		next();
 	}
 
+	public void confirmChasmJump(HeroAction.Jump jump) {
+		lastAction = null;
+		curAction = jump;
+		next();
+	}
+
 	private boolean canSelfTrample = false;
 	public boolean canSelfTrample(){
 		return canSelfTrample && !rooted && !flying &&
@@ -1206,6 +1214,25 @@ public class Hero extends Char {
 		}
 	}
 	
+	private boolean actChasmJump(HeroAction.Jump jump) {
+		float delay = buff(GreaterHaste.class) == null ? 1f : 0f;
+		if (!Chasm.canJumpFrom(this, jump) || !wouldFallIntoChasm(jump.cell, delay)) {
+			Chasm.logJumpUnavailable();
+			ready();
+			return false;
+		}
+		if (innAtbActive() && (Actor.now() < atbMoveAt || !atbHasMoveEnergy())) {
+			deferInnAtb(AtbSpend.MOVE);
+			return true;
+		}
+		curAction = null;
+		flying = false;
+		// Remove levitation without pressing the current tile again.
+		remove(buff(Levitation.class));
+		Chasm.heroFall(jump.cell);
+		return false;
+	}
+
 	private boolean actInteract( HeroAction.Interact action ) {
 		
 		Char ch = action.ch;
@@ -1995,6 +2022,12 @@ public class Hero extends Char {
 	}
 	
 	private boolean walkingToVisibleTrapInFog = false;
+
+	private boolean wouldFallIntoChasm(int cell, float delay) {
+		Levitation levitation = buff(Levitation.class);
+		return Dungeon.level.pit[cell] && !Dungeon.level.solid[cell]
+				&& (!flying || levitation != null && levitation.detachesWithinDelay(delay / speed()));
+	}
 	
 	private boolean getCloser( final int target ) {
 
@@ -2074,16 +2107,11 @@ public class Hero extends Char {
 				delay = 0;
 			}
 
-			if (Dungeon.level.pit[step] && !Dungeon.level.solid[step]
-					&& (!flying || buff(Levitation.class) != null && buff(Levitation.class).detachesWithinDelay(delay / speed()))){
-				if (!Chasm.jumpConfirmed){
-					Chasm.heroJump(this);
-					interrupt();
-				} else {
-					flying = false;
-					remove(buff(Levitation.class)); //directly remove to prevent cell pressing
-					Chasm.heroFall(target);
-				}
+			if (wouldFallIntoChasm(step, delay)) {
+				Chasm.showJumpConfirmation(this, step);
+				lastAction = null;
+				curAction = null;
+				GameScene.resetKeyHold();
 				canSelfTrample = false;
 				return false;
 			}

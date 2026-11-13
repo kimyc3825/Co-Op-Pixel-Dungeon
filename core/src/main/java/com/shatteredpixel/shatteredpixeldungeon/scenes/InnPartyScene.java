@@ -238,6 +238,7 @@ public final class InnPartyScene extends PixelScene {
         world.add(new PointerArea(ground) {
             @Override
             protected void onClick(PointerEvent event) {
+                if (showingMenu()) return;
                 int cell = ground.screenToTile((int) event.current.x, (int) event.current.y, true);
                 party.command("T", cell, 0);
             }
@@ -419,7 +420,7 @@ public final class InnPartyScene extends PixelScene {
     }
 
     private void toggleTime() {
-        if (party == null) return;
+        if (party == null || showingMenu()) return;
         party.toggleTime();
         updateTimeButton();
     }
@@ -433,7 +434,7 @@ public final class InnPartyScene extends PixelScene {
     }
 
     private void attackSelected() {
-        if (attackTarget != null) party.command("A", attackTarget, 0);
+        if (attackTarget != null && !showingMenu()) party.command("A", attackTarget, 0);
     }
 
     private void moveHeld() {

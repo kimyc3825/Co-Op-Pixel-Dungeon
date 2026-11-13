@@ -924,9 +924,8 @@ public class GameScene extends PixelScene {
 
 		super.update();
 
-		boolean atbBlocked = InnAdventure.atb() && interfaceBlockingHero();
 		if (InnAdventure.atb()) {
-			// UI windows hold the world and energy. Clamp delayed frames rather than fast-forwarding.
+			// Clamp delayed frames rather than fast-forwarding the world.
 			float elapsed = Math.min(0.1f, Game.elapsed);
 			InnOriginalParty party = InnOriginalParty.current();
 			if (party != null && party.host) {
@@ -938,12 +937,11 @@ public class GameScene extends PixelScene {
 				party.applyGuestTime();
 			}
 			float gameElapsed = InnAtb.gameElapsed(elapsed);
-			if (!atbBlocked) {
-				InnAtb.advance(gameElapsed);
-				if (Dungeon.hero.innAtbActive()) Dungeon.hero.innEncounter().advance(Dungeon.level, gameElapsed);
-			}
-			Actor.updateAtb(gameElapsed, atbBlocked);
-			if (party != null && party.host) party.updateHost(elapsed, gameElapsed, atbBlocked);
+			if (interfaceBlockingHero()) Dungeon.hero.requestInnTravelStop();
+			InnAtb.advance(gameElapsed);
+			if (Dungeon.hero.innAtbActive()) Dungeon.hero.innEncounter().advance(Dungeon.level, gameElapsed);
+			Actor.updateAtb(gameElapsed, false);
+			if (party != null && party.host) party.updateHost(elapsed, gameElapsed);
 		}
 
 		if (notifyDelay > 0) notifyDelay -= Game.elapsed;
@@ -954,7 +952,7 @@ public class GameScene extends PixelScene {
 			waterOfs = water.offsetY(); //re-assign to account for auto adjust
 		}
 
-		if (!atbBlocked && !Actor.processing() && Dungeon.hero.isAlive()) {
+		if (!Actor.processing() && Dungeon.hero.isAlive()) {
 			if (actorThread == null || !actorThread.isAlive()) {
 				
 				actorThread = new Thread() {
