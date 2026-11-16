@@ -2,6 +2,7 @@
 package com.shatteredpixel.shatteredpixeldungeon.scenes;
 
 import com.badlogic.gdx.Input;
+import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
@@ -16,6 +17,7 @@ import com.shatteredpixel.shatteredpixeldungeon.sprites.InnPartySprite;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSprite;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTerrainTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTileSheet;
+import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonWallsTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.FogOfWar;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.RaisedTerrainTilemap;
@@ -26,6 +28,7 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.RedButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Window;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndGame;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndKeyBindings;
+import com.watabou.glwrap.Blending;
 import com.watabou.input.GameAction;
 import com.watabou.input.KeyBindings;
 import com.watabou.input.KeyEvent;
@@ -35,7 +38,10 @@ import com.watabou.noosa.Camera;
 import com.watabou.noosa.Game;
 import com.watabou.noosa.Gizmo;
 import com.watabou.noosa.Group;
+import com.watabou.noosa.NoosaScript;
+import com.watabou.noosa.NoosaScriptNoLighting;
 import com.watabou.noosa.PointerArea;
+import com.watabou.noosa.SkinnedBlock;
 import com.watabou.utils.Reflection;
 import com.watabou.utils.Signal;
 
@@ -64,6 +70,9 @@ public final class InnPartyScene extends PixelScene {
     private RaisedTerrainTilemap raised;
     private DungeonWallsTilemap walls;
     private FogOfWar fog;
+    private SkinnedBlock water;
+    private float waterOffset;
+    private int predictedSequence;
     private RenderedTextBlock status;
     private IconButton menuButton;
     private RedButton attackButton;
@@ -142,6 +151,11 @@ public final class InnPartyScene extends PixelScene {
             apply(state);
         }
         super.update();
+        if (water != null) {
+            waterOffset -= 5 * InnAtb.gameElapsed(Game.elapsed);
+            water.offsetTo(0, waterOffset);
+            waterOffset = water.offsetY();
+        }
         party.updateGuest(Game.elapsed);
         repeatIn -= Game.elapsed;
         if (repeatIn <= 0 && !party.awaitingAction() && !showingMenu()) moveHeld();
@@ -220,7 +234,25 @@ public final class InnPartyScene extends PixelScene {
         Dungeon.level.setSize(state.width, state.height);
         Dungeon.level.cleanWalls();
         DungeonTileSheet.setupVariance(state.tiles.length, Dungeon.seedCurDepth());
+        predictedSequence = 0;
         world = new Group();
+        // Water tiles are transparent in the terrain sheet and show this layer through them.
+        water = new SkinnedBlock(state.width * DungeonTilemap.SIZE, state.height * DungeonTilemap.SIZE,
+                Dungeon.level.waterTex()) {
+            @Override
+            protected NoosaScript script() {
+                return NoosaScriptNoLighting.get();
+            }
+
+            @Override
+            public void draw() {
+                Blending.disable();
+                super.draw();
+                Blending.enable();
+            }
+        };
+        water.autoAdjust = true;
+        world.add(water);
         ground = new DungeonTerrainTilemap();
         world.add(ground);
         loot = new Group();
@@ -309,8 +341,11 @@ public final class InnPartyScene extends PixelScene {
                     int previous = view.actor.pos;
                     view.actor.HP = hp;
                     view.actor.HT = maxHp;
-                    view.actor.pos = cell;
-                    if (previous != cell) {
+                    // Keep the local player's predicted step until the host has answered that command.
+                    boolean predicted = id == player && predictedSequence > 0 && state.ack < predictedSequence;
+                    if (id == player && !predicted) predictedSequence = 0;
+                    if (!predicted) view.actor.pos = cell;
+                    if (!predicted && previous != cell) {
                         if (view.sprite.isMoving) view.sprite.interruptMotion();
                         if (Dungeon.level.adjacent(previous, cell)) view.sprite.move(previous, cell);
                         else view.sprite.place(cell);
@@ -445,9 +480,28 @@ public final class InnPartyScene extends PixelScene {
                 - direction(SPDAction.N, SPDAction.NE, SPDAction.NW);
         tappedMovement.clear();
         if (dx != 0 || dy != 0) {
-            party.command("M", dx, dy);
+            int sequence = party.command("M", dx, dy);
+            if (sequence > 0) predictStep(dx, dy, sequence);
             repeatIn = 0.12f;
         }
+    }
+
+    /** Shows the local player's step at once; the host's next answer confirms or corrects it. */
+    private void predictStep(int dx, int dy, int sequence) {
+        ActorView self = actors.get(player);
+        InnOriginalParty.Snapshot state = party.latest();
+        Level level = Dungeon.level;
+        // With less than one point of energy the host may hold the step, so wait for its answer instead.
+        if (self == null || state == null || !self.actor.isAlive() || self.sprite.isMoving || state.energy < 10) return;
+        int from = self.actor.pos;
+        int cell = from + dx + dy * level.width();
+        if (!level.insideMap(cell) || !level.adjacent(from, cell) || !level.passable[cell] || level.pit[cell]) return;
+        for (ActorView other : actors.values()) {
+            if (other != self && other.actor.pos == cell && other.actor.HP > 0) return;
+        }
+        self.sprite.move(from, cell);
+        self.actor.pos = cell;
+        predictedSequence = sequence;
     }
 
     private int direction(GameAction straight, GameAction diagonalA, GameAction diagonalB) {
@@ -519,6 +573,15 @@ public final class InnPartyScene extends PixelScene {
         }
 
         @Override public String tilesTex() { return texture; }
+
+        @Override
+        public String waterTex() {
+            if (texture.startsWith("environment/tiles_prison")) return Assets.Environment.WATER_PRISON;
+            if (texture.startsWith("environment/tiles_caves")) return Assets.Environment.WATER_CAVES;
+            if (texture.startsWith("environment/tiles_city")) return Assets.Environment.WATER_CITY;
+            if (texture.startsWith("environment/tiles_halls")) return Assets.Environment.WATER_HALLS;
+            return Assets.Environment.WATER_SEWERS;
+        }
         @Override protected boolean build() { return false; }
         @Override protected void createMobs() {}
         @Override protected void createItems() {}

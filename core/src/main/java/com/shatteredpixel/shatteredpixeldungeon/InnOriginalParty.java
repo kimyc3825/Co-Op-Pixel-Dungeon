@@ -179,6 +179,8 @@ public final class InnOriginalParty {
         }
         if (player.execute(command.kind, command.first, command.second, friendlyFire)) {
             ack = command.seq;
+            // Answer the guest on the next frame so its following step is not held for a full interval.
+            sendIn = 0;
         } else {
             player.waitForInput();
         }
@@ -211,11 +213,13 @@ public final class InnOriginalParty {
 
     public boolean[] explored() { return explored; }
 
-    public void command(String kind, int first, int second) {
+    /** Returns the sequence of the command sent to the host, or 0 when none was sent. */
+    public int command(String kind, int first, int second) {
         Snapshot state = incoming;
-        if (state == null || closed || !state.result.equals("play")) return;
+        if (state == null || closed || !state.result.equals("play")) return 0;
         pending = new Command(state.floor, ++nextSequence, kind, first, second);
         sendGuest(state);
+        return pending.seq;
     }
 
     public void toggleTime() {
