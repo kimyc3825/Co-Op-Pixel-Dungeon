@@ -65,7 +65,6 @@
   "hair_front:long",
   "hair_back:ponytail",
   "hair_front:ponytail",
-  "hair_back:bun",
   "hair_front:bun",
   "hat:hood",
   "hat:wizard",
@@ -84,7 +83,7 @@
   "back:greatsword",
   "back:shield"
  ],
- "paletteStripY": 700,
+ "paletteStripY": 680,
  "recolour": {
   "skin": {
    "light": [

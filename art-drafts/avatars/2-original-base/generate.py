@@ -58,7 +58,7 @@ FIXED = {
     "metal": ramp("2c2e38 525867 838a98 b4bac4 e6e9ee"),
     "gold": ramp("7a4b12 c48d22 f0cf55"),
     "wood": ramp("3a2516 6b4a2a 9a7040"),
-    "darkcloth": ramp("1d1b24 2e2b38 433f50 5b5669 777188"),
+    "darkcloth": ramp("221f2c 37334a 4f4a63 6a647f 8a849f"),
     "whitecloth": ramp("4e4446 8f8682 c4bcb0 e4ded2 f8f6ef"),
     "leafcloth": ramp("1f2e1c 34492b 4c6838 6a8a4c 8fab68"),
     "steelcloth": ramp("2c2e38 525867 838a98 b4bac4 e6e9ee"),
@@ -247,7 +247,9 @@ def layers_for(frame_index, look, apply_clip=True):
     out["outfit"] = to_image(cells, colourer(look, "outfit")) if look.job else Image.new("RGBA", (FW, FH))
     hat = P.HEADGEAR[look.hat]
     clip = hat["clip"] if (apply_clip and hat["rows"]) else None
-    out["hair_front"] = simple_layer(hair["front"], hx - 2, hy - 2, look, clip)
+    lift = hair.get("lift", 0)
+    out["hair_front"] = simple_layer(hair["front"], hx - 2, hy - 2 - lift, look,
+                                     None if clip is None else clip + lift)
     out["face"] = simple_layer(P.FACE[look.face], hx, hy, look)
     out["hat"] = simple_layer(hat["rows"], hx - 2, hy - 2 - hat["lift"], look)
     return out

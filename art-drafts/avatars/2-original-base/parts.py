@@ -240,22 +240,19 @@ HAIR = {
         ),
     },
     "bun": {
+        "lift": 2,
         "front": (
-            "............",
-            "....hhhh....",
-            "...hjkklh...",
-            "..hjkkllkh..",
-            "..hjjkkkjh..",
+            "....hhh.....",
+            "...hklkh....",
+            "...hjkjh....",
+            "...hhhhhh...",
+            "..hjkllkkh..",
+            "..hjkkkkjjh.",
+            "..hjjjjhjh..",
             "..hjh.......",
             "..hh........",
         ),
-        "back": (
-            "..hhh.........",
-            ".hkllh........",
-            ".hjklh........",
-            ".hijjh........",
-            "..hhh.........",
-        ),
+        "back": (),
     },
 }
 
