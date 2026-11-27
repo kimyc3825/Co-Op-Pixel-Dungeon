@@ -43,7 +43,8 @@ final class DungeonSession implements AutoCloseable {
      * at most this many frames per second, latest wins, which keeps the host well inside the relay
      * limit whose breach ends the run (§6). Decided by role, never by looking inside the payload.
      */
-    private static final long HOST_FRAME_INTERVAL_MS = 67; // 14.9 per second: never above 15
+    /** 70 ms: at most 14.3 frames per second, so no way of counting can exceed 15. */
+    private static final long HOST_FRAME_INTERVAL_MS = 70;
     /**
      * Guest packets are commands, sent at once and in order whenever data may be sent. Held back
      * (before the partner is ready, during an outage) only the newest few are kept: the host keeps
