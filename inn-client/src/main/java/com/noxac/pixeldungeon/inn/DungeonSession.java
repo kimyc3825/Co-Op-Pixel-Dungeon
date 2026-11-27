@@ -43,9 +43,14 @@ final class DungeonSession implements AutoCloseable {
      * at most this many frames per second, latest wins, which keeps the host well inside the relay
      * limit whose breach ends the run (§6). Decided by role, never by looking inside the payload.
      */
-    private static final long HOST_FRAME_INTERVAL_MS = 1_000 / 15;
-    /** Guest packets are commands: every one is sent, in order; this bounds the backlog while offline. */
-    private static final int MAX_GUEST_BACKLOG = 512;
+    private static final long HOST_FRAME_INTERVAL_MS = 67; // 14.9 per second: never above 15
+    /**
+     * Guest packets are commands, sent at once and in order whenever data may be sent. Held back
+     * (before the partner is ready, during an outage) only the newest few are kept: the host keeps
+     * only the highest command sequence anyway, and a backlog flushed at once must stay far below
+     * the server's 300-frame relay burst, whose breach ends the run (§6).
+     */
+    private static final int MAX_GUEST_BACKLOG = 16;
 
     private final InnApi api;
     private final String key;
@@ -57,6 +62,10 @@ final class DungeonSession implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    {
+        // Pending timers (reconnect, leave grace, pong checks) must not keep a closed session alive.
+        network.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+    }
     private final ArrayDeque<String> inbound = new ArrayDeque<>();
     private final InnChannel.Closing closing = new InnChannel.Closing();
     private volatile boolean closed;
@@ -197,7 +206,7 @@ final class DungeonSession implements AutoCloseable {
         linked = false;
         if (leaving) {
             // Still owed a `leave`: try again until the grace period ends, unless the run is gone.
-            if (code == 4004 || code == 4010 || code == 4003 || code == 4009) {
+            if (runOver(code, true)) {
                 stopLeaving();
             } else {
                 schedule(this::connect, 300);
@@ -205,6 +214,8 @@ final class DungeonSession implements AutoCloseable {
             return;
         }
         if (closed || terminal) return;
+        // A close that itself ended the run needs no `leave` afterwards (no deferred reconnect).
+        if (runOver(code, wasLinked)) joined = false;
         switch (code) {
             case 4004, 4010, 1000 -> finish(endedNotice(lastError));
             case 4009 -> finish("다른 곳에서 이 원정에 접속했습니다.");
@@ -219,6 +230,15 @@ final class DungeonSession implements AutoCloseable {
             // 1001, 1006, 1011, 4002, 4013 link_full (§8: like a drop), a missing pong, …
             default -> retryConnect();
         }
+    }
+
+    /** §8/§9: closes after which the run no longer exists for this side. */
+    private static boolean runOver(int code, boolean afterLink) {
+        return switch (code) {
+            case 1000, 1003, 1009, 4000, 4001, 4003, 4004, 4009, 4010 -> true;
+            case 4008 -> afterLink;
+            default -> false;
+        };
     }
 
     private void retryConnect() {

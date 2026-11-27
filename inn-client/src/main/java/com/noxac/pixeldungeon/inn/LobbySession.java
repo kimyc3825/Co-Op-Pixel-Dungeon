@@ -67,6 +67,10 @@ final class LobbySession implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    {
+        // Pending timers (request timeouts, notice expiry, pong checks) must not delay the exit.
+        network.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+    }
     private final AtomicBoolean moving = new AtomicBoolean();
     private final TreeMap<Long, InnApi.Event> history = new TreeMap<>();
     private final InnChannel.Closing closing = new InnChannel.Closing();
@@ -109,6 +113,9 @@ final class LobbySession implements AutoCloseable {
     private Integer shard;
 
     private int attempt;
+    /** System.nanoTime() before which no connection may be opened (the required waits of §8/§9). */
+    private long holdUntil;
+    private boolean holding;
     private ScheduledFuture<?> reconnect;
     private long nextRef;
     private String lastError;
@@ -170,6 +177,19 @@ final class LobbySession implements AutoCloseable {
             publish();
             return;
         }
+        long held = holdUntil - System.nanoTime();
+        if (holding && held > 0) {
+            // Nothing (a dungeon round trip, a new key, a profile fix) shortens a required wait.
+            if (reconnect == null || reconnect.isDone()) {
+                try {
+                    reconnect = network.schedule(this::connect, held, TimeUnit.NANOSECONDS);
+                } catch (RejectedExecutionException ignored) {
+                    // Closing.
+                }
+            }
+            return;
+        }
+        holding = false;
         if (reconnect != null) reconnect.cancel(false);
         reconnect = null;
         int current = ++generation;
@@ -240,10 +260,10 @@ final class LobbySession implements AutoCloseable {
             case 4000 -> stop("여관 서버가 이 클라이언트의 요청을 거부했습니다 (" +
                 (error != null ? error : reason) + "). 모험가 정보를 고치거나 클라이언트를 업데이트해 주세요.", code);
             // §8/§9: these waits are required; the jitter only ever lengthens them.
-            case 4013 -> retry("여관이 가득 찼습니다. 자리가 나면 입장합니다.",
+            case 4013 -> hold("여관이 가득 찼습니다. 자리가 나면 입장합니다.",
                 atLeast(1_000 * (retryAfterSeconds != null && retryAfterSeconds > 0 ? Math.min(retryAfterSeconds, 600) : 30)));
-            case 4029 -> retry("같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.", atLeast(30_000));
-            case 4008 -> retry("접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.", atLeast(10_000));
+            case 4029 -> hold("같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.", atLeast(30_000));
+            case 4008 -> hold("접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.", atLeast(10_000));
             default -> retry(source.wasOpened() ? RECONNECTING : unreachable(reason), backoff());
         }
         publish();
@@ -296,6 +316,13 @@ final class LobbySession implements AutoCloseable {
         } catch (RejectedExecutionException ignored) {
             // Closing.
         }
+    }
+
+    /** A required wait: every path that connects respects it (see connect()). */
+    private void hold(String message, long delayMs) {
+        holding = true;
+        holdUntil = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(delayMs);
+        retry(message, delayMs);
     }
 
     private void stop(String message, int code) {
@@ -799,7 +826,8 @@ final class LobbySession implements AutoCloseable {
             }
             away = false;
             spawn();
-            if (!stopped) connectionMessage = CONNECTING;
+            // During a required wait the message that explains it stays.
+            if (!stopped && !holding) connectionMessage = CONNECTING;
             if (channel != null && helloSent) {
                 sendEnter();
             } else if (channel == null && !stopped) {

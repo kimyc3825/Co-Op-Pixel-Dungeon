@@ -584,6 +584,23 @@ public class TurnClockEngineTest {
 	}
 
 	@Test
+	public void hostTargetingIsCancelledAfterAnAutoWait() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		addDummy(cell(3, 8)).hunt(hero);
+		frames(3, FRAME);
+		guest("M", 1, 0);
+		frames(3, FRAME);
+		assertEquals(state(), TurnClock.WAIT_HOST, TurnClock.waitingOn());
+		Aim aim = new Aim();
+		GameScene.selectCell(aim);
+		countdownSeconds(FRAME, 10); // the host does not act: it waits automatically
+		frames(4, FRAME);
+		assertTrue(hero.ready);
+		assertEquals("the prompt outlived the hero's own (automatic) turn", 1, aim.cancels);
+		assertEquals(null, GameScene.cellSelectionPrompt());
+	}
+
+	@Test
 	public void hostTargetingSurvivesBeingSkipped() throws Exception {
 		newParty(15, 15, cell(3, 3), cell(5, 3));
 		frames(3, FRAME);

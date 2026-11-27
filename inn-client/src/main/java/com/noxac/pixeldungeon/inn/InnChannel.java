@@ -57,6 +57,7 @@ final class InnChannel {
     /** System.nanoTime() of the last fragment received; any frame, `pong` included, is a sign of life. */
     private volatile long lastHeard = System.nanoTime();
     private ScheduledFuture<?> pinger;
+    private ScheduledFuture<?> pongCheck;
     private CompletableFuture<?> sends = CompletableFuture.completedFuture(null);
 
     private InnChannel(ScheduledExecutorService executor, Handler handler) {
@@ -173,6 +174,8 @@ final class InnChannel {
     private void cancelPinger() {
         ScheduledFuture<?> current = pinger;
         if (current != null) current.cancel(false);
+        ScheduledFuture<?> check = pongCheck;
+        if (check != null) check.cancel(false);
     }
 
     /**
@@ -183,12 +186,16 @@ final class InnChannel {
         long sentAt = System.nanoTime();
         if (!sendText("ping")) return;
         try {
-            executor.schedule(() -> {
+            ScheduledFuture<?> check = executor.schedule(() -> {
                 WebSocket current = socket;
                 if (finished.get() || lastHeard - sentAt >= 0 || current == null) return;
                 finish(ABNORMAL, "pong_timeout");
                 current.abort();
             }, PONG_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            synchronized (this) {
+                pongCheck = check;
+                if (outputClosed) check.cancel(false); // closed meanwhile: nothing left to check
+            }
         } catch (RejectedExecutionException ignored) {
             // The owner shut down.
         }
