@@ -58,7 +58,9 @@ final class DebugTools {
 				int removed = 0;
 				for (Mob mob : Dungeon.level.mobs.toArray(new Mob[0])) {
 					if (mob.alignment == Char.Alignment.ENEMY) {
-						mob.destroy();
+						// Removed without dying, so no experience, kills or badges are counted.
+						Dungeon.level.mobs.remove(mob);
+						Actor.remove(mob);
 						if (mob.sprite != null) mob.sprite.killAndErase();
 						removed++;
 					}
