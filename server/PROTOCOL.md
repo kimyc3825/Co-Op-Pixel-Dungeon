@@ -82,7 +82,7 @@ checked by the clients (§5.3).
 ```json
 {"t":"hello","v":1,"key":"<key>","name":"앨리스",
  "appearance":{"job":"mage","hairColor":"natural","outfitColor":"blue","hairStyle":"short","accessory":"none"},
- "dungeonProtocol":11,"x":10,"y":14,
+ "dungeonProtocol":12,"x":10,"y":14,
  "present":true,"queued":false,"friendlyFire":false,"theme":"sewers"}
 ```
 
@@ -92,7 +92,7 @@ checked by the clients (§5.3).
 | `key` | string | §3. |
 | `name` | string | Trimmed, 1–20 code points, no characters in Unicode categories C (control, format, unassigned, private use, surrogate), Zl or Zp. |
 | `appearance` | object | Optional fields `job`, `hairColor`, `outfitColor`, `hairStyle`, `accessory`; each an option id matching `^[a-z0-9][a-z0-9_-]{0,31}$`. Missing fields are omitted in what others receive; clients normalise unknown ids to their catalogue defaults. |
-| `dungeonProtocol` | int | 1..1000000. Matching only pairs equal values. Current clients that run the original engine send **11**; the legacy mini-battle used **9**. |
+| `dungeonProtocol` | int | 1..1000000. Matching only pairs equal values. Current clients that run the original engine send **12** (turn-clock packets); **11** was the earlier ATB build and the legacy mini-battle used **9**. Bump it whenever the game payload format changes. |
 | `x`, `y` | int | Starting position. A fresh entry uses a random `spawns` point of the layout; a reconnect sends the last known position. |
 | `present` | bool, default `true` | `false` reconnects without appearing in the room (the player is in a dungeon, see `away`). |
 | `queued` | bool, default `false` | `true` recruits again right after entering (restores the queue after a reconnect). |
@@ -244,7 +244,7 @@ Sent right after a valid `hello` (also after a reconnect):
 {"t":"link","v":1,"id":"<match id>","role":"host",
  "selfId":"…","selfName":"…","selfAppearance":{…},"selfPreparation":{"id":"…","hp":2,"food":-1},
  "partnerId":"…","partnerName":"…","partnerAppearance":{…},"partnerPreparation":null,
- "seed":3050392115,"friendlyFire":false,"theme":"sewers","dungeonProtocol":11,
+ "seed":3050392115,"friendlyFire":false,"theme":"sewers","dungeonProtocol":12,
  "paired":false,"partnerConnected":false,"partnerReady":false}
 ```
 
@@ -274,10 +274,13 @@ Sent right after a valid `hello` (also after a reconnect):
   acknowledged.
 * After `ended` the link and all its storage are deleted; reconnecting gets `4004`.
 
-### 7.4 Starting the original-engine party (dungeonProtocol 11)
+### 7.4 Starting the original-engine party (dungeonProtocol 12)
 
 `d` is exactly the `InnOriginalParty` packet string (`S|…` snapshots from the host, `C|…` commands
-from the guest). **There is no wrapper**: the former `{"kind":"original","type":…,"seq":…}` envelope
+from the guest; in dungeonProtocol 12 a command is `C|floor|seq|kind|first|second`, kind `W` meaning
+"wait one turn", and a snapshot has 16 fields including the turn and the remaining grace; both
+clients produce and parse them with the shared `core` class, the server never looks inside).
+**There is no wrapper**: the former `{"kind":"original","type":…,"seq":…}` envelope
 and its `hello`/`ready`/`ping`/`leave` packets are replaced by the server messages above. Sequence:
 
 1. Both open the link; on `paired` (or `link.paired`) both leave the inn view (`away` on the inn socket).

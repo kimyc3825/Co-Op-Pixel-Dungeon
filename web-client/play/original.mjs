@@ -61,7 +61,7 @@ export class OriginalGame {
       this.launchProfile.set('prepHp', this.preparation.hp);
       this.launchProfile.set('prepFood', this.preparation.food);
     }
-    this.show(practice ? '길잡이 연습 · 원본 ATB' : atb ? '원본 던전 · ATB' : '원본 1인 저장');
+    this.show(practice ? '길잡이 연습' : atb ? '1인 원정' : '원본 1인 저장');
     return true;
   }
 
@@ -79,7 +79,7 @@ export class OriginalGame {
       this.launchProfile.set('prepHp', link.selfPreparation.hp);
       this.launchProfile.set('prepFood', link.selfPreparation.food);
     }
-    this.show('2인 원정 · 원본 ATB');
+    this.show('2인 원정');
     return true;
   }
 

@@ -550,7 +550,7 @@ function updateInn() {
   fields['dungeon-theme'].disabled = rulesLocked;
   fields['friendly-fire'].checked = play.friendlyFire === true;
   fields['friendly-fire'].disabled = rulesLocked;
-  text(fields.match, queued ? '동료 찾는 중 · 취소' : '동료 찾기 · 원본 ATB');
+  text(fields.match, queued ? '동료 찾는 중 · 취소' : '동료 찾기 · 2인 원정');
   fields.match.dataset.waiting = String(queued);
   fields['expedition-toggle'].dataset.waiting = String(queued);
   text(fields['expedition-toggle'], queued ? '동료 찾는 중' : '원정');
@@ -618,7 +618,7 @@ function showDialogue(npc) {
     ...lessons.map(({ title, text: content }) => [title, () => showDialoguePage(title, content, [['뒤로', showTopics]])]),
     ['뒤로', showIntro],
   ]);
-  const showIntro = () => showDialoguePage(npc.name, npc.dialogue, lessons.length ? [['행동력과 전투 상태', showTopics]] : []);
+  const showIntro = () => showDialoguePage(npc.name, npc.dialogue, lessons.length ? [['턴과 전투', showTopics]] : []);
   showIntro();
   if (!npcDialog.open) npcDialog.showModal();
   fields['npc-name'].focus({ preventScroll: true });

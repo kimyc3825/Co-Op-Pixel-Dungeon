@@ -8,7 +8,8 @@ import { loadInnLayout, localInnState, walkable } from './inn-layout.mjs';
 const WIRE_VERSION = 1;
 const INN_PATH = '/api/v5/inn';
 const LINK_PATH = '/api/v5/link';
-const ORIGINAL_PROTOCOL = 11;
+// 12: turn-clock party packets (6-field commands with `W` wait, 16-field snapshots). 11 was the ATB build.
+const ORIGINAL_PROTOCOL = 12;
 const LEGACY_PROTOCOL = 9;
 export const INN_MOVE_MS = 150;
 const PING_MS = 25000;
