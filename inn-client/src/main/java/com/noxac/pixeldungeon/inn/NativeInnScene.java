@@ -360,7 +360,7 @@ public final class NativeInnScene extends PixelScene {
         InnApi.Preparation preparation = online ? NativeClient.preparation() : null;
         int startingFood = Math.max(0, 1 + InnApi.Preparation.rations(preparation));
         int health = InnApi.Preparation.health(preparation);
-        String summary = "다음 ATB 원정 · 미리보기\n시작 식량 " + startingFood + "개";
+        String summary = "다음 원정 · 미리보기\n시작 식량 " + startingFood + "개";
         if (health != 0) summary += "\n최대 체력 " + (health > 0 ? "+" : "") + health;
         if (!online) summary += "\n연결 후 원정 준비를 반영합니다.";
         modalOpen = true;
@@ -402,8 +402,8 @@ public final class NativeInnScene extends PixelScene {
         if (preparation != null) summary += "\n다음 원정 · " + preparation.description();
         modalOpen = true;
         add(new WndOptions(Icons.STAIRS.get(), "원정", summary,
-            current != null && current.queued() ? "동료 찾기 취소" : "동료 찾기 · 원본 2인 ATB",
-            "1인 원정 · 원본 ATB", "길잡이 연습", friendlyFireCaption(),
+            current != null && current.queued() ? "동료 찾기 취소" : "동료 찾기 · 2인 원정",
+            "1인 원정", "길잡이 연습", friendlyFireCaption(),
             NativeClient.isTestMode() ? "여관 길잡이 숨기기" : "여관 길잡이 부르기", "원본 1인 저장", "원정 준비") {
             @Override
             protected boolean enabled(int index) {
@@ -420,7 +420,7 @@ public final class NativeInnScene extends PixelScene {
             protected void onSelect(int index) {
                 switch (index) {
                     case 0 -> match();
-                    case 1 -> NativeClient.enterSoloAtb();
+                    case 1 -> NativeClient.enterSoloExpedition();
                     case 2 -> NativeClient.enterPractice();
                     case 3 -> {
                         NativeClient.toggleFriendlyFire();

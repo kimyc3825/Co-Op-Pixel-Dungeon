@@ -12,7 +12,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -46,9 +45,9 @@ record InnLayout(String id, List<String> map, List<InnApi.Npc> npcs, List<Spawn>
         }
     }
 
-    Map<String, Object> joinDescriptor() {
-        Spawn spawn = spawns.get(ThreadLocalRandom.current().nextInt(spawns.size()));
-        return Map.of("id", id, "x", spawn.x(), "y", spawn.y());
+    /** A fresh entry starts at a random spawn point of the layout (PROTOCOL.md §4.1). */
+    Spawn randomSpawn() {
+        return spawns.get(ThreadLocalRandom.current().nextInt(spawns.size()));
     }
 
     static boolean walkable(List<String> map, int x, int y) {

@@ -2,21 +2,36 @@
 package com.noxac.pixeldungeon.inn;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
+import com.google.gson.JsonPrimitive;
 
-import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
+/** The server origin, the wire constants of server/PROTOCOL.md and the values exchanged with it. */
 final class InnApi {
+    /** Wire version sent in every `hello` (PROTOCOL.md §11). */
+    static final int WIRE_VERSION = 1;
+    /** Party payload format: the turn-clock packets of InnOriginalParty. Matching pairs only equal values. */
+    static final int DUNGEON_PROTOCOL = 12;
+    static final String INN_PATH = "/api/v5/inn";
+    static final String LINK_PATH = "/api/v5/link";
+    static final String SEWERS = "sewers";
+    /** Builds that still carry the placeholder origin in inn-origin.txt have no server to talk to. */
+    static final String UNCONFIGURED_TLD = ".invalid";
+    private static final Pattern UUID = Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+
     record Appearance(String job, String hairColor, String outfitColor, String hairStyle, String accessory) {}
     record Person(String id, String name, int x, int y, boolean queued, Appearance appearance) {
         Person {
@@ -25,6 +40,10 @@ final class InnApi {
 
         Person(String id, String name, int x, int y, boolean queued) {
             this(id, name, x, y, queued, null);
+        }
+
+        Person at(int nextX, int nextY) {
+            return new Person(id, name, nextX, nextY, queued, appearance);
         }
     }
     record Lesson(String title, String text) {}
@@ -42,7 +61,7 @@ final class InnApi {
             this(id, playerId, name, kind, text, time, null);
         }
     }
-    record Match(String id, String role, String partnerName) {}
+    record Match(String id, String role, String partnerId, String partnerName) {}
     record Preparation(String id, int hp, int food) {
         static int health(Preparation value) { return value == null ? 0 : value.hp(); }
         static int rations(Preparation value) { return value == null ? 0 : value.food(); }
@@ -54,132 +73,13 @@ final class InnApi {
 
         private static String delta(int value) { return value > 0 ? "+" + value : "−" + -value; }
     }
-    record Action(String type, int dx, int dy, String target) {}
-    record InventoryItem(String item, int amount) {}
-    record ItemKnowledge(String item, String effect) {}
-    record Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
-                     int actionSeq, String lastAction, String targetId, long actionAt,
-                     double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations,
-                     Appearance appearance, List<InventoryItem> inventory) {
-        Combatant {
-            appearance = AvatarProfile.normalize(appearance);
-            if (inventory == null) inventory = List.of();
-        }
 
-        Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
-                  int actionSeq, String lastAction, String targetId, long actionAt,
-                  double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations,
-                  Appearance appearance) {
-            this(id, name, kind, x, y, hp, maxHp, actionSeq, lastAction, targetId, actionAt,
-                energy, energyAt, moveReadyAt, attackReadyAt, rations, appearance, List.of());
-        }
-
-        Combatant(String id, String name, String kind, int x, int y, int hp, int maxHp,
-                  int actionSeq, String lastAction, String targetId, long actionAt,
-                  double energy, long energyAt, long moveReadyAt, long attackReadyAt, int rations) {
-            this(id, name, kind, x, y, hp, maxHp, actionSeq, lastAction, targetId, actionAt,
-                energy, energyAt, moveReadyAt, attackReadyAt, rations, null);
-        }
-
-        Combatant withAppearance(Appearance value) {
-            return value == null || value.equals(appearance) ? this : new Combatant(id, name, kind, x, y, hp,
-                maxHp, actionSeq, lastAction, targetId, actionAt, energy, energyAt, moveReadyAt, attackReadyAt,
-                rations, value, inventory);
-        }
-    }
-    record Drop(String id, String item, int x, int y, int amount, String pickedBy) {}
-    record TrainingTool(String id, int x, int y) {}
-    record PartyChat(long id, String actorId, String name, String text, long time) {}
-    record BattleEvent(long id, String action, String result, String actorId, String targetId,
-                       int x, int y, int amount, long at) {}
-    record Projectile(long id, String ownerId, int x, int y, int nextX, int nextY, long stepAt) {}
-    record DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
-                        Action queued, String status, boolean waitingForPartner, int revision,
-                        List<Drop> drops, long commandAck, boolean inCombat, String theme,
-                        long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
-                        boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles,
-                        List<TrainingTool> trainingTools, List<ItemKnowledge> identifiedItems, String encounter) {
-        DungeonState {
-            theme = DungeonLayout.themeOrDefault(theme);
-            if (wallNow == 0) wallNow = now;
-            if (messages == null) messages = List.of();
-            if (attackEvents == null) attackEvents = List.of();
-            if (projectiles == null) projectiles = List.of();
-            if (trainingTools == null) trainingTools = List.of();
-            if (identifiedItems == null) identifiedItems = List.of();
-            if (encounter == null) encounter = inCombat ? "combat" : "exploration";
-        }
-
-        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
-                     Action queued, String status, boolean waitingForPartner, int revision,
-                     List<Drop> drops, long commandAck, boolean inCombat, String theme,
-                     long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
-                     boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles,
-                     List<TrainingTool> trainingTools, List<ItemKnowledge> identifiedItems) {
-            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
-                drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt, messages,
-                friendlyFire, attackEvents, projectiles, trainingTools, identifiedItems, null);
-        }
-
-        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
-                     Action queued, String status, boolean waitingForPartner, int revision,
-                     List<Drop> drops, long commandAck, boolean inCombat, String theme,
-                     long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
-                     boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles,
-                     List<TrainingTool> trainingTools) {
-            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
-                drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt, messages,
-                friendlyFire, attackEvents, projectiles, trainingTools, List.of());
-        }
-
-        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
-                     Action queued, String status, boolean waitingForPartner, int revision,
-                     List<Drop> drops, long commandAck, boolean inCombat, String theme,
-                     long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages,
-                     boolean friendlyFire, List<BattleEvent> attackEvents, List<Projectile> projectiles) {
-            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
-                drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt, messages,
-                friendlyFire, attackEvents, projectiles, List.of());
-        }
-
-        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
-                     Action queued, String status, boolean waitingForPartner, int revision,
-                     List<Drop> drops, long commandAck, boolean inCombat, String theme,
-                     long wallNow, long pausedUntil, long pauseReadyAt, List<PartyChat> messages) {
-            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
-                drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt, messages,
-                false, List.of(), List.of());
-        }
-
-        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
-                     Action queued, String status, boolean waitingForPartner, int revision,
-                     List<Drop> drops, long commandAck, boolean inCombat, String theme) {
-            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
-                drops, commandAck, inCombat, theme, now, 0, 0, List.of());
-        }
-
-        DungeonState(String id, String selfId, long now, List<String> map, List<Combatant> actors,
-                     Action queued, String status, boolean waitingForPartner, int revision,
-                     List<Drop> drops, long commandAck, boolean inCombat) {
-            this(id, selfId, now, map, actors, queued, status, waitingForPartner, revision,
-                drops, commandAck, inCombat, DungeonLayout.SEWERS);
-        }
-
-        DungeonState withActors(List<Combatant> updated) {
-            return actors.equals(updated) ? this : new DungeonState(id, selfId, now, map, updated, queued, status,
-                waitingForPartner, revision, drops, commandAck, inCombat, theme, wallNow, pausedUntil, pauseReadyAt,
-                messages, friendlyFire, attackEvents, projectiles, trainingTools, identifiedItems, encounter);
-        }
-    }
-    record Signal(String type, String sdp) {}
-    record LinkState(String id, String role, String selfId, String partnerId, String selfName,
-                     String partnerName, boolean paired, boolean closed, Signal signal,
-                     String message, long messageSeq, Appearance selfAppearance, Appearance partnerAppearance,
-                     Preparation selfPreparation, Preparation partnerPreparation) {
-        LinkState {
-            if (selfAppearance != null) selfAppearance = AvatarProfile.normalize(selfAppearance);
-            if (partnerAppearance != null) partnerAppearance = AvatarProfile.normalize(partnerAppearance);
-        }
+    /** The `link` frame of the party link (PROTOCOL.md §7.1). */
+    record Link(String id, String role, String selfId, String selfName, Appearance selfAppearance,
+                Preparation selfPreparation, String partnerId, String partnerName, Appearance partnerAppearance,
+                Preparation partnerPreparation, long seed, boolean friendlyFire, String theme, int dungeonProtocol,
+                boolean paired, boolean partnerConnected, boolean partnerReady) {
+        boolean host() { return "host".equals(role); }
     }
 
     record State(String selfId, List<Person> people, List<String> map, List<Event> events,
@@ -193,16 +93,30 @@ final class InnApi {
               long after, long now, boolean queued, Match match) {
             this(selfId, people, map, events, after, now, queued, match, List.of(), null, null, null);
         }
+
         Person self() {
             return people.stream().filter(person -> person.id().equals(selfId)).findFirst().orElseThrow();
         }
 
         State withSelfPosition(int x, int y) {
-            List<Person> updated = people.stream()
-                .map(person -> person.id().equals(selfId)
-                    ? new Person(selfId, person.name(), x, y, person.queued(), person.appearance()) : person)
-                .toList();
+            return withPeople(people.stream().map(person -> person.id().equals(selfId) ? person.at(x, y) : person).toList());
+        }
+
+        State withPeople(List<Person> updated) {
             return new State(selfId, updated, map, events, after, now, queued, match, npcs, preparation, layoutId, expeditionGate);
+        }
+
+        State withEvents(List<Event> updated, long time) {
+            long last = updated.isEmpty() ? 0 : updated.getLast().id();
+            return new State(selfId, people, map, updated, last, time, queued, match, npcs, preparation, layoutId, expeditionGate);
+        }
+
+        State withQueue(boolean nextQueued, Match nextMatch) {
+            return new State(selfId, people, map, events, after, now, nextQueued, nextMatch, npcs, preparation, layoutId, expeditionGate);
+        }
+
+        State withPreparation(Preparation next) {
+            return new State(selfId, people, map, events, after, now, queued, match, npcs, next, layoutId, expeditionGate);
         }
 
         boolean walkable(int x, int y) {
@@ -217,32 +131,14 @@ final class InnApi {
         }
     }
 
-    static final class Problem extends IOException {
-        final int status;
-        final String code;
-
-        Problem(int status, String code) {
-            super(code);
-            this.status = status;
-            this.code = code;
-        }
-    }
-
-    private record ErrorBody(String error) {}
-    @FunctionalInterface
-    private interface Decoder<T> {
-        T decode(String value) throws IOException;
-    }
-    private static final String API = "/api/v2/inn/";
-    private static final String LINK = "/api/v4/link/";
     private static final InnLayout LAYOUT = InnLayout.load();
-    private final Gson gson = new Gson();
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(4)).build();
+    final Gson gson = new Gson();
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build();
     private final URI origin;
 
     InnApi(URI origin) {
         String scheme = origin.getScheme();
-        String path = origin.getPath();
+        String path = origin.getPath() == null ? "" : origin.getPath();
         if (origin.getHost() == null || origin.getUserInfo() != null || origin.getQuery() != null ||
             origin.getFragment() != null || (!path.isEmpty() && !path.equals("/")) ||
             (!"https".equalsIgnoreCase(scheme) && !("http".equalsIgnoreCase(scheme) && isLoopback(origin)))) {
@@ -256,169 +152,138 @@ final class InnApi {
             "[::1]".equals(uri.getHost());
     }
 
-    State enter(String name, String key, long after) throws IOException, InterruptedException {
-        return enter(name, AvatarProfile.normalize(null), key, after);
+    static InnLayout layout() { return LAYOUT; }
+
+    /** False while the origin is the reserved placeholder shipped before the first deploy. */
+    boolean configured() {
+        return !origin.getHost().toLowerCase(Locale.ROOT).endsWith(UNCONFIGURED_TLD);
     }
 
-    State enter(String name, Appearance appearance, String key, long after) throws IOException, InterruptedException {
-        return decode(send("PUT", API + "session", key,
-            Map.of("name", name, "appearance", appearance, "after", after, "dungeonProtocol", 11,
-                "layout", LAYOUT.joinDescriptor())));
+    String host() {
+        return origin.getPort() < 0 ? origin.getHost() : origin.getHost() + ":" + origin.getPort();
     }
 
-    State sync(String key, long after) throws IOException, InterruptedException {
-        return decode(send("POST", API + "sync", key, Map.of("after", after)));
+    /** `wss://` for an `https://` origin, `ws://` for a loopback development origin. */
+    URI socketUri(String path, Map<String, String> query) {
+        String scheme = "https".equalsIgnoreCase(origin.getScheme()) ? "wss" : "ws";
+        String parameters = query.entrySet().stream()
+            .map(entry -> entry.getKey() + "=" + URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
+            .collect(Collectors.joining("&"));
+        return URI.create(scheme + "://" + host() + path + (parameters.isEmpty() ? "" : "?" + parameters));
     }
 
-    CompletableFuture<State> syncAsync(String key, long after) {
-        return sendAsync(API + "sync", key, Map.of("after", after), this::decode);
+    InnChannel open(String path, Map<String, String> query, ScheduledExecutorService executor, InnChannel.Handler handler) {
+        return InnChannel.open(http, socketUri(path, query), executor, handler);
     }
 
-    void move(String key, int x, int y) throws IOException, InterruptedException {
-        send("POST", API + "move", key, Map.of("x", x, "y", y));
+    // ---- frame decoding (unknown fields are ignored everywhere) ----
+
+    static String string(JsonObject frame, String field) {
+        JsonElement value = frame.get(field);
+        return value instanceof JsonPrimitive primitive && primitive.isString() ? primitive.getAsString() : null;
     }
 
-    void chat(String key, String message) throws IOException, InterruptedException {
-        send("POST", API + "chat", key, Map.of("message", message));
+    static Long integer(JsonObject frame, String field) {
+        JsonElement value = frame.get(field);
+        if (!(value instanceof JsonPrimitive primitive) || !primitive.isNumber()) return null;
+        double number = primitive.getAsDouble();
+        if (number != Math.rint(number) || Math.abs(number) > 9_007_199_254_740_991d) return null;
+        return primitive.getAsLong();
     }
 
-    void drink(String key) throws IOException, InterruptedException {
-        send("POST", API + "drink", key, null);
+    static Boolean bool(JsonObject frame, String field) {
+        JsonElement value = frame.get(field);
+        return value instanceof JsonPrimitive primitive && primitive.isBoolean() ? primitive.getAsBoolean() : null;
     }
 
-    CompletableFuture<Void> talkToNpc(String key, String npcId) {
-        return sendAsync(API + "interact", key, Map.of("npcId", npcId), value -> null);
+    static JsonObject object(JsonObject frame, String field) {
+        JsonElement value = frame.get(field);
+        return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
     }
 
-    void prepare(String key) throws IOException, InterruptedException {
-        send("POST", API + "preparation", key, null);
+    Person person(JsonElement value) {
+        if (value == null || !value.isJsonObject()) return null;
+        JsonObject object = value.getAsJsonObject();
+        String id = string(object, "id");
+        String name = string(object, "name");
+        Long x = integer(object, "x");
+        Long y = integer(object, "y");
+        if (id == null || name == null || x == null || y == null) return null;
+        return new Person(id, name, x.intValue(), y.intValue(), Boolean.TRUE.equals(bool(object, "queued")),
+            appearance(object.get("appearance")));
     }
 
-    void usePreparation(String key, String id) throws IOException, InterruptedException {
-        send("DELETE", API + "preparation", key, Map.of("id", id));
-    }
-
-    void matchmaking(String key, boolean queued) throws IOException, InterruptedException {
-        send("PUT", API + "match", key, Map.of("queued", queued));
-    }
-
-    void joinSeeking(String key, String targetId) throws IOException, InterruptedException {
-        send("PUT", API + "match", key, Map.of("queued", true, "targetId", targetId));
-    }
-
-    CompletableFuture<LinkState> enterLink(String key, String matchId) {
-        return sendAsync(LINK + "enter", key, Map.of("matchId", matchId), this::decodeLink);
-    }
-
-    CompletableFuture<LinkState> syncLink(String key, String id) {
-        return sendAsync(LINK + "sync", key, Map.of("id", id), this::decodeLink);
-    }
-
-    CompletableFuture<Void> signalLink(String key, String id, Signal signal) {
-        return sendAsync(LINK + "signal", key,
-            Map.of("id", id, "type", signal.type(), "sdp", signal.sdp()), value -> null);
-    }
-
-    CompletableFuture<Void> relayLink(String key, String id, long sequence, String message) {
-        return sendAsync(LINK + "relay", key, Map.of("id", id, "seq", sequence, "message", message), value -> null);
-    }
-
-    CompletableFuture<Void> leaveLink(String key, String id) {
-        return sendAsync(LINK + "leave", key, Map.of("id", id), value -> null);
-    }
-
-    void leave(String key) throws IOException, InterruptedException {
-        send("DELETE", API + "session", key, null);
-    }
-
-    private State decode(String value) throws IOException {
+    Appearance appearance(JsonElement value) {
+        if (value == null || !value.isJsonObject()) return null;
         try {
-            State state = gson.fromJson(value, State.class);
-            if (state != null && state.layoutId() != null) {
-                if (!LAYOUT.id().equals(state.layoutId()) || state.people() == null) {
-                    throw new IOException("Inn layout does not match the session");
-                }
-                String selfId = state.selfId();
-                List<Person> people = state.people().stream().filter(person -> person != null &&
-                    (Objects.equals(person.id(), selfId) || InnLayout.walkable(LAYOUT.map(), person.x(), person.y()))).toList();
-                state = new State(state.selfId(), people, LAYOUT.map(), state.events(), state.after(), state.now(),
-                    state.queued(), state.match(), LAYOUT.npcs(), state.preparation(), LAYOUT.id(), LAYOUT.expeditionGate());
-            }
-            return validateState(state);
-        } catch (JsonParseException ignored) {
-            throw new IOException("Invalid inn response");
+            return gson.fromJson(value, Appearance.class);
+        } catch (JsonParseException invalid) {
+            return null;
         }
     }
 
-    private static State validateState(State state) throws IOException {
-        if (state != null && state.selfId() != null && state.people() != null &&
-            state.events() != null && state.map() != null && !state.map().isEmpty() &&
-            state.map().getFirst() != null && !state.map().getFirst().isEmpty() &&
-            state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
-            state.npcs().stream().allMatch(npc ->
-                npc != null && npc.id() != null && npc.name() != null && npc.role() != null && npc.dialogue() != null &&
-                npc.y() >= 0 && npc.y() < state.map().size() &&
-                npc.x() >= 0 && npc.x() < state.map().get(npc.y()).length() &&
-                state.map().get(npc.y()).charAt(npc.x()) == 'N') &&
-            state.people().stream().allMatch(person -> person != null && person.id() != null &&
-                person.name() != null && state.walkable(person.x(), person.y())) &&
-            state.people().stream().anyMatch(person -> person.id().equals(state.selfId()))) {
-            return state;
-        }
-        throw new IOException("Invalid inn response");
+    Event event(JsonElement value) {
+        if (value == null || !value.isJsonObject()) return null;
+        JsonObject object = value.getAsJsonObject();
+        Long id = integer(object, "id");
+        Long time = integer(object, "time");
+        String kind = string(object, "kind");
+        String playerId = string(object, "playerId");
+        String name = string(object, "name");
+        if (id == null || id <= 0 || time == null || kind == null || playerId == null || name == null) return null;
+        return new Event(id, playerId, name, kind, string(object, "text"), time, string(object, "npcId"));
     }
 
-    private LinkState decodeLink(String value) throws IOException {
-        try {
-            LinkState state = gson.fromJson(value, LinkState.class);
-            if (state != null && state.id() != null && state.selfId() != null && state.partnerId() != null &&
-                state.selfName() != null && state.partnerName() != null &&
-                ("host".equals(state.role()) || "guest".equals(state.role()))) {
-                return state;
-            }
-        } catch (JsonParseException ignored) {
-            // The hosting edge may return an invalid response.
-        }
-        throw new IOException("Invalid party link response");
+    Preparation preparation(JsonElement value) {
+        if (value == null || !value.isJsonObject()) return null;
+        JsonObject object = value.getAsJsonObject();
+        String id = string(object, "id");
+        Long hp = integer(object, "hp");
+        Long food = integer(object, "food");
+        if (id == null || hp == null || food == null) return null;
+        return new Preparation(id, hp.intValue(), food.intValue());
     }
 
-    private String send(String method, String path, String key, Object body) throws IOException, InterruptedException {
-        return responseBody(http.send(request(method, path, key, body), HttpResponse.BodyHandlers.ofString()));
+    Match match(JsonElement value) {
+        if (value == null || !value.isJsonObject()) return null;
+        JsonObject object = value.getAsJsonObject();
+        String id = string(object, "id");
+        String role = string(object, "role");
+        String partnerId = string(object, "partnerId");
+        String partnerName = string(object, "partnerName");
+        if (id == null || !UUID.matcher(id).matches() || !("host".equals(role) || "guest".equals(role)) ||
+            partnerId == null || partnerName == null) return null;
+        return new Match(id, role, partnerId, partnerName);
     }
 
-    private <T> CompletableFuture<T> sendAsync(String path, String key, Object body, Decoder<T> decoder) {
-        return http.sendAsync(request("POST", path, key, body), HttpResponse.BodyHandlers.ofString())
-            .thenApply(response -> {
-                try {
-                    return decoder.decode(responseBody(response));
-                } catch (IOException error) {
-                    throw new CompletionException(error);
-                }
-            });
+    /** Validates a `link` frame; null when it cannot be used to start the run. */
+    Link link(JsonObject frame) {
+        String id = string(frame, "id");
+        String role = string(frame, "role");
+        String selfId = string(frame, "selfId");
+        String selfName = string(frame, "selfName");
+        String partnerId = string(frame, "partnerId");
+        String partnerName = string(frame, "partnerName");
+        Long seed = integer(frame, "seed");
+        Boolean friendlyFire = bool(frame, "friendlyFire");
+        Long protocol = integer(frame, "dungeonProtocol");
+        if (id == null || !("host".equals(role) || "guest".equals(role)) || selfId == null || selfName == null ||
+            partnerId == null || partnerName == null || seed == null || seed < 0 || seed > 0xFFFF_FFFFL ||
+            friendlyFire == null || protocol == null) return null;
+        String theme = string(frame, "theme");
+        Appearance self = appearance(frame.get("selfAppearance"));
+        Appearance partner = appearance(frame.get("partnerAppearance"));
+        return new Link(id, role, selfId, selfName, self == null ? null : AvatarProfile.normalize(self),
+            preparation(frame.get("selfPreparation")), partnerId, partnerName,
+            partner == null ? null : AvatarProfile.normalize(partner), preparation(frame.get("partnerPreparation")),
+            seed, friendlyFire, theme == null ? SEWERS : theme, protocol.intValue(),
+            Boolean.TRUE.equals(bool(frame, "paired")), Boolean.TRUE.equals(bool(frame, "partnerConnected")),
+            Boolean.TRUE.equals(bool(frame, "partnerReady")));
     }
 
-    private HttpRequest request(String method, String path, String key, Object body) {
-        HttpRequest.Builder request = HttpRequest.newBuilder(origin.resolve(path))
-            .timeout(Duration.ofSeconds(5))
-            .header("Accept", "application/json")
-            .header("Authorization", "Bearer " + key);
-        if (body != null) request.header("Content-Type", "application/json");
-        return request.method(method, body == null
-            ? HttpRequest.BodyPublishers.noBody()
-            : HttpRequest.BodyPublishers.ofString(gson.toJson(body))).build();
-    }
-
-    private String responseBody(HttpResponse<String> response) throws IOException {
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            ErrorBody error = null;
-            try {
-                error = gson.fromJson(response.body(), ErrorBody.class);
-            } catch (JsonParseException ignored) {
-                // The hosting edge may return an HTML error page.
-            }
-            throw new Problem(response.statusCode(), error != null && error.error() != null
-                ? error.error() : "server_error");
-        }
-        return response.body();
+    static JsonObject frame(String type) {
+        JsonObject frame = new JsonObject();
+        frame.addProperty("t", type);
+        return frame;
     }
 }

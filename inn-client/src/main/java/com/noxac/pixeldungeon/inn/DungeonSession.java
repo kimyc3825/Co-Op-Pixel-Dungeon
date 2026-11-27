@@ -1,701 +1,297 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.noxac.pixeldungeon.inn;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonParseException;
+import com.google.gson.JsonObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 
+/**
+ * The party link of one match (PROTOCOL.md §6–§7): starts the original-engine party run and relays
+ * InnOriginalParty packet strings in order, unchanged, in both directions. Every field below is
+ * confined to the "party-link" thread.
+ */
 final class DungeonSession implements AutoCloseable {
-    enum Connection {
-        LOCAL(""), RELAY("중계 연결"), DIRECT("P2P 직접 연결");
-
-        final String label;
-        Connection(String label) { this.label = label; }
-    }
-
-    record Frame(InnApi.DungeonState state, long hostAtReceipt, long receivedAt,
-                 String notice, Connection connection) {
-        long serverTime() {
-            if (state == null) return 0;
-            return state.pausedUntil() > 0 ? state.now()
-                : state.now() + Math.max(0, wallTime() - state.wallNow());
-        }
-
-        long wallTime() {
-            return state == null ? 0 : hostAtReceipt + elapsedSince(receivedAt);
-        }
-    }
-
-    private record Command(long sequence, InnApi.Action action) {}
-    private record Wire(String type, long sequence, List<Command> commands, InnApi.DungeonState state) {}
-    private record Packet(long sequence, String message) {}
-    private record OriginalWire(String kind, String type, long seq, String seed, Boolean friendlyFire, String data) {}
-
     interface OriginalListener {
-        void start(DungeonSession session, InnApi.LinkState link, boolean host, long seed, boolean friendlyFire);
+        /** Both players are connected: leave the inn view (step 1 of §7.4). */
+        void paired(DungeonSession session);
+        /** Start the dungeon; call {@link #originalConfigured()} once it can receive packets. */
+        void start(DungeonSession session, InnApi.Link link, boolean host, long seed, boolean friendlyFire);
         void receive(DungeonSession session, String payload);
         void end(DungeonSession session, String notice);
     }
 
-    private static final long RELAY_SYNC_MS = 165;
-    private static final long DIRECT_SYNC_MS = 2_500;
-    private static final long STATE_HEARTBEAT_MS = 650;
-    private static final long DIRECT_TIMEOUT_MS = 3_500;
-    private static final long COMMAND_RETRY_MS = 275;
-    private static final long ENTRY_TIMEOUT_MS = 16_000;
-    private static final long ORIGINAL_BOOT_TIMEOUT_MS = 120_000;
-    private static final long HOST_TIMEOUT_MS = 14_000;
-    private static final int MAX_MESSAGE_LENGTH = 24 * 1024;
-    private static final int MAX_COMMANDS = 16;
+    /** From the match to `paired` (the web client uses the same limits). */
+    private static final long ENTRY_TIMEOUT_MS = 20_000;
+    /** From `paired` until both sides are ready. */
+    private static final long START_TIMEOUT_MS = 150_000;
+    /** The server ends a run 20 s after a socket drops; stop retrying a little earlier (§9). */
+    private static final long RECONNECT_WINDOW_MS = 15_000;
+    private static final long[] BACKOFF_MS = {500, 1_000, 2_000, 4_000, 8_000};
+    static final int MAX_PAYLOAD_BYTES = 24 * 1024;
+    private static final int MAX_BUFFERED = 512;
 
     private final InnApi api;
     private final String key;
     private final String matchId;
-    private final InnApi.Person localPlayer;
-    private final String theme;
-    private final boolean friendlyFire;
-    private final boolean solo;
-    private final BiConsumer<DungeonSession, Frame> listener;
-    private final OriginalListener originalListener;
-    private final ScheduledThreadPoolExecutor network = new ScheduledThreadPoolExecutor(1,
-        task -> new Thread(task, "dungeon-link"));
-    private final ArrayBlockingQueue<InnApi.Action> pending = new ArrayBlockingQueue<>(MAX_COMMANDS);
-    private final Gson gson = new Gson().newBuilder().disableHtmlEscaping().create();
-    private final AtomicReference<String> originalOutbound = new AtomicReference<>();
-    private final long startedAt = System.nanoTime();
-    private final long epoch = System.currentTimeMillis();
+    private final String role;
+    private final OriginalListener listener;
+    private final ScheduledThreadPoolExecutor network = new ScheduledThreadPoolExecutor(1, task -> {
+        Thread thread = new Thread(task, "party-link");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final ArrayDeque<String> inbound = new ArrayDeque<>();
+    private final InnChannel.Closing closing = new InnChannel.Closing();
     private volatile boolean closed;
 
-    // All battle and transport state below is confined to the dungeon executor.
-    private InnApi.LinkState link;
-    private HostBattle battle;
-    private PeerTransport peer;
-    private boolean host;
+    private InnChannel channel;
+    /** The current channel received its `link`; until then only `hello` may be sent on it. */
+    private boolean linked;
+    private InnApi.Link link;
+    private boolean paired;
+    private boolean peerReady;
+    private boolean launched;
+    private boolean ready;
     private boolean terminal;
-    private boolean wasDirect;
-    private boolean syncInFlight;
-    private boolean signalInFlight;
-    private boolean relayInFlight;
-    private long nextSyncAt;
-    private long nextSignalAt;
-    private long nextRelayAt;
-    private long relayReceived;
-    private long lastSnapshotAt;
-    private long lastSnapshotSequence;
-    private long nextHeartbeatAt;
-    private long directSince;
-    private long lastDirectPacketAt;
-    private long nextPingAt;
-    private long nextCommandAt;
-    private long packetSequence;
-    private long commandSequence;
-    private final ArrayDeque<Command> unackedCommands = new ArrayDeque<>(MAX_COMMANDS);
-    private Packet relayPending;
-    private Frame frame;
-    private final Map<String, Long> originalReceived = new HashMap<>();
-    private long originalPairedAt;
-    private long originalSeenAt;
-    private long originalSeed;
-    private boolean originalFriendlyFire;
-    private boolean originalStarted;
-    private boolean originalConfigured;
-    private boolean originalPayloadReceived;
-    private String originalInbound;
-    private String originalSent;
+    private long deadline;
+    private long lostAt;
+    private int attempt;
+    private String lastError;
+    private ScheduledFuture<?> reconnect;
 
-    DungeonSession(InnApi api, String key, String matchId, InnApi.Person practicePlayer,
-                   BiConsumer<DungeonSession, Frame> listener) {
-        this(api, key, matchId, practicePlayer, DungeonLayout.SEWERS, listener);
-    }
-
-    DungeonSession(InnApi api, String key, String matchId, InnApi.Person practicePlayer, String theme,
-                   BiConsumer<DungeonSession, Frame> listener) {
-        this(api, key, matchId, practicePlayer, theme, false, listener);
-    }
-
-    DungeonSession(InnApi api, String key, String matchId, InnApi.Person practicePlayer, String theme,
-                   boolean friendlyFire, BiConsumer<DungeonSession, Frame> listener) {
-        this(api, key, matchId, practicePlayer, theme, friendlyFire, false, listener);
-    }
-
-    DungeonSession(InnApi api, String key, String matchId, InnApi.Person localPlayer, String theme,
-                   boolean friendlyFire, boolean solo, BiConsumer<DungeonSession, Frame> listener) {
-        this(api, key, matchId, localPlayer, theme, friendlyFire, solo, listener, null);
-    }
-
-    DungeonSession(InnApi api, String key, String matchId, boolean friendlyFire, OriginalListener listener) {
-        this(api, key, matchId, null, null, friendlyFire, false, null, listener);
-    }
-
-    private DungeonSession(InnApi api, String key, String matchId, InnApi.Person localPlayer, String theme,
-                           boolean friendlyFire, boolean solo, BiConsumer<DungeonSession, Frame> listener,
-                           OriginalListener originalListener) {
+    /** @param role the role the inn's `matched` frame announced; the link must agree. */
+    DungeonSession(InnApi api, String key, String matchId, String role, OriginalListener listener) {
         this.api = api;
         this.key = key;
         this.matchId = matchId;
-        this.localPlayer = localPlayer;
-        this.theme = DungeonLayout.themeOrDefault(theme);
-        this.friendlyFire = friendlyFire;
-        this.solo = solo;
+        this.role = role;
         this.listener = listener;
-        this.originalListener = originalListener;
-        network.execute(this::enter);
-        network.scheduleAtFixedRate(this::tick, 0, 25, TimeUnit.MILLISECONDS);
+        deadline = now() + ENTRY_TIMEOUT_MS;
+        submit(this::connect);
+        network.scheduleWithFixedDelay(this::tick, 250, 250, TimeUnit.MILLISECONDS);
     }
 
-    private void enter() {
-        if (closed) return;
-        if (localPlayer != null) {
-            host = true;
-            battle = new HostBattle(UUID.randomUUID().toString(), localPlayer, null, now(), seed(), theme,
-                friendlyFire, solo);
-            tick();
-            return;
-        }
-        api.enterLink(key, matchId).whenComplete((next, error) -> {
-            if (closed && error == null) {
-                api.leaveLink(key, matchId);
-                return;
-            }
-            submit(() -> {
-                if (closed || terminal) return;
-                if (error == null) acceptLink(next);
-                else finish("파티 던전에 입장하지 못했습니다. 여관에서 다시 시도해 주세요.");
-            });
-        });
-    }
-
-    void action(InnApi.Action action) {
-        if (!closed) pending.offer(action);
-    }
-
+    /** The local dungeon has started and can receive packets: send `ready` (steps 2–3 of §7.4). */
     void originalConfigured() {
         submit(() -> {
-            if (closed || terminal) return;
-            originalConfigured = true;
-            if (originalInbound != null) {
-                originalListener.receive(this, originalInbound);
-                originalInbound = null;
+            if (terminal || !launched || ready) return;
+            ready = true;
+            deadline = now() + START_TIMEOUT_MS;
+            // Otherwise acceptLink sends it once the (re)connected channel is linked.
+            if (linked) channel.send(InnApi.frame("ready"));
+            while (!inbound.isEmpty()) listener.receive(this, inbound.removeFirst());
+        });
+    }
+
+    /**
+     * Sends one InnOriginalParty packet. Packets are delivered in the order given; none replaces
+     * another. Before both sides are ready (step 4 of §7.4) and while reconnecting they are
+     * dropped: the host resends snapshots and the guest its pending command until acknowledged.
+     */
+    void sendOriginal(String payload) {
+        if (closed || payload == null || payload.isEmpty() || payload.length() > MAX_PAYLOAD_BYTES ||
+            payload.getBytes(StandardCharsets.UTF_8).length > MAX_PAYLOAD_BYTES) return;
+        submit(() -> {
+            if (terminal || !ready || !peerReady || !linked) return;
+            JsonObject data = InnApi.frame("data");
+            data.addProperty("d", payload);
+            channel.send(data);
+        });
+    }
+
+    // ---- socket ----
+
+    private void connect() {
+        if (closed || terminal || channel != null) return;
+        reconnect = null;
+        lastError = null;
+        linked = false;
+        channel = api.open(InnApi.LINK_PATH, Map.of("id", matchId), network, new InnChannel.Handler() {
+            @Override
+            public void opened(InnChannel source) {
+                if (source != channel) return;
+                JsonObject hello = InnApi.frame("hello");
+                hello.addProperty("v", InnApi.WIRE_VERSION);
+                hello.addProperty("key", key);
+                source.send(hello);
+            }
+
+            @Override
+            public void frame(InnChannel source, JsonObject frame) {
+                if (source == channel) receive(frame);
+            }
+
+            @Override
+            public void closed(InnChannel source, int code, String reason) {
+                if (source == channel) disconnected(code);
             }
         });
     }
 
-    void sendOriginal(String payload) {
-        if (!closed && payload != null && !payload.isEmpty()) originalOutbound.set(payload);
+    private void disconnected(int code) {
+        channel = null;
+        linked = false;
+        if (closed || terminal) return;
+        switch (code) {
+            case 4004, 4010, 1000 -> finish(endedNotice(lastError));
+            case 4009 -> finish("다른 곳에서 이 원정에 접속했습니다.");
+            case 4000, 4001, 4003 -> finish("파티 연결 정보를 확인할 수 없습니다.");
+            case 4008 -> finish("파티 연결 요청이 너무 많아 원정이 끝났습니다.");
+            default -> {
+                long time = now();
+                if (lostAt == 0) lostAt = time;
+                if (time - lostAt >= RECONNECT_WINDOW_MS) {
+                    finish("파티 연결이 끊겼습니다.");
+                    return;
+                }
+                long base = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
+                long delay = (long) (base * (0.75 + ThreadLocalRandom.current().nextDouble() / 2));
+                try {
+                    reconnect = network.schedule(this::connect, delay, TimeUnit.MILLISECONDS);
+                } catch (RejectedExecutionException ignored) {
+                    // Closing.
+                }
+            }
+        }
+    }
+
+    private void receive(JsonObject frame) {
+        if (terminal) return;
+        switch (InnApi.string(frame, "t")) {
+            case "link" -> acceptLink(frame);
+            case "paired" -> {
+                if (link != null) paired();
+            }
+            case "peer" -> {
+                if (link != null && Boolean.TRUE.equals(InnApi.bool(frame, "ready"))) peerReady();
+            }
+            case "data" -> {
+                String payload = InnApi.string(frame, "d");
+                if (link == null || payload == null || payload.isEmpty() || payload.length() > MAX_PAYLOAD_BYTES) return;
+                if (ready) {
+                    listener.receive(this, payload);
+                } else if (inbound.size() < MAX_BUFFERED) {
+                    inbound.addLast(payload);
+                }
+            }
+            case "ended" -> finish(endedNotice(InnApi.string(frame, "reason")));
+            case "error" -> lastError = InnApi.string(frame, "code");
+            case null, default -> { } // Unknown types are ignored (§2).
+        }
+    }
+
+    private void acceptLink(JsonObject frame) {
+        InnApi.Link next = api.link(frame);
+        if (next == null || !matchId.equals(next.id()) || (role != null && !role.equals(next.role())) ||
+            next.dungeonProtocol() != InnApi.DUNGEON_PROTOCOL ||
+            (link != null && (link.seed() != next.seed() || !link.role().equals(next.role())))) {
+            finish("파티 연결 정보를 확인할 수 없습니다.");
+            return;
+        }
+        lostAt = 0;
+        attempt = 0;
+        link = next;
+        linked = true;
+        // After a reconnect the server remembers readiness; repeating it is harmless (§9).
+        if (ready) channel.send(InnApi.frame("ready"));
+        if (next.paired()) paired();
+        if (next.partnerReady()) peerReady();
+    }
+
+    private void paired() {
+        if (paired) return;
+        paired = true;
+        deadline = now() + START_TIMEOUT_MS;
+        listener.paired(this);
+        // The guest loads first; the host starts once the guest reports ready.
+        if (!link.host()) launch();
+    }
+
+    private void peerReady() {
+        peerReady = true;
+        if (link.host() && paired) launch();
+    }
+
+    private void launch() {
+        if (launched) return;
+        launched = true;
+        deadline = now() + START_TIMEOUT_MS;
+        listener.start(this, link, link.host(), link.seed(), link.friendlyFire());
     }
 
     private void tick() {
         if (closed || terminal) return;
-        long now = now();
-        boolean waiting = originalListener == null ? frame == null : originalPairedAt == 0;
-        if (waiting && elapsedSince(startedAt) >= ENTRY_TIMEOUT_MS) {
+        if (!(ready && peerReady) && now() >= deadline) {
             finish("동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.");
-            return;
-        }
-        if (localPlayer != null) {
-            if (battle != null) advanceHost(now, false);
-            return;
-        }
-        if (link == null) return;
-        checkDirectLiveness(now);
-        boolean direct = direct();
-        boolean switched = direct != wasDirect;
-        if (switched) {
-            wasDirect = direct;
-            nextSyncAt = 0;
-            nextCommandAt = 0;
-            nextPingAt = 0;
-            relayPending = null;
-            originalSent = null;
-            if (frame != null) publish(frame.state(), frame.hostAtReceipt(), frame.receivedAt(), frame.notice());
-        }
-        if (!syncInFlight && now >= nextSyncAt) sync(now, direct);
-        if (!link.paired()) return;
-        publishSignal(now);
-        if (originalListener != null) {
-            tickOriginal(now);
-        } else if (host) {
-            advanceHost(now, switched || now >= nextHeartbeatAt);
-        } else {
-            if (direct && now >= nextPingAt) {
-                peer.send(gson.toJson(new Wire("ping", 0, null, null)));
-                nextPingAt = now + STATE_HEARTBEAT_MS;
-            }
-            if (frame != null && now - lastSnapshotAt >= HOST_TIMEOUT_MS) {
-                finish("파티장과의 연결이 끊겼습니다.");
-                return;
-            }
-            sendGuestCommands(now);
-        }
-        flushRelay(now);
-    }
-
-    private void tickOriginal(long now) {
-        boolean booted = host ? originalConfigured : originalPayloadReceived;
-        if ((!booted && now - originalPairedAt >= ORIGINAL_BOOT_TIMEOUT_MS) ||
-                (booted && direct() && now - originalSeenAt >= HOST_TIMEOUT_MS)) {
-            finish("동료와 원본 던전 연결이 끊겼습니다.");
-            return;
-        }
-
-        // Leave time for the browser runtime to finish loading before the host world starts.
-        if (host && !originalStarted && now >= nextPingAt) {
-            sendOriginalWire("hello", null);
-            nextPingAt = now + STATE_HEARTBEAT_MS;
-            return;
-        }
-        if (!host && originalConfigured && !originalPayloadReceived && now >= nextPingAt) {
-            sendOriginalWire("ready", null);
-            nextPingAt = now + STATE_HEARTBEAT_MS;
-            return;
-        }
-
-        if (originalConfigured && (host || originalPayloadReceived)) {
-            String payload = originalOutbound.get();
-            if (payload != null && (!payload.equals(originalSent) || now >= nextPingAt)) {
-                sendOriginalWire("payload", payload);
-                originalSent = payload;
-                nextPingAt = now + STATE_HEARTBEAT_MS;
-                return;
-            }
-        }
-        // A pending command stays in the relay slot until the other peer can read it.
-        if (now >= nextPingAt) {
-            sendOriginalWire("ping", null);
-            nextPingAt = now + STATE_HEARTBEAT_MS;
         }
     }
 
-    private void sendOriginalWire(String type, String payload) {
-        long sequence = ++packetSequence;
-        boolean hello = "hello".equals(type);
-        String message = gson.toJson(new OriginalWire("original", type, sequence,
-            hello ? Long.toString(originalSeed) : null, hello ? friendlyFire : null, payload));
-        if (message.getBytes(StandardCharsets.UTF_8).length <= MAX_MESSAGE_LENGTH) {
-            transmit(new Packet(sequence, message));
-        }
-    }
-
-    private void advanceHost(long now, boolean sendHeartbeat) {
-        battle.advance(now);
-        for (InnApi.Action action; (action = pending.poll()) != null; ) {
-            battle.input(selfId(), ++commandSequence, action, now);
-        }
-        boolean changed = frame == null || frame.state().revision() != battle.revision();
-        if (changed) publish(battle.snapshot(selfId(), now), now, System.nanoTime(), "");
-        if (link != null && (changed || sendHeartbeat)) {
-            InnApi.DungeonState snapshot = battle.snapshot(link.partnerId(), now);
-            long sequence = ++packetSequence;
-            transmit(packet(new Wire("state", sequence, null, snapshot)));
-            nextHeartbeatAt = now + STATE_HEARTBEAT_MS;
-        }
-    }
-
-    private void sendGuestCommands(long now) {
-        for (InnApi.Action action; (action = pending.poll()) != null; ) {
-            if (frame == null || !maySend(action, frame.state())) continue;
-            if (unackedCommands.size() == MAX_COMMANDS) unackedCommands.removeFirst();
-            unackedCommands.addLast(new Command(++commandSequence, action));
-            nextCommandAt = 0;
-        }
-        if (!unackedCommands.isEmpty() && now >= nextCommandAt) {
-            // Each relay slot carries the full unacknowledged tail, preserving inputs when it is replaced.
-            transmit(packet(new Wire("input", unackedCommands.getLast().sequence(), List.copyOf(unackedCommands), null)));
-            nextCommandAt = now + COMMAND_RETRY_MS;
-        }
-    }
-
-    private static boolean maySend(InnApi.Action action, InnApi.DungeonState state) {
-        String status = state.status();
-        if ("chat".equals(action.type())) return !"closed".equals(status);
-        if ("pause".equals(action.type())) return "active".equals(status) || "won".equals(status);
-        if (state.pausedUntil() > 0) return false;
-        return "active".equals(status) ||
-            "won".equals(status) && ("move".equals(action.type()) || "eat".equals(action.type()) ||
-                "use-item".equals(action.type()));
-    }
-
-    private void sync(long now, boolean direct) {
-        syncInFlight = true;
-        nextSyncAt = now + (direct ? DIRECT_SYNC_MS : RELAY_SYNC_MS);
-        api.syncLink(key, matchId).whenComplete((next, error) -> submit(() -> {
-            syncInFlight = false;
-            if (closed || terminal) return;
-            if (error == null) {
-                acceptLink(next);
-            } else if (linkEnded(error) && !direct()) {
-                finish("파티 연결이 종료되었습니다.");
-            } else {
-                nextSyncAt = Math.max(nextSyncAt, now() + 350);
-            }
-        }));
-    }
-
-    private void acceptLink(InnApi.LinkState next) {
-        if (!matchId.equals(next.id())) {
-            finish("파티 연결 정보를 확인할 수 없습니다.");
-            return;
-        }
-        if (next.closed()) {
-            finish("동료가 원정을 종료했습니다.");
-            return;
-        }
-        boolean paired = link != null && link.paired();
-        link = next;
-        if (!next.paired()) return;
-        if (!paired) {
-            host = "host".equals(next.role());
-            if (originalListener != null) {
-                originalPairedAt = now();
-                if (host) originalSeed = Integer.toUnsignedLong(ThreadLocalRandom.current().nextInt());
-            } else if (host) {
-                battle = new HostBattle(next.id(),
-                    new InnApi.Person(next.selfId(), next.selfName(), 0, 0, false, next.selfAppearance()),
-                    new InnApi.Person(next.partnerId(), next.partnerName(), 0, 0, false, next.partnerAppearance()),
-                    now(), seed(), theme, friendlyFire, false,
-                    InnApi.Preparation.health(next.selfPreparation()), InnApi.Preparation.rations(next.selfPreparation()),
-                    InnApi.Preparation.health(next.partnerPreparation()), InnApi.Preparation.rations(next.partnerPreparation()));
-            }
-            openPeer();
-        }
-        if (peer != null && next.signal() != null) peer.applyRemote(next.signal());
-        if (next.message() != null && next.messageSeq() > relayReceived) {
-            relayReceived = next.messageSeq();
-            receive(next.message());
-        }
-    }
-
-    private void openPeer() {
-        if (Boolean.getBoolean("noxac.inn.relayOnly")) return;
-        try {
-            String stun = System.getProperty("noxac.inn.stun", "stun:stun.l.google.com:19302");
-            peer = new PeerTransport(host, stun, this::submit, message -> {
-                lastDirectPacketAt = now();
-                receive(message);
-            });
-        } catch (RuntimeException | LinkageError unavailable) {
-            // The relay uses the same battle protocol on systems without the WebRTC runtime.
-        }
-    }
-
-    private void publishSignal(long now) {
-        if (peer == null || signalInFlight || now < nextSignalAt) return;
-        InnApi.Signal signal = peer.pendingLocal();
-        if (signal == null) return;
-        signalInFlight = true;
-        nextSignalAt = now + 450;
-        api.signalLink(key, matchId, signal).whenComplete((unused, error) -> submit(() -> {
-            signalInFlight = false;
-            if (!closed && !terminal && error == null) peer.markPublished();
-        }));
-    }
-
-    private boolean direct() {
-        return peer != null && peer.connected();
-    }
-
-    private void checkDirectLiveness(long now) {
-        if (!direct()) {
-            directSince = 0;
-            return;
-        }
-        if (directSince == 0) directSince = now;
-        // An open data channel can outlive a broken network route.
-        if (now - Math.max(directSince, lastDirectPacketAt) >= DIRECT_TIMEOUT_MS) peer.close();
-    }
-
-    private void transmit(Packet packet) {
-        if (direct() && peer.send(packet.message())) {
-            relayPending = null;
-        } else {
-            relayPending = packet;
-        }
-    }
-
-    private void flushRelay(long now) {
-        if (relayPending == null || relayInFlight || now < nextRelayAt) return;
-        Packet packet = relayPending;
-        relayPending = null;
-        relayInFlight = true;
-        api.relayLink(key, matchId, packet.sequence(), packet.message()).whenComplete((unused, error) -> submit(() -> {
-            relayInFlight = false;
-            if (closed || terminal || error == null) return;
-            if (linkEnded(error) && !direct()) {
-                finish("파티 연결이 종료되었습니다.");
-            } else if (relayPending == null && !direct()) {
-                relayPending = packet;
-                nextRelayAt = now() + 250;
-            }
-        }));
-    }
-
-    private void receive(String message) {
-        if (closed || terminal || link == null || !link.paired() || message.length() > MAX_MESSAGE_LENGTH) return;
-        if (originalListener != null) {
-            receiveOriginal(message);
-            return;
-        }
-        Wire wire;
-        try {
-            wire = gson.fromJson(message, Wire.class);
-        } catch (JsonParseException invalid) {
-            return;
-        }
-        if (wire == null) return;
-        if ("leave".equals(wire.type())) {
-            finish("동료가 원정을 종료했습니다.");
-        } else if (host && "input".equals(wire.type()) && wire.commands() != null &&
-            !wire.commands().isEmpty() && wire.commands().size() <= MAX_COMMANDS) {
-            long now = now();
-            for (Command command : wire.commands()) {
-                if (command != null && command.action() != null && command.sequence() > 0 &&
-                    command.sequence() <= wire.sequence()) {
-                    battle.input(link.partnerId(), command.sequence(), command.action(), now);
-                }
-            }
-            advanceHost(now, false);
-        } else if (!host && "state".equals(wire.type()) && wire.sequence() > lastSnapshotSequence &&
-            validSnapshot(wire.state())) {
-            lastSnapshotSequence = wire.sequence();
-            acceptSnapshot(wire.state());
-        }
-    }
-
-    private void receiveOriginal(String message) {
-        OriginalWire wire;
-        try {
-            wire = gson.fromJson(message, OriginalWire.class);
-        } catch (JsonParseException invalid) {
-            return;
-        }
-        if (wire == null || !"original".equals(wire.kind()) || wire.type() == null) return;
-        if (wire.seq() <= originalReceived.getOrDefault(wire.type(), 0L) ||
-                wire.seq() > 9_007_199_254_740_991L) return;
-        if ("leave".equals(wire.type())) {
-            finish("동료가 원정을 종료했습니다.");
-            return;
-        }
-        if ("ping".equals(wire.type())) {
-            originalReceived.put(wire.type(), wire.seq());
-            originalSeenAt = now();
-            return;
-        }
-
-        switch (wire.type()) {
-            case "hello" -> {
-                if (host || wire.seed() == null || wire.friendlyFire() == null ||
-                        !wire.seed().matches("0|[1-9][0-9]{0,9}")) return;
-                long sharedSeed;
-                try {
-                    sharedSeed = Long.parseLong(wire.seed());
-                } catch (NumberFormatException invalid) {
-                    return;
-                }
-                if (sharedSeed < 0 || sharedSeed > 0xFFFF_FFFFL) return;
-                if (!originalStarted) {
-                    originalSeed = sharedSeed;
-                    startOriginal(wire.friendlyFire());
-                } else if (sharedSeed != originalSeed || wire.friendlyFire() != originalFriendlyFire) {
-                    return;
-                }
-            }
-            case "ready" -> {
-                if (!host) return;
-                if (!originalStarted) startOriginal(friendlyFire);
-            }
-            case "payload" -> {
-                if (!originalStarted || wire.data() == null || wire.data().isEmpty()) return;
-                originalPayloadReceived = true;
-                if (originalConfigured) originalListener.receive(this, wire.data());
-                else originalInbound = wire.data();
-            }
-            default -> { return; }
-        }
-        originalReceived.put(wire.type(), wire.seq());
-        originalSeenAt = now();
-    }
-
-    private void startOriginal(boolean partyFriendlyFire) {
-        originalStarted = true;
-        originalFriendlyFire = partyFriendlyFire;
-        nextPingAt = 0;
-        originalListener.start(this, link, host, originalSeed, partyFriendlyFire);
-    }
-
-    private boolean validSnapshot(InnApi.DungeonState state) {
-        return state != null && matchId.equals(state.id()) && link.selfId().equals(state.selfId()) &&
-            (frame == null || state.revision() >= frame.state().revision() &&
-                state.theme().equals(frame.state().theme()) && state.friendlyFire() == frame.state().friendlyFire()) &&
-            state.map() != null && !state.map().isEmpty() && state.map().getFirst() != null &&
-            !state.map().getFirst().isEmpty() &&
-            state.map().stream().allMatch(row -> row != null && row.length() == state.map().getFirst().length()) &&
-            state.actors() != null && state.actors().stream().allMatch(actor ->
-                actor != null && actor.id() != null && actor.name() != null && actor.kind() != null &&
-                    !"dummy".equals(actor.kind()) && Double.isFinite(actor.energy()) && actor.rations() >= 0 &&
-                    validInventory(actor.inventory())) &&
-            state.actors().stream().anyMatch(actor -> state.selfId().equals(actor.id())) &&
-            validKnowledge(state.identifiedItems()) &&
-            state.trainingTools().isEmpty() && validEncounter(state) &&
-            state.drops() != null && state.drops().stream().allMatch(drop ->
-                drop != null && drop.id() != null && drop.item() != null) &&
-            state.messages().size() <= 16 && state.messages().stream().allMatch(message ->
-                message != null && message.id() > 0 && message.time() >= 0 && message.actorId() != null &&
-                    message.name() != null && message.text() != null) &&
-            state.attackEvents().size() <= 16 && state.attackEvents().stream().allMatch(event ->
-                event != null && event.id() > 0 && event.at() >= 0 && event.actorId() != null && event.amount() >= 0 &&
-                    ("attack".equals(event.action()) || "shoot".equals(event.action())) &&
-                    validAttackResult(event.result()) && mapCell(state, event.x(), event.y())) &&
-            state.projectiles().size() <= 8 && state.projectiles().stream().allMatch(projectile ->
-                projectile != null && projectile.id() > 0 && projectile.ownerId() != null && projectile.stepAt() >= 0 &&
-                    mapCell(state, projectile.x(), projectile.y()) &&
-                    mapCell(state, projectile.nextX(), projectile.nextY()) &&
-                    Math.max(Math.abs(projectile.nextX() - projectile.x()), Math.abs(projectile.nextY() - projectile.y())) == 1) &&
-            ("active".equals(state.status()) || "won".equals(state.status()) || "lost".equals(state.status()));
-    }
-
-    private static boolean validEncounter(InnApi.DungeonState state) {
-        return switch (state.encounter()) {
-            case "combat", "pursuit" -> state.inCombat();
-            case "alert", "exploration" -> !state.inCombat();
-            default -> false;
+    private static String endedNotice(String reason) {
+        return switch (reason == null ? "" : reason) {
+            case "partner_left" -> "동료가 원정을 종료했습니다.";
+            case "partner_lost" -> "동료와의 연결이 끊겼습니다.";
+            case "pair_timeout" -> "동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.";
+            case "rate_limited", "protocol_error" -> "파티 연결에 문제가 생겨 원정이 끝났습니다.";
+            case "expired" -> "원정 시간이 다 되어 파티 연결이 끝났습니다.";
+            default -> "파티 연결이 종료되었습니다.";
         };
-    }
-
-    private static boolean validInventory(List<InnApi.InventoryItem> inventory) {
-        return inventory.size() <= 4 && inventory.stream().allMatch(entry -> entry != null && entry.amount() > 0 &&
-            ("ration".equals(entry.item()) || "gold".equals(entry.item()) || BattleRules.isPotion(entry.item()))) &&
-            inventory.stream().map(InnApi.InventoryItem::item).distinct().count() == inventory.size();
-    }
-
-    private static boolean validKnowledge(List<InnApi.ItemKnowledge> knowledge) {
-        return knowledge.size() <= 2 && knowledge.stream().allMatch(entry -> entry != null && BattleRules.isPotion(entry.item()) &&
-            ("healing".equals(entry.effect()) || "energy".equals(entry.effect()))) &&
-            knowledge.stream().map(InnApi.ItemKnowledge::item).distinct().count() == knowledge.size() &&
-            knowledge.stream().map(InnApi.ItemKnowledge::effect).distinct().count() == knowledge.size();
-    }
-
-    private static boolean validAttackResult(String result) {
-        return result != null && switch (result) {
-            case "hit", "out_of_reach", "blocked", "target_gone", "miss", "ally_blocked" -> true;
-            default -> false;
-        };
-    }
-
-    private static boolean mapCell(InnApi.DungeonState state, int x, int y) {
-        return y >= 0 && y < state.map().size() && x >= 0 && x < state.map().get(y).length();
-    }
-
-    private void acceptSnapshot(InnApi.DungeonState next) {
-        lastSnapshotAt = now();
-        unackedCommands.removeIf(command -> command.sequence() <= next.commandAck());
-        if (relayPending != null && relayPending.sequence() <= next.commandAck()) relayPending = null;
-        long receipt = System.nanoTime();
-        long hostTime = next.wallNow();
-        if (frame != null) hostTime = Math.max(hostTime, frame.wallTime());
-        InnApi.DungeonState changed = frame != null && next.revision() == frame.state().revision()
-            ? frame.state() : withPartyAppearances(next);
-        publish(changed, hostTime, receipt, "");
-    }
-
-    private InnApi.DungeonState withPartyAppearances(InnApi.DungeonState state) {
-        if (link.selfAppearance() == null && link.partnerAppearance() == null) return state;
-        return state.withActors(state.actors().stream().map(actor -> {
-            if (actor.id().equals(link.selfId())) return actor.withAppearance(link.selfAppearance());
-            if (actor.id().equals(link.partnerId())) return actor.withAppearance(link.partnerAppearance());
-            return actor;
-        }).toList());
     }
 
     private void finish(String notice) {
+        if (terminal) return;
         terminal = true;
-        if (originalListener != null) {
-            originalListener.end(this, notice);
-        } else if (frame == null) {
-            publish(null, 0, 0, notice);
-        } else {
-            InnApi.DungeonState state = frame.state();
-            if ("active".equals(state.status()) || "won".equals(state.status())) {
-                long time = frame.serverTime();
-                state = new InnApi.DungeonState(state.id(), state.selfId(), time, state.map(), state.actors(),
-                    null, "closed", false, state.revision(), state.drops(), state.commandAck(), false, state.theme(),
-                    frame.wallTime(), 0, state.pauseReadyAt(), state.messages(), state.friendlyFire(), state.attackEvents(),
-                    List.of(), state.trainingTools(), state.identifiedItems());
-            }
-            publish(state, frame.hostAtReceipt(), frame.receivedAt(), notice);
-        }
-        if (peer != null) peer.close();
+        // Tell the server, so the partner's run ends too when this side gives up first.
+        leaveLink();
+        listener.end(this, notice);
     }
 
-    private void publish(InnApi.DungeonState state, long hostTime, long receipt, String notice) {
-        if (closed) return;
-        Connection connection = localPlayer != null ? Connection.LOCAL :
-            direct() ? Connection.DIRECT : Connection.RELAY;
-        frame = new Frame(state, hostTime, receipt, notice, connection);
-        listener.accept(this, frame);
+    private void leaveLink() {
+        if (reconnect != null) reconnect.cancel(false);
+        InnChannel current = channel;
+        boolean joined = linked;
+        channel = null;
+        linked = false;
+        if (current == null) return;
+        // Before its `link` the server may still be checking the hello and would refuse the frame.
+        if (joined) current.send(InnApi.frame("leave"));
+        closing.track(current.close(1000, "leave"));
     }
 
-    private Packet packet(Wire wire) {
-        return new Packet(wire.sequence(), gson.toJson(wire));
-    }
-
-    private String selfId() {
-        return localPlayer == null ? link.selfId() : localPlayer.id();
-    }
-
-    private static long seed() {
-        return ThreadLocalRandom.current().nextLong();
-    }
-
-    private long now() {
-        return epoch + elapsedSince(startedAt);
-    }
-
-    private static long elapsedSince(long nanoTime) {
-        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - nanoTime);
-    }
-
-    private static boolean linkEnded(Throwable error) {
-        if (error instanceof CompletionException) error = error.getCause();
-        return error instanceof InnApi.Problem problem && (problem.status == 404 || problem.status == 410);
+    private static long now() {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
     }
 
     private void submit(Runnable task) {
         try {
             network.execute(task);
         } catch (RejectedExecutionException ignored) {
-            // A native callback or network reply can arrive during shutdown.
+            // A network reply can arrive during shutdown.
         }
     }
 
+    /** Ends the run for both sides (`leave`) without notifying the listener. */
     @Override
     public void close() {
         if (closed) return;
         closed = true;
         submit(() -> {
-            if (battle != null) battle.close(now());
-            if (peer != null) {
-                if (direct()) {
-                    peer.send(gson.toJson(originalListener == null ? new Wire("leave", 0, null, null)
-                        : new OriginalWire("original", "leave", ++packetSequence, null, null, null)));
-                }
-                peer.close();
-            }
-            if (link != null) api.leaveLink(key, matchId);
+            terminal = true;
+            leaveLink();
+            network.shutdown();
         });
-        network.shutdown();
+    }
+
+    /** Waits up to the timeout for {@link #close} to finish sending `leave` and the close frame. */
+    boolean awaitClosed(long timeout, TimeUnit unit) throws InterruptedException {
+        long deadline = System.nanoTime() + unit.toNanos(timeout);
+        if (!network.awaitTermination(timeout, unit)) return false;
+        return closing.awaitDone(deadline);
     }
 }

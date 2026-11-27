@@ -21,8 +21,6 @@ dependencies {
     implementation project(':desktop')
     implementation project(':core')
     implementation 'com.google.code.gson:gson:2.13.2'
-    implementation 'dev.onvoid.webrtc:webrtc-java:1.0.0'
-    runtimeOnly 'dev.onvoid.webrtc:webrtc-java:1.0.0:windows-x86_64'
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -36,7 +34,7 @@ tasks.named('processResources') {
     }
     def webClient = rootProject.file('../web-client/play')
     from(new File(webClient, 'assets')) {
-        include 'inn-layout.json', 'inn-npcs.png', 'inn-hall.png', 'inn-hall-fx.png', 'training.png', 'avatars/*.png', 'avatars/catalog.json'
+        include 'inn-layout.json', 'inn-npcs.png', 'inn-hall.png', 'inn-hall-fx.png', 'avatars/*.png', 'avatars/catalog.json'
         into 'inn'
     }
     from(new File(webClient, 'defeat-lines.json')) { into 'inn' }
@@ -46,11 +44,36 @@ tasks.named('jar') {
     manifest.attributes('Main-Class': application.mainClass.get())
 }
 
+// The server origin lives only in inn-origin.txt. Until the first Cloudflare deploy it holds a
+// placeholder on the reserved .invalid TLD; a release built from it could never reach the inn.
+def innOrigin = file('src/main/resources/inn-origin.txt')
+def checkInnOrigin = tasks.register('checkInnOrigin') {
+    group = 'verification'
+    description = 'Fails while inn-origin.txt still holds the placeholder server origin.'
+    inputs.file(innOrigin)
+    doLast {
+        def origin = innOrigin.getText('UTF-8').strip()
+        def host = null
+        try {
+            host = new URI(origin).host
+        } catch (URISyntaxException ignored) {
+            // Reported below.
+        }
+        if (host == null || host.toLowerCase(Locale.ROOT).endsWith('.invalid')) {
+            throw new GradleException(
+                "inn-client/src/main/resources/inn-origin.txt holds '${origin}', which is not a deployed server.\n" +
+                'Write the HTTPS origin of the deployed Worker (for example https://<worker>.<account>.workers.dev) ' +
+                'into that file before packaging. For local runs, set NOXAC_INN_URL instead.')
+        }
+    }
+}
+
 def packagedInput = layout.buildDirectory.dir("jpackage-input/${version}")
 def packagedOutput = layout.buildDirectory.dir("jpackage/${version}")
 def appImage = packagedOutput.map { it.dir('NoxacPixelDungeon') }
 
 tasks.register('stageAppImage', Sync) {
+    dependsOn checkInnOrigin
     from(tasks.named('jar'))
     from(configurations.runtimeClasspath) {
         exclude { entry ->
@@ -65,7 +88,7 @@ tasks.register('stageAppImage', Sync) {
 tasks.register('packageWindows', Exec) {
     group = 'distribution'
     description = 'Builds the portable Windows x64 EXE and its bundled Java runtime.'
-    dependsOn tasks.named('stageAppImage')
+    dependsOn checkInnOrigin, tasks.named('stageAppImage')
     inputs.dir(packagedInput)
     inputs.file('../LICENSE.txt')
     inputs.file('THIRD_PARTY_NOTICES.md')
