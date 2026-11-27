@@ -66,6 +66,8 @@ tasks.register('generateWebBuildConfig') {
 public class WebBuildConfig {
 	public static final String VERSION = "${webVersionName}";
 	public static final int VERSION_CODE = ${appVersionCode};
+	//compile-time constant: code behind it is left out of release builds entirely
+	public static final boolean INDEV = ${project.hasProperty('webDebug')};
 }
 """
     }
