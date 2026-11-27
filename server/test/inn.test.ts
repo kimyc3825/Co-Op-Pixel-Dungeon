@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { env, exports } from 'cloudflare:workers';
-import { runDurableObjectAlarm } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { appearance, enter, inObject, layoutId, newKey, open, sleep } from './helpers';
 
@@ -120,7 +119,7 @@ describe('inn presence', () => {
     expect(welcome.present).toBe(true);
   });
 
-  it('rolls one preparation, keeps it across a reconnect and consumes it on use', async () => {
+  it('rolls one preparation, carries it to a socket that takes over and consumes it on use', async () => {
     const layout = layoutId();
     const a = await enter(layout);
     expect(await a.client.request({ t: 'prepare' })).toMatchObject({ t: 'ok' });
@@ -130,13 +129,18 @@ describe('inn presence', () => {
     await a.client.request({ t: 'prepare' });
     expect((await a.client.next('preparation')).preparation).toEqual(preparation);
 
-    a.client.close();
-    await sleep(50);
+    // A reconnect that takes over the still-open socket keeps the preparation (it lives in the attachment).
     const again = await enter(layout, { key: a.key });
     expect(again.id).toBe(a.id);
     expect(again.welcome.preparation).toEqual(preparation);
     await again.client.request({ t: 'use_preparation', id: preparation.id });
     expect((await again.client.next('preparation')).preparation).toBeNull();
+    // After a full disconnect nothing is kept.
+    await again.client.request({ t: 'prepare' });
+    await again.client.next('preparation');
+    again.client.close();
+    await sleep(50);
+    expect((await enter(layout, { key: a.key })).welcome.preparation).toBeNull();
   });
 });
 
@@ -209,23 +213,28 @@ describe('inn limits', () => {
     for (const client of clients) client.close();
   });
 
-  it('times out sockets that never say hello and drops stale ones', async () => {
+  it('times out sockets that never say hello and drops stale ones when the room is next used', async () => {
     const layout = layoutId();
     const silent = await open(`/api/v5/inn?layout=${layout}`);
+    const watcher = await enter(layout);
     const a = await enter(layout);
+    await watcher.client.next('person');
     const stub = env.INN.get(env.INN.idFromName(`${layout}:0`)) as unknown as DurableObjectStub;
     await inObject(stub, async (instance: any, state: DurableObjectState) => {
       for (const ws of state.getWebSockets()) {
         const member = ws.deserializeAttachment();
+        if (member.id === watcher.id) continue;
         member.openedAt -= 200_000;
         if (member.seenAt) member.seenAt -= 200_000;
         ws.serializeAttachment(member);
         instance.conns.delete(ws);
       }
     });
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    // No alarm: the next connection sweeps.
+    await open(`/api/v5/inn?layout=${layout}`);
     expect((await silent.waitClosed()).code).toBe(4002);
     expect((await a.client.waitClosed()).code).toBe(1001);
+    expect(await watcher.client.next('gone')).toEqual({ t: 'gone', id: a.id });
   });
 
   it('replaces the older socket when the same key reconnects', async () => {

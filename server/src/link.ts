@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // One party link per match: authenticates the two matched players, hands both the run settings,
 // relays opaque dungeon payloads in order the moment they arrive, and ends the run when a side leaves.
+//
+// Storage: one row (`link`: settings and pairing state), written at creation, on pairing, on each
+// side's first `ready` and when a side drops; deleted with everything else when the run ends.
 import { DurableObject } from 'cloudflare:workers';
 import type { Env, LinkConfig, LinkPlayer } from './env';
 import { CLOSE, KEY, LIMITS, WIRE_VERSION, parseFrame, utf8Bytes, type Json } from './protocol';
@@ -10,7 +13,7 @@ type Role = 'host' | 'guest';
 const ROLES: Role[] = ['host', 'guest'];
 const other = (role: Role): Role => role === 'host' ? 'guest' : 'host';
 
-interface Attachment { phase: 'new' | 'joined' | 'closed'; openedAt: number; role?: Role }
+interface Attachment { phase: 'new' | 'joined' | 'closed'; openedAt: number; role?: Role; seenAt?: number }
 
 interface LinkState {
   pairedAt: number;
@@ -19,9 +22,11 @@ interface LinkState {
   lostAt: Partial<Record<Role, number>>;
 }
 
+interface Stored { config: LinkConfig; state: LinkState }
+
 class Conn {
-  // A relay frame every 120 ms per side is normal for the original engine; this leaves ample headroom.
-  readonly messages = new Bucket(120, 60);
+  // The game sends on change; 20 frames/s sustained with a burst of 60 leaves headroom for bursts of play.
+  readonly messages = new Bucket(60, 20);
   readonly bytes = new Bucket(2 * 1024 * 1024, 1024 * 1024);
   constructor(public attachment: Attachment) {}
 }
@@ -40,8 +45,13 @@ export class PartyLink extends DurableObject<Env> {
     super(ctx, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     ctx.blockConcurrencyWhile(async () => {
-      this.config = (await ctx.storage.get<LinkConfig>('config')) ?? null;
-      this.state = (await ctx.storage.get<LinkState>('state')) ?? this.state;
+      const stored = await ctx.storage.get<Stored>('link');
+      if (!stored) return;
+      this.config = stored.config;
+      this.state = stored.state;
+      // After a reset (a deploy, an eviction) no close handler runs for sockets that were lost.
+      // A paired side without a socket counts as lost from now on.
+      await this.noticeMissing();
     });
   }
 
@@ -52,42 +62,55 @@ export class PartyLink extends DurableObject<Env> {
       throw new Error('invalid_link');
     }
     this.config = config;
-    await this.ctx.storage.put({ config, state: this.state });
+    await this.save();
     await this.reschedule();
   }
 
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
+    const now = Date.now();
+    this.sweep(now);
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
-    const attachment: Attachment = { phase: 'new', openedAt: Date.now() };
+    const attachment: Attachment = { phase: 'new', openedAt: now };
     server.serializeAttachment(attachment);
     this.conns.set(server, new Conn(attachment));
     if (!this.config || this.ended) {
       this.closeSocket(server, CLOSE.notFound, 'link_not_found');
-    } else if (this.ctx.getWebSockets().length > 6) {
-      this.closeSocket(server, CLOSE.full, 'link_full');
-    } else {
-      await this.reschedule();
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    const live = this.live();
+    if (live.length > LIMITS.linkSockets) {
+      // Unauthenticated sockets must not lock a player out: make room by dropping the oldest one.
+      const squatter = live.filter(ws => ws !== server && this.conn(ws).attachment.phase === 'new')
+        .sort((a, b) => this.conn(a).attachment.openedAt - this.conn(b).attachment.openedAt)[0];
+      if (squatter) this.closeSocket(squatter, CLOSE.full, 'link_full');
+      else this.closeSocket(server, CLOSE.full, 'link_full');
     }
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const conn = this.conn(ws);
-    if (conn.attachment.phase === 'closed' || !this.config) return;
+    if (conn.attachment.phase === 'closed' || !this.config || this.ended) return;
+    const now = Date.now();
+    if (now - (conn.attachment.seenAt ?? 0) >= 30_000) {
+      conn.attachment.seenAt = now;
+      this.saveAttachment(ws, conn);
+    }
+    this.sweep(now);
+    if ((conn.attachment.phase as Attachment["phase"]) === "closed") return;
     const size = typeof message === 'string' ? message.length : message.byteLength;
-    if (!conn.messages.take() || !conn.bytes.take(size)) {
+    if (!conn.messages.take(1, now) || !conn.bytes.take(size, now)) {
       if (conn.attachment.phase === 'joined') await this.end('rate_limited', conn.attachment.role, CLOSE.rateLimited);
       else this.closeSocket(ws, CLOSE.rateLimited, 'rate_limited');
       return;
     }
     const parsed = parseFrame(message, LIMITS.linkFrameBytes);
     if ('close' in parsed) {
-      if (conn.attachment.phase === 'joined') {
-        // A broken frame from a matched player ends the run for both, like a leave.
-        await this.end('protocol_error', conn.attachment.role, parsed.close);
-      } else this.closeSocket(ws, parsed.close, parsed.reason);
+      // A broken frame from a matched player ends the run for both, like a leave.
+      if (conn.attachment.phase === 'joined') await this.end('protocol_error', conn.attachment.role, parsed.close);
+      else this.closeSocket(ws, parsed.close, parsed.reason);
       return;
     }
     const frame = parsed.frame;
@@ -110,7 +133,7 @@ export class PartyLink extends DurableObject<Env> {
       case 'ready':
         if (!this.state.ready[role]) {
           this.state.ready[role] = true;
-          await this.saveState();
+          await this.save();
         }
         await this.deliver(other(role), JSON.stringify({ t: 'peer', ready: true }));
         return;
@@ -134,12 +157,8 @@ export class PartyLink extends DurableObject<Env> {
   async alarm(): Promise<void> {
     if (!this.config || this.ended) return;
     const now = Date.now();
-    for (const ws of this.ctx.getWebSockets()) {
-      const attachment = this.conn(ws).attachment;
-      if (attachment.phase === 'new' && attachment.openedAt + LIMITS.helloTimeoutMs <= now) {
-        this.closeSocket(ws, CLOSE.helloTimeout, 'hello_timeout');
-      }
-    }
+    this.sweep(now);
+    await this.noticeMissing();
     if (!this.state.pairedAt && now >= this.config.createdAt + LIMITS.pairTimeoutMs) {
       await this.end('pair_timeout');
       return;
@@ -170,10 +189,9 @@ export class PartyLink extends DurableObject<Env> {
       this.closeSocket(ws, CLOSE.badMessage, 'invalid_hello');
       return;
     }
-    const id = await digest('inn-player', frame.key, 22);
-    const config = this.config;
-    if (!config || this.ended || conn.attachment.phase !== 'new') return;
-    const player = config.players.find(candidate => candidate.id === id);
+    const config = this.config!;
+    // Synchronous digest: no other frame can run before this socket has joined.
+    const player = config.players.find(candidate => candidate.id === digest('inn-player', frame.key as string, 22));
     if (!player) {
       this.closeSocket(ws, CLOSE.forbidden, 'forbidden');
       return;
@@ -181,8 +199,9 @@ export class PartyLink extends DurableObject<Env> {
     const role = player.role;
     const previous = this.socket(role);
     if (previous) this.closeSocket(previous, CLOSE.replaced, 'replaced');
-    conn.attachment = { phase: 'joined', openedAt: conn.attachment.openedAt, role };
-    ws.serializeAttachment(conn.attachment);
+    conn.attachment = { phase: 'joined', openedAt: conn.attachment.openedAt, role, seenAt: Date.now() };
+    this.saveAttachment(ws, conn);
+    const wasLost = role in this.state.lostAt;
     delete this.state.lostAt[role];
     const partner = config.players.find(candidate => candidate.role !== role)!;
     const partnerSocket = this.socket(other(role));
@@ -198,7 +217,8 @@ export class PartyLink extends DurableObject<Env> {
     const queue = this.pending[role];
     for (const text of queue.frames.splice(0)) send(ws, text);
     queue.bytes = 0;
-    await this.saveState();
+    if (firstPairing || wasLost) await this.save();
+    await this.noticeMissing();
     await this.reschedule();
   }
 
@@ -229,14 +249,43 @@ export class PartyLink extends DurableObject<Env> {
     const conn = this.conn(ws);
     const { phase, role } = conn.attachment;
     conn.attachment = { ...conn.attachment, phase: 'closed' };
-    try { ws.serializeAttachment(conn.attachment); } catch { /* gone */ }
+    this.saveAttachment(ws, conn);
     this.conns.delete(ws);
-    if (phase !== 'joined' || !role || !this.config || this.ended || this.socket(role)) return;
+    if (phase !== 'joined' || !role) return;
+    await this.markLost(role);
+  }
+
+  private async markLost(role: Role): Promise<void> {
+    if (!this.config || this.ended || this.socket(role) || this.state.lostAt[role]) return;
     this.state.lostAt[role] = Date.now();
-    await this.saveState();
+    await this.save();
     const partner = this.socket(other(role));
     if (partner) send(partner, { t: 'peer', connected: false });
     await this.reschedule();
+  }
+
+  /** Paired sides without a socket and without a recorded loss (missed close events) are lost now. */
+  private async noticeMissing(): Promise<void> {
+    if (!this.config || this.ended || !this.state.pairedAt) return;
+    for (const role of ROLES) if (!this.socket(role)) await this.markLost(role);
+  }
+
+  /** Closes sockets that never said hello in time, and joined sockets that went silent. */
+  private sweep(now: number): void {
+    for (const ws of this.live()) {
+      const conn = this.conn(ws);
+      const attachment = conn.attachment;
+      if (attachment.phase === 'new') {
+        if (attachment.openedAt + LIMITS.helloTimeoutMs <= now) this.closeSocket(ws, CLOSE.helloTimeout, 'hello_timeout');
+        continue;
+      }
+      const pinged = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0;
+      if (Math.max(attachment.seenAt ?? 0, pinged, attachment.openedAt) + LIMITS.staleMs <= now) {
+        const role = attachment.role;
+        this.closeSocket(ws, CLOSE.goingAway, 'stale', false);
+        if (role) void this.markLost(role);
+      }
+    }
   }
 
   /**
@@ -246,12 +295,11 @@ export class PartyLink extends DurableObject<Env> {
   private async end(reason: string, by?: Role, closeCode: number = CLOSE.normal): Promise<void> {
     if (this.ended) return;
     this.ended = true;
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.live()) {
       const attachment = this.conn(ws).attachment;
-      if (attachment.phase === 'closed') continue;
       if (attachment.phase === 'joined' && attachment.role === by) {
         if (closeCode !== CLOSE.normal) send(ws, { t: 'error', code: reason });
-        this.closeSocket(ws, closeCode, reason, false);
+        this.closeSocket(ws, closeCode, closeCode === CLOSE.normal ? 'left' : reason, false);
       } else {
         send(ws, { t: 'ended', reason });
         this.closeSocket(ws, CLOSE.ended, reason, false);
@@ -269,29 +317,37 @@ export class PartyLink extends DurableObject<Env> {
   private conn(ws: WebSocket): Conn {
     let conn = this.conns.get(ws);
     if (!conn) {
-      conn = new Conn((ws.deserializeAttachment() as Attachment | null) ?? { phase: 'new', openedAt: Date.now() });
+      conn = new Conn((ws.deserializeAttachment() as Attachment | null) ?? { phase: 'closed', openedAt: Date.now() });
       this.conns.set(ws, conn);
     }
     return conn;
   }
 
+  private live(): WebSocket[] {
+    return this.ctx.getWebSockets().filter(ws => this.conn(ws).attachment.phase !== 'closed');
+  }
+
   private socket(role: Role): WebSocket | undefined {
-    return this.ctx.getWebSockets().find(ws => {
+    return this.live().find(ws => {
       const attachment = this.conn(ws).attachment;
       return attachment.phase === 'joined' && attachment.role === role;
     });
   }
 
+  private saveAttachment(ws: WebSocket, conn: Conn): void {
+    try { ws.serializeAttachment(conn.attachment); } catch { /* gone */ }
+  }
+
   private closeSocket(ws: WebSocket, code: number, reason: string, withError = true): void {
     const conn = this.conn(ws);
     conn.attachment = { ...conn.attachment, phase: 'closed' };
-    try { ws.serializeAttachment(conn.attachment); } catch { /* gone */ }
+    this.saveAttachment(ws, conn);
     if (withError) refuse(ws, code, reason);
     else close(ws, code, reason);
   }
 
-  private async saveState(): Promise<void> {
-    if (!this.ended) await this.ctx.storage.put('state', this.state);
+  private async save(): Promise<void> {
+    if (this.config && !this.ended) await this.ctx.storage.put<Stored>('link', { config: this.config, state: this.state });
   }
 
   private async reschedule(): Promise<void> {
@@ -301,10 +357,6 @@ export class PartyLink extends DurableObject<Env> {
     for (const role of ROLES) {
       const lostAt = this.state.lostAt[role];
       if (lostAt) deadlines.push(lostAt + LIMITS.reconnectGraceMs);
-    }
-    for (const ws of this.ctx.getWebSockets()) {
-      const attachment = this.conn(ws).attachment;
-      if (attachment.phase === 'new') deadlines.push(attachment.openedAt + LIMITS.helloTimeoutMs);
     }
     const at = Math.min(...deadlines);
     if ((await this.ctx.storage.getAlarm()) !== at) await this.ctx.storage.setAlarm(at);

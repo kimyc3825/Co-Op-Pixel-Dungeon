@@ -37,8 +37,14 @@ public final class InnPartyMember extends DirectableAlly {
     @Override
     protected boolean act() {
         InnOriginalParty party = InnOriginalParty.current();
+        if (party != null && paralysed > 0) {
+            // A command sent while the member cannot move is acknowledged and dropped, not replayed later.
+            party.dropPending();
+            waitOneTurn();
+            return true;
+        }
         // Without a usable command the member spends its turn, so it never stalls the queue.
-        if (party == null || paralysed > 0 || !party.act(this)) waitOneTurn();
+        if (party == null || !party.act(this)) waitOneTurn();
         return true;
     }
 

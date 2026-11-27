@@ -30,7 +30,15 @@ public final class InnOriginalParty {
     private static final String DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     private static final int MAX_CELLS = 16000;
     private static final int MAX_PACKET = 20000;
-    private static final float UPDATE_INTERVAL = 0.12f;
+    /** The host sends at most this often (about 10 frames/s). */
+    private static final float MIN_SNAPSHOT_INTERVAL = 0.1f;
+    /** Snapshot heartbeat while nothing changes; it also corrects the guest's local countdown. */
+    private static final float HEARTBEAT_INTERVAL = 1f;
+    /** The transport is reliable and ordered; the guest only resends a pending command as a safety net. */
+    private static final float RETRANSMIT_INTERVAL = 1f;
+    static final int MAX_DEPTH = 30;
+    static final int MAX_BRANCH = 9;
+    static final int MAX_FLOOR = 100000;
     private static final int COMMAND_FIELDS = 6;
     private static final int SNAPSHOT_FIELDS = 16;
     /** Upper bound of the grace field, in tenths of a second. */
@@ -56,6 +64,10 @@ public final class InnOriginalParty {
     private volatile int ack;
     private int revision;
     private float sendIn;
+    // Host: time since the last snapshot, whether the guest's last command must be answered, last content.
+    private float sinceSent = HEARTBEAT_INTERVAL;
+    private volatile boolean answerNow = true;
+    private String lastBody;
     private int nextSequence;
     private Command pending;
 
@@ -115,7 +127,7 @@ public final class InnOriginalParty {
 
     static boolean validCommand(String kind, int first, int second) {
         switch (kind) {
-            case "M": return Math.abs(first) <= 1 && Math.abs(second) <= 1 && (first != 0 || second != 0);
+            case "M": return first >= -1 && first <= 1 && second >= -1 && second <= 1 && (first != 0 || second != 0);
             case "A": return first > 0 && second == 0;
             case "T": return first >= 0 && first < MAX_CELLS && second == 0;
             case "W": return first == 0 && second == 0;
@@ -132,7 +144,8 @@ public final class InnOriginalParty {
         link.visible = new boolean[level.length()];
         link.explored = new boolean[level.length()];
         link.rememberedTerrain = new int[level.length()];
-        link.sendIn = 0;
+        link.answerNow = true;
+        link.lastBody = null;
         for (Mob mob : level.mobs) {
             if (mob instanceof InnPartyMember) {
                 link.member = (InnPartyMember) mob;
@@ -198,8 +211,8 @@ public final class InnOriginalParty {
         Command command = inbound;
         if (!acceptsCommands() || command == null || command.floor != floor || command.seq <= ack) return false;
         ack = command.seq;
-        // Answer the guest on the next frame so its following step is not held for a full interval.
-        sendIn = 0;
+        // Answer the guest at the next opportunity so its following step is not held up.
+        answerNow = true;
         if (command.kind.equals("T") && (!level.insideMap(command.first)
                 || (!explored[command.first] && !level.adjacent(player.pos, command.first)))) {
             return true;
@@ -208,13 +221,30 @@ public final class InnOriginalParty {
         return true;
     }
 
-    /** Host, render thread: sends a snapshot while the actor thread is idle. */
+    /** Acknowledges and drops a pending command the member cannot carry out (e.g. while paralysed). */
+    public void dropPending() {
+        Command command = inbound;
+        if (command != null && command.floor == floor && command.seq > ack) {
+            ack = command.seq;
+            answerNow = true;
+        }
+    }
+
+    /**
+     * Host, render thread: sends a snapshot while the actor thread is idle, when its content changed, after a
+     * guest command was answered, or as a heartbeat; never more often than {@link #MIN_SNAPSHOT_INTERVAL}.
+     * The remaining grace is not content: the guest counts it down locally between snapshots.
+     */
     public void updateHost(float elapsed) {
         if (member == null || level != Dungeon.level) return;
-        sendIn -= elapsed;
-        if (sendIn > 0 || closed || level.length() > MAX_CELLS || !Actor.parked()) return;
-        sendIn = UPDATE_INTERVAL;
-        String packet = snapshot();
+        sinceSent += elapsed;
+        if (sinceSent < MIN_SNAPSHOT_INTERVAL || closed || level.length() > MAX_CELLS || !Actor.parked()) return;
+        String body = snapshotBody();
+        if (!answerNow && sinceSent < HEARTBEAT_INTERVAL && body.equals(lastBody)) return;
+        answerNow = false;
+        lastBody = body;
+        sinceSent = 0;
+        String packet = "S|" + ++revision + "|" + body + "|" + graceTenths();
         if (packet.length() <= MAX_PACKET) send.accept(packet);
     }
 
@@ -234,7 +264,7 @@ public final class InnOriginalParty {
     private void sendGuest(Snapshot state) {
         if (pending == null || pending.floor != state.floor) return;
         send.accept(pending.encode());
-        sendIn = UPDATE_INTERVAL;
+        sendIn = RETRANSMIT_INTERVAL;
     }
 
     /** Guest: resends the pending command until the host acknowledges it. */
@@ -256,7 +286,13 @@ public final class InnOriginalParty {
         return pending != null && state != null && pending.floor == state.floor && pending.seq > state.ack;
     }
 
-    private String snapshot() {
+    private static int graceTenths() {
+        if (TurnClock.waitingOn() == TurnClock.WAIT_NONE) return 0;
+        return Math.max(0, Math.min(MAX_GRACE_TENTHS, (int) Math.ceil(TurnClock.graceRemaining() * 10 - 0.001f)));
+    }
+
+    /** Snapshot fields from floor to texture: everything but the revision and the remaining grace. */
+    private String snapshotBody() {
         Arrays.fill(visible, false);
         if (member.isAlive()) level.updateFieldOfView(member, visible);
         int[] tiles = new int[level.length()];
@@ -294,13 +330,10 @@ public final class InnOriginalParty {
         }
 
         String result = finished || !Dungeon.hero.isAlive() ? "end" : "play";
-        int turn = TurnClock.waitingOn();
-        int grace = turn == TurnClock.WAIT_NONE ? 0
-                : Math.max(0, Math.min(MAX_GRACE_TENTHS, (int) Math.ceil(TurnClock.graceRemaining() * 10 - 0.001f)));
-        return "S|" + ++revision + "|" + floor + "|" + Dungeon.depth + "|" + Dungeon.branch + "|"
-                + level.width() + "|" + level.height() + "|" + ack + "|" + turn
+        return floor + "|" + Dungeon.depth + "|" + Dungeon.branch + "|"
+                + level.width() + "|" + level.height() + "|" + ack + "|" + TurnClock.waitingOn()
                 + "|" + member.id() + "|" + encodeTiles(tiles) + "|" + actors + "|" + loot
-                + "|" + result + "|" + level.tilesTex() + "|" + grace;
+                + "|" + result + "|" + level.tilesTex();
     }
 
     private static int heapImage(Heap heap) {
@@ -396,12 +429,21 @@ public final class InnOriginalParty {
             grace = Integer.parseInt(fields[15]);
         }
 
-        private static Snapshot parse(String[] fields) {
-            if (fields.length != SNAPSHOT_FIELDS) return null;
+        static Snapshot parse(String[] fields) {
+            if (fields.length != SNAPSHOT_FIELDS || !fields[0].equals("S")) return null;
+            int revision = Integer.parseInt(fields[1]);
+            int floor = Integer.parseInt(fields[2]);
+            int depth = Integer.parseInt(fields[3]);
+            int branch = Integer.parseInt(fields[4]);
             int width = Integer.parseInt(fields[5]);
             int height = Integer.parseInt(fields[6]);
+            int ack = Integer.parseInt(fields[7]);
             int turn = Integer.parseInt(fields[8]);
+            int player = Integer.parseInt(fields[9]);
             int grace = Integer.parseInt(fields[15]);
+            // The guest seeds its terrain variance from depth and branch, which loops over them: keep them small.
+            if (revision < 1 || floor < 1 || floor > MAX_FLOOR || depth < 1 || depth > MAX_DEPTH
+                    || branch < 0 || branch > MAX_BRANCH || ack < 0 || player < 1) return null;
             if (width < 3 || width > 256 || height < 3 || height > 256 || width * height > MAX_CELLS) return null;
             if (turn < TurnClock.WAIT_NONE || turn > TurnClock.WAIT_GUEST || grace < 0 || grace > MAX_GRACE_TENTHS
                     || turn == TurnClock.WAIT_NONE && grace != 0) return null;

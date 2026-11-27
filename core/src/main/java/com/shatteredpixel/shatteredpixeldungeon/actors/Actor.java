@@ -179,6 +179,17 @@ public abstract class Actor implements Bundlable {
 		return parked;
 	}
 
+	/**
+	 * Wakes the actor thread from the render thread. The parked flag is cleared before the notify, so it is
+	 * never seen as true while the actor thread is about to run.
+	 */
+	public static void notifyActorThread( Thread actorThread ){
+		synchronized (actorThread) {
+			parked = false;
+			actorThread.notify();
+		}
+	}
+
 	static Actor currentActor(){
 		return current;
 	}
@@ -350,8 +361,10 @@ public abstract class Actor implements Bundlable {
 						doNext = false;
 						current = null;
 					} else {
-						if (member != null && TurnClock.isPlayer(acting, hero, member)) TurnClock.acting(acting);
+						boolean player = member != null && TurnClock.isPlayer(acting, hero, member);
+						if (player) TurnClock.acting(acting);
 						doNext = acting.act();
+						if (player) TurnClock.acted(acting);
 						if (member != null && acting == hero && !doNext && current == hero && TurnClock.heroIdle(hero)) {
 							//the hero found nothing to do this turn
 							TurnClock.Decided decided = TurnClock.decideIdle(hero, hero, member, now);

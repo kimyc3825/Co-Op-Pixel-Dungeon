@@ -136,9 +136,28 @@ public class TurnPolicyTest {
 		hero.grace.tick(3f);
 		hero.ready = true;
 		assertEquals(Decision.ACT, TurnPolicy.decide(hero, hero, member));
-		TurnPolicy.acting(hero, true);
+		// The action spends a turn: that is input.
+		assertTrue(TurnPolicy.spent(hero, 5f));
 		assertFalse(hero.grace.running());
 		assertFalse(hero.waiting);
+	}
+
+	@Test
+	public void zeroCostInputLeavesTheCountdownRunning() {
+		Player hero = player(4, false);
+		Player member = player(5, false);
+		hero.engaged = true;
+		TurnPolicy.apply(TurnPolicy.decide(hero, hero, member), hero);
+		hero.grace.tick(3f);
+		// A rejected command: the player is looked at again with the same time.
+		assertFalse(TurnPolicy.spent(hero, 4f));
+		assertEquals(Decision.COUNTDOWN, TurnPolicy.decide(hero, hero, member));
+		TurnPolicy.apply(Decision.COUNTDOWN, hero);
+		assertEquals(2f, hero.grace.remaining(), 1e-4f);
+		// A skipped player whose clock only followed the world did not spend time either.
+		TurnPolicy.follow(hero, 7f);
+		assertFalse(TurnPolicy.spent(hero, 7f));
+		assertTrue(hero.grace.running());
 	}
 
 	@Test
@@ -153,19 +172,22 @@ public class TurnPolicyTest {
 			assertEquals(Decision.AUTO_WAIT, TurnPolicy.decide(hero, hero, member));
 			TurnPolicy.apply(Decision.AUTO_WAIT, hero);
 			// The automatic turn is not input.
-			TurnPolicy.acting(hero, false);
+			assertFalse(TurnPolicy.spent(hero, hero.time));
+			hero.time -= TurnPolicy.AUTO_WAIT_TURNS; // keep the partner ahead for the next round
 		}
 		assertTrue(hero.grace.afk());
 		TurnPolicy.apply(TurnPolicy.decide(hero, hero, member), hero);
 		assertEquals(TurnPolicy.AFK_GRACE_SECONDS, hero.grace.remaining(), EPS);
 		assertTrue(hero.grace.tick(TurnPolicy.AFK_GRACE_SECONDS));
-		TurnPolicy.apply(TurnPolicy.decide(hero, hero, member), hero);
+		assertEquals(Decision.AUTO_WAIT, TurnPolicy.decide(hero, hero, member));
+		TurnPolicy.apply(Decision.AUTO_WAIT, hero);
+		hero.time -= TurnPolicy.AUTO_WAIT_TURNS;
 		assertTrue(hero.grace.afk());
+		TurnPolicy.apply(TurnPolicy.decide(hero, hero, member), hero);
+		assertEquals(TurnPolicy.AFK_GRACE_SECONDS, hero.grace.remaining(), EPS);
 
-		// Any input restores the full grace.
-		hero.ready = true;
-		TurnPolicy.acting(hero, true);
-		hero.ready = false;
+		// Any input that spends time restores the full grace.
+		assertTrue(TurnPolicy.spent(hero, hero.time + 1f));
 		assertFalse(hero.grace.afk());
 		TurnPolicy.apply(TurnPolicy.decide(hero, hero, member), hero);
 		assertEquals(TurnPolicy.TURN_GRACE_SECONDS, hero.grace.remaining(), EPS);
@@ -256,8 +278,7 @@ public class TurnPolicyTest {
 				now = chosen.time;
 				Decision decision = TurnPolicy.decide(chosen, players.toArray(new Player[0]));
 				if (decision == Decision.ACT) {
-					TurnPolicy.acting(chosen, true);
-					chosen.time += 1;
+					TurnPolicy.spent(chosen, chosen.time + 1);
 					chosen.ready = false;
 				} else {
 					TurnPolicy.apply(decision, chosen);

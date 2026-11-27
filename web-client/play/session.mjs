@@ -14,6 +14,7 @@ const LEGACY_PROTOCOL = 9;
 export const INN_MOVE_MS = 150;
 const PING_MS = 25000;
 const REQUEST_TIMEOUT_MS = 8000;
+const CONNECT_TIMEOUT_MS = 10000;
 const RECONNECT_MS = [500, 1000, 2000, 4000, 8000];
 // The server keeps a run open for 20 s after a socket drops; stop retrying a little earlier.
 const LINK_RECONNECT_WINDOW_MS = 15000;
@@ -52,7 +53,10 @@ class Channel {
     this.refs = new Map();
     this.nextRef = 0;
     this.ws = new WebSocket(url);
+    // A handshake that hangs would otherwise never report a close.
+    const connectTimer = setTimeout(() => { if (this.ws.readyState === WebSocket.CONNECTING) this.ws.close(); }, CONNECT_TIMEOUT_MS);
     this.ws.addEventListener('open', () => {
+      clearTimeout(connectTimer);
       // The server answers the literal `ping` without waking its Durable Object.
       this.pinger = setInterval(() => this.sendText('ping'), PING_MS);
       onOpen();
@@ -73,6 +77,7 @@ class Channel {
       onFrame(frame);
     });
     this.ws.addEventListener('close', event => {
+      clearTimeout(connectTimer);
       clearInterval(this.pinger);
       for (const pending of this.refs.values()) {
         clearTimeout(pending.timer);
@@ -184,7 +189,7 @@ export class PlaySession {
     this.shard = null;
     this.welcomeWaiters = [];
     this.reconnectAttempt = this.channelGeneration = this.nextMoveAt = 0;
-    this.reconnectTimer = null;
+    this.reconnectTimer = this.retryAfter = null;
     this.online = this.closed = this.leftInn = this.innSuspended = this.stopped = false;
     this.ignoredMatch = null;
     this.status = '';
@@ -276,8 +281,10 @@ export class PlaySession {
       if (!this.channel?.open) throw new ApiError('offline');
       await this.channel.request({ t: 'use_preparation', id });
     } catch {
-      // Keep a failed consumption from carrying over into another expedition.
+      // Keep a failed consumption from carrying over into another expedition: take a new identity,
+      // and reconnect so the inn (and later the party link) knows this player by the new key.
       this.key = newKey();
+      this.channel?.close(1000, 'new_key');
     }
   }
   match(targetId) {
@@ -378,8 +385,12 @@ export class PlaySession {
     const welcomed = this.#nextWelcome();
     if (this.channel?.open) {
       this.position = this.#spawn();
-      this.channel.request({ t: 'enter', ...this.position }).catch(error => {
-        if (error.code !== 'offline') this.#innActionError(error);
+      const channel = this.channel;
+      channel.request({ t: 'enter', ...this.position }).catch(error => {
+        if (error.code === 'offline' || channel !== this.channel) return;
+        // Still away on the server: reconnect, and the hello brings the player back in.
+        this.#innActionError(error);
+        channel.close(1000, 'retry_enter');
       });
     } else if (!this.channel) {
       this.#openInn();
@@ -444,14 +455,23 @@ export class PlaySession {
     this.online = false;
     this.#settleWelcome(false);
     if (this.closed) return;
+    const retryAfter = this.retryAfter;
+    this.retryAfter = null;
     if (code === 4001) {
       this.stopped = true;
       this.#status('새 버전이 나왔습니다. 페이지를 새로 고쳐 주세요.');
     } else if (code === 4009) {
       this.stopped = true;
       this.#status('다른 창에서 여관에 접속했습니다.');
+    } else if (code === 4000) {
+      // The server rejected what this client sent; retrying would only repeat it.
+      this.stopped = true;
+      this.#status('여관 서버와 통신하지 못했습니다. 페이지를 새로 고쳐 주세요.');
     } else if (code === 4013) {
-      this.#scheduleReconnect('여관이 가득 찼습니다. 자리가 나면 입장합니다.', 5000);
+      this.#scheduleReconnect('여관이 가득 찼습니다. 자리가 나면 입장합니다.',
+        (Number.isFinite(retryAfter) ? retryAfter : 30) * 1000 * (0.75 + Math.random() / 2));
+    } else if (code === 4029) {
+      this.#scheduleReconnect('같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.', 30000);
     } else if (code === 4008) {
       this.#scheduleReconnect('접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.', 10000);
     } else {
@@ -467,6 +487,7 @@ export class PlaySession {
     }
     if (frame.t === 'error') {
       if (frame.code === 'match_failed' && !this.battle) this.#status('동료와 연결하지 못했습니다. 다시 시도해 주세요.');
+      if (frame.code === 'inn_full') this.retryAfter = frame.retryAfter;
       return;
     }
     // Inn updates are not shown during an expedition; the next welcome carries a fresh roster.
@@ -500,9 +521,9 @@ export class PlaySession {
 
   #welcome(frame) {
     this.shard = frame.shard;
-    this.reconnectAttempt = 0;
     if (!frame.present || !this.layout || this.battle) {
       // Reconnected while away (in a dungeon or a solo expedition), or entering a party run.
+      this.reconnectAttempt = 0;
       this.online = false;
       this.#status('');
       return;
@@ -511,9 +532,15 @@ export class PlaySession {
     try {
       fresh = localInnState({ ...frame, events: [] }, this.layout);
     } catch {
+      // Keep the back-off growing: an unusable state must not turn into a fast reconnect loop.
       this.channel?.close(1000, 'invalid_state');
       return;
     }
+    this.reconnectAttempt = 0;
+    // A welcome can still name a match this client already finished or gave up (its old socket
+    // was taken over before the server noticed it was gone). Leave it behind with `enter`.
+    const staleMatch = Boolean(frame.match) && frame.match.id === this.ignoredMatch;
+    if (staleMatch) fresh.match = null;
     this.history = [];
     this.#addEvents(frame.events ?? []);
     const self = fresh.people.find(person => person.id === fresh.selfId);
@@ -523,7 +550,9 @@ export class PlaySession {
     this.inn = { ...fresh, events: this.history, queued: Boolean(frame.queued) };
     this.onInn(this.inn);
     this.#settleWelcome(true);
-    if (frame.match && frame.match.id !== this.ignoredMatch && !this.battle) {
+    if (staleMatch) {
+      this.channel?.request({ t: 'enter', ...this.position }).catch(() => this.channel?.close(1000, 'retry_enter'));
+    } else if (frame.match && !this.battle) {
       this.#beginBattle({ matchId: frame.match.id, matchRole: frame.match.role });
     }
   }
@@ -738,6 +767,9 @@ class BattleSession {
       this.#finish('다른 창에서 원정에 접속했습니다.');
     } else if (code === 4000 || code === 4001 || code === 4003) {
       this.#finish('파티 연결 정보를 확인할 수 없습니다.');
+    } else if (code === 4008 || code === 1003 || code === 1009) {
+      // The server ended the run for both sides.
+      this.#finish('파티 연결이 종료되었습니다.');
     } else {
       this.lostAt ||= now();
       if (now() - this.lostAt >= LINK_RECONNECT_WINDOW_MS) {

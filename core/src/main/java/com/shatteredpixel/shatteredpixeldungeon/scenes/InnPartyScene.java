@@ -482,11 +482,29 @@ public final class InnPartyScene extends PixelScene {
         int dy = direction(SPDAction.S, SPDAction.SE, SPDAction.SW)
                 - direction(SPDAction.N, SPDAction.NE, SPDAction.NW);
         tappedMovement.clear();
-        if (dx != 0 || dy != 0) {
+        if ((dx != 0 || dy != 0) && !knownBlocked(dx, dy)) {
             int sequence = party.command("M", dx, dy);
             if (sequence > 0) predictStep(dx, dy, sequence);
             repeatIn = 0.12f;
         }
+    }
+
+    /**
+     * True if the step leads into a cell this screen already knows the host would refuse: a wall, a chasm or
+     * another living character. Such moves are not sent, so holding a key against a wall costs nothing.
+     */
+    private boolean knownBlocked(int dx, int dy) {
+        ActorView self = actors.get(player);
+        Level level = Dungeon.level;
+        if (self == null || level == null) return true;
+        int from = self.actor.pos;
+        int cell = from + dx + dy * level.width();
+        if (!level.insideMap(cell) || !level.adjacent(from, cell)) return true;
+        if (level.visited[cell] && (!level.passable[cell] || level.pit[cell])) return true;
+        for (ActorView other : actors.values()) {
+            if (other != self && other.actor.pos == cell && other.actor.HP > 0) return true;
+        }
+        return false;
     }
 
     /** Shows the local player's step at once; the host's next answer confirms or corrects it. */

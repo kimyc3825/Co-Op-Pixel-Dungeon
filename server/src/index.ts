@@ -24,10 +24,10 @@ export function originAllowed(request: Request, env: Env): boolean {
 }
 
 /** Accepts the handshake only to report why the connection cannot be served, which browsers can read. */
-function refusal(code: number, error: string): Response {
+function refusal(code: number, error: string, extra: Record<string, unknown> = {}): Response {
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
-  refuse(server, code, error);
+  refuse(server, code, error, extra);
   return new Response(null, { status: 101, webSocket: client });
 }
 
@@ -37,15 +37,20 @@ async function connectInn(request: Request, env: Env, url: URL): Promise<Respons
   const hint = Number(url.searchParams.get('shard'));
   const shards = Array.from({ length: LIMITS.shardsPerLayout }, (_, index) => index);
   if (Number.isInteger(hint) && hint > 0 && hint < LIMITS.shardsPerLayout) shards.unshift(...shards.splice(hint, 1));
+  // Cloudflare sets CF-Connecting-IP at the edge; it only feeds the per-address cap in memory.
+  const address = request.headers.get('CF-Connecting-IP') ?? '';
   for (const shard of shards) {
     const headers = new Headers(request.headers);
     headers.set('X-Inn-Shard', String(shard));
     headers.set('X-Inn-Layout', layout);
+    headers.set('X-Client-Address', address);
     const stub = env.INN.get(env.INN.idFromName(`${layout}:${shard}`));
     const response = await stub.fetch(url.toString(), { headers });
+    if (response.status === 403) return refusal(CLOSE.tooManyConnections, 'too_many_connections');
+    if (response.status === 429) return refusal(CLOSE.rateLimited, 'room_busy');
     if (response.status !== 409) return response;
   }
-  return refusal(CLOSE.full, 'inn_full');
+  return refusal(CLOSE.full, 'inn_full', { retryAfter: LIMITS.fullRetryAfterS });
 }
 
 function connectLink(request: Request, env: Env, url: URL): Promise<Response> | Response {

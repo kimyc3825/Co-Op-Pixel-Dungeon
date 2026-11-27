@@ -221,6 +221,7 @@ public class GameScene extends PixelScene {
 	private Toolbar toolbar;
 	private final Signal.Listener<KeyEvent> expeditionKeys = this::handleExpeditionKey;
 	private InnTurnIndicator turnIndicator;
+	private long lastRealTime;
 	private Toast prompt;
 
 	private AttackIndicator attack;
@@ -864,7 +865,8 @@ public class GameScene extends PixelScene {
 	@Override
 	public synchronized void onPause() {
 		try {
-			if (!Dungeon.hero.ready && !Actor.parked()) waitForActorThread(500, false);
+			//the actor thread may only be idle while parked; hero.ready alone does not say so in party play
+			if (!Actor.parked()) waitForActorThread(500, false);
 			Dungeon.saveAll();
 			Badges.saveGlobal();
 			Journal.saveGlobal();
@@ -917,8 +919,10 @@ public class GameScene extends PixelScene {
 				Game.instance.finish();
 				return;
 			}
-			// Game time only advances through actions; this polls input and the grace countdown.
-			TurnClock.update(Game.elapsed);
+			// Game time only advances through actions; this polls input and the wall-clock grace countdown.
+			long realTime = Game.realTime;
+			TurnClock.update(lastRealTime == 0 ? 0f : (realTime - lastRealTime) / 1000f);
+			lastRealTime = realTime;
 			party.updateHost(Game.elapsed);
 			if (turnIndicator != null) {
 				int waiting = TurnClock.waitingOn();
@@ -955,9 +959,7 @@ public class GameScene extends PixelScene {
 				actorThread.start();
 			} else if (notifyDelay <= 0f) {
 				notifyDelay += 1/60f;
-				synchronized (actorThread) {
-					actorThread.notify();
-				}
+				Actor.notifyActorThread(actorThread);
 			}
 		}
 

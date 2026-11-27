@@ -10,7 +10,9 @@
     // Staged web lobby and TeaVM runtime (generated, not in Git). Requests matching a file are
     // served without invoking the Worker; everything else reaches src/index.ts.
     "directory": "./public",
-    "html_handling": "auto-trailing-slash",
+    // No trailing-slash rewriting: /play/original/runtime/<v>/index.html must answer 200, not 307, or
+    // the runtime cache worker (redirect: 'error') cannot store it. /play/ is mapped in _redirects.
+    "html_handling": "none",
     "not_found_handling": "none"
   },
   "durable_objects": {

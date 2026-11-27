@@ -560,7 +560,7 @@ function updateInn() {
   fields['preparation-result'].hidden = !preparation;
   if (preparation) {
     const { hp, food } = preparation;
-    const delta = value => value > 0 ? `+${value}` : `−${-value}`;
+    const delta = value => value > 0 ? `+${value}` : value < 0 ? `−${-value}` : '±0';
     text(fields['preparation-result'], hp || food ? `다음 원정 · 최대 체력 ${delta(hp)} · 식량 ${delta(food)}` :
       '다음 원정 · 아무 일도 없었습니다.');
   }

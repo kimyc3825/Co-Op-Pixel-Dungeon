@@ -25,27 +25,34 @@ export const CLOSE = {
   replaced: 4009,
   ended: 4010,
   full: 4013,
+  tooManyConnections: 4029,
 } as const;
 
 export const LIMITS = {
   /** Largest inn frame (bytes of UTF-8 text). */
   innFrameBytes: 4096,
-  /** Largest link frame; `data.d` itself is capped by `linkDataBytes`. */
-  linkFrameBytes: 32 * 1024,
+  /**
+   * Largest link frame. `data.d` is capped by `linkDataBytes`; JSON escaping can grow a payload up
+   * to six times (`\u00XX`), so the frame limit leaves room for any valid payload.
+   */
+  linkFrameBytes: 6 * 24 * 1024 + 1024,
   /** Matches the web client's MAX_MESSAGE_BYTES and the TeaVM bridge's 24576-character filter. */
   linkDataBytes: 24 * 1024,
   nameChars: 20,
   chatChars: 160,
   coordMax: 127,
   socketsPerShard: 32,
+  /** Sockets one client address may hold in one room shard (households and carrier NAT share addresses). */
+  socketsPerAddress: 8,
   shardsPerLayout: 8,
+  /** Seconds a client should wait after `inn_full` before probing the shards again. */
+  fullRetryAfterS: 30,
+  linkSockets: 6,
   eventsKept: 30,
   eventMaxAgeMs: 15 * 60_000,
   helloTimeoutMs: 10_000,
   /** A socket is dropped when neither a message nor a `ping` arrived for this long. */
   staleMs: 100_000,
-  sweepMs: 60_000,
-  preparationTtlMs: 6 * 3600_000,
   pairTimeoutMs: 45_000,
   reconnectGraceMs: 20_000,
   linkLifetimeMs: 12 * 3600_000,

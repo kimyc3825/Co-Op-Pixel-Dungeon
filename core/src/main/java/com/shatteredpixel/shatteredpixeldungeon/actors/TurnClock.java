@@ -8,10 +8,9 @@ import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember;
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TimekeepersHourglass;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
+import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.plants.Swiftthistle;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.CharSprite;
-
-import java.util.Arrays;
 
 /**
  * Engine side of the party turn clock. The rules live in {@link TurnPolicy}; this class maps the hero and
@@ -21,7 +20,14 @@ import java.util.Arrays;
  * Solo play never reaches these decisions: without an active party member {@link Actor#process()} uses the
  * original scheduling path unchanged.
  *
- * Threading: the scheduling methods run on the actor thread. The render thread only polls
+ * Invariant kept from the original game: {@code hero.ready} is only true while the actor thread is parked
+ * holding the hero, so every ready-gated interface path stays safe. When the partner is allowed to act while
+ * the hero waits, the hero's ready flag is cleared first ("suspended") and restored by the next decision.
+ * Hero input always ends in {@code hero.next()}; this class never releases the scheduler on the hero's state,
+ * and a hero that is held but not ready has an action in flight (a thrown item, a zap) that ends with its
+ * own {@code next()}.
+ *
+ * Threading: the scheduling methods run on the actor thread. The render thread only calls
  * {@link #update(float)} and the HUD queries. The lock guards the policy state and is never held while
  * calling into the engine.
  */
@@ -32,8 +38,8 @@ public final class TurnClock {
 	public static final int WAIT_HOST = 1;
 	public static final int WAIT_GUEST = 2;
 
-	/** Shown above a player who waited automatically when the grace ran out. */
-	public static final String AUTO_WAIT_LABEL = "대기";
+	/** Longest render frame counted against a grace; longer gaps (a paused or stalled game) are discarded. */
+	public static final float MAX_FRAME_SECONDS = 1f;
 
 	private static final Object LOCK = new Object();
 	private static final TurnPolicy.Player heroState = new TurnPolicy.Player();
@@ -42,14 +48,11 @@ public final class TurnClock {
 	// Set by the actor thread before it parks on a player; cleared when the scheduler is released.
 	private static volatile Char blocked;
 	private static volatile boolean countdown;
-	// The hero's UI is disabled while the world runs past a skipped hero.
+	// hero.ready was cleared by the clock while the hero waits without input (see the class comment).
 	private static volatile boolean heroSuspended;
+	// The member's time when the hero was suspended for the member's command during a freeze.
+	private static volatile float suspendedAtMemberTime = Float.NaN;
 	private static volatile boolean partyActive;
-
-	// Actor thread only.
-	private static boolean[] memberFov;
-	private static int memberFovPos = -1;
-	private static Level memberFovLevel;
 
 	private TurnClock() {}
 
@@ -62,14 +65,12 @@ public final class TurnClock {
 			heroSuspended = false;
 			partyActive = false;
 		}
-		memberFov = null;
-		memberFovPos = -1;
-		memberFovLevel = null;
 	}
 
 	private static void resetPlayer(TurnPolicy.Player p) {
 		p.detached = p.waiting = p.engaged = p.ready = p.stopsTime = false;
 		p.alive = true;
+		p.waitingSince = 0;
 		p.grace.input();
 	}
 
@@ -110,14 +111,14 @@ public final class TurnClock {
 		return hero.ready && hero.curAction == null && !hero.resting && hero.paralysed == 0;
 	}
 
-	private static boolean heroHasInput(Hero hero) {
-		return hero.curAction != null || hero.resting || (!hero.ready && !heroSuspended);
-	}
-
+	/**
+	 * True if the hero has something to do this turn: chosen input, a multi-turn action, paralysis, or a turn
+	 * that has not been evaluated yet (ready unset by the hero's own last action, not by the clock).
+	 */
 	static boolean hasReadyAction(Actor actor) {
 		if (actor instanceof Hero) {
 			Hero hero = (Hero) actor;
-			return hero.paralysed > 0 || heroHasInput(hero);
+			return hero.paralysed > 0 || hero.curAction != null || hero.resting || (!hero.ready && !heroSuspended);
 		}
 		if (actor instanceof InnPartyMember) {
 			InnPartyMember member = (InnPartyMember) actor;
@@ -138,19 +139,16 @@ public final class TurnClock {
 		if (level == null) return false;
 		if (actor instanceof Hero) {
 			Hero hero = (Hero) actor;
-			return InnEncounter.engaged(hero, hero.fieldOfView != null ? hero.fieldOfView : level.heroFOV, level);
+			boolean[] fov = hero.fieldOfView != null ? hero.fieldOfView : level.heroFOV;
+			return InnEncounter.engaged(hero, () -> fov, level);
 		}
 		InnPartyMember member = (InnPartyMember) actor;
-		if (!member.isAlive()) return false;
-		if (memberFov == null || memberFovLevel != level || memberFovPos != member.pos
-				|| memberFov.length != level.length()) {
-			if (memberFov == null || memberFov.length != level.length()) memberFov = new boolean[level.length()];
-			else Arrays.fill(memberFov, false);
-			level.updateFieldOfView(member, memberFov);
-			memberFovLevel = level;
-			memberFovPos = member.pos;
-		}
-		return InnEncounter.engaged(member, memberFov, level);
+		// Recomputed whenever it is needed: doors and other terrain can change around a member standing still.
+		return InnEncounter.engaged(member, () -> {
+			boolean[] fov = new boolean[level.length()];
+			level.updateFieldOfView(member, fov);
+			return fov;
+		}, level);
 	}
 
 	/** Engine facts about one player, gathered without holding the lock. */
@@ -167,7 +165,7 @@ public final class TurnClock {
 		}
 
 		void into(TurnPolicy.Player p) {
-			p.time = time;
+			TurnPolicy.spent(p, time);
 			p.alive = alive;
 			p.ready = ready;
 			p.stopsTime = stopsTime;
@@ -178,20 +176,27 @@ public final class TurnClock {
 	// ---- scheduling, actor thread ----
 
 	/**
-	 * Start of every scheduler pass in party play: skipped players follow the current time and rejoin the
-	 * queue once they have input or become engaged.
+	 * Start of every scheduler pass in party play: notices time the players spent through the interface,
+	 * lets skipped players follow the current time and rejoins them once they have input or become engaged.
 	 */
 	static void beginPass(Hero hero, InnPartyMember member, float now) {
 		partyActive = true;
 		blocked = null;
 		countdown = false;
 		for (Actor actor : new Actor[]{hero, member}) {
-			if (!detached(actor)) continue;
+			if (!detached(actor)) {
+				Facts facts = new Facts(actor, false);
+				synchronized (LOCK) {
+					TurnPolicy.spent(state(actor), facts.time);
+				}
+				continue;
+			}
 			if (Actor.timeOf(actor) < now) Actor.setTime(actor, now);
 			Facts facts = new Facts(actor, true);
 			boolean rejoin;
 			synchronized (LOCK) {
 				TurnPolicy.Player p = state(actor);
+				TurnPolicy.follow(p, facts.time);
 				facts.into(p);
 				rejoin = TurnPolicy.shouldReattach(p);
 			}
@@ -200,17 +205,15 @@ public final class TurnClock {
 	}
 
 	private static void reattach(Actor actor, float now) {
+		Actor.setTime(actor, TurnPolicy.reentryTime(Actor.timeOf(actor), now));
 		synchronized (LOCK) {
 			TurnPolicy.reattach(state(actor), now);
 		}
-		Actor.setTime(actor, TurnPolicy.reentryTime(Actor.timeOf(actor), now));
-		if (actor instanceof Hero && heroSuspended) {
-			Hero hero = (Hero) actor;
+		if (actor instanceof Hero) {
+			// The world moved on while the hero sat out: it takes a fresh turn through Hero.act(), which observes,
+			// refreshes the visible enemies and the attack indicator, and readies the interface.
 			heroSuspended = false;
-			// The world moved while the hero was skipped: refresh what the hero sees before input resumes.
-			Dungeon.observe();
-			hero.checkVisibleMobs();
-			hero.ready = true;
+			((Hero) actor).ready = false;
 		}
 	}
 
@@ -229,22 +232,18 @@ public final class TurnClock {
 
 	/** A player is about to act with a ready action. */
 	static void acting(Actor actor) {
-		boolean input;
-		if (actor instanceof Hero) {
-			Hero hero = (Hero) actor;
-			boolean waiting;
+		if (((Char) actor).paralysed > 0) {
 			synchronized (LOCK) {
-				waiting = heroState.waiting;
+				TurnPolicy.automatic(state(actor));
 			}
-			// A new turn starts with ready unset; only an action the player chose counts as input.
-			input = hero.paralysed == 0 && (hero.curAction != null || hero.resting || waiting && !hero.ready);
-		} else {
-			InnOriginalParty party = InnOriginalParty.current();
-			input = ((InnPartyMember) actor).paralysed == 0 && party != null && party.hasPendingCommand();
-			memberFovPos = -1;
 		}
+	}
+
+	/** A player finished its act(): time it spent counts as input. */
+	static void acted(Actor actor) {
+		float time = Actor.timeOf(actor);
 		synchronized (LOCK) {
-			TurnPolicy.acting(state(actor), input);
+			TurnPolicy.spent(state(actor), time);
 		}
 	}
 
@@ -261,6 +260,18 @@ public final class TurnClock {
 
 	/** Decides for an idle player that is the earliest actor. */
 	static Decided decideIdle(Actor idle, Hero hero, InnPartyMember member, float now) {
+		boolean heroTurnStale = false;
+		if (idle == hero && heroSuspended) {
+			if (member != null && Actor.timeOf(member) == suspendedAtMemberTime) {
+				// The partner's command spent no time, so nothing else could act either: the world is exactly as
+				// the hero left it. Give the interface back and decide again.
+				heroSuspended = false;
+				hero.ready = true;
+			} else {
+				// The partner and the world acted while the hero's interface was taken away.
+				heroTurnStale = true;
+			}
+		}
 		Actor other = idle == hero ? member : hero;
 		Facts otherFacts = new Facts(other, false);
 		Facts idleFacts = new Facts(idle, false);
@@ -273,23 +284,36 @@ public final class TurnClock {
 					&& TurnPolicy.someoneAhead(state(idle), state(other));
 		}
 		boolean isEngaged = needsEngagement && engaged(idle);
-		boolean otherDetached;
+		boolean heroDetached;
 		synchronized (LOCK) {
 			TurnPolicy.Player p = state(idle);
 			p.engaged = isEngaged;
 			decision = TurnPolicy.decide(p, state(other));
 			TurnPolicy.apply(decision, p);
-			otherDetached = state(other).detached && state(other).alive;
+			heroDetached = heroState.detached && heroState.alive;
+		}
+		if (heroTurnStale && (decision == TurnPolicy.Decision.FREEZE || decision == TurnPolicy.Decision.COUNTDOWN)) {
+			// The hero will wait for input again: it gets its turn back through the normal Hero.act(), which
+			// observes, refreshes visible enemies and the attack indicator, readies the interface, and is then
+			// decided on again (a running grace keeps running).
+			heroSuspended = false;
+			return new Decided(null, true);
 		}
 		switch (decision) {
 			case FREEZE:
-				// Everyone idle at this time waits together; hold the hero, as the original game does.
-				if (otherDetached) reattach(other, now);
-				Actor hold = hero.isAlive() && Actor.timeOf(hero) <= now && heroIdle(hero) ? hero : idle;
-				blocked = (Char) hold;
-				return new Decided(hold, false);
+				if (idle == member && heroDetached) {
+					// Everyone idle waits together, held on the hero as in the original game: the skipped hero
+					// rejoins and takes its turn first.
+					reattach(hero, now);
+					return new Decided(null, true);
+				}
+				Char partner = idle == hero ? member : hero;
+				if (partner.isAlive() && detached(partner)) reattach(partner, now);
+				blocked = (Char) idle;
+				return new Decided(idle, false);
 			case SKIP:
 				if (idle == hero) {
+					suspendedAtMemberTime = Float.NaN;
 					heroSuspended = true;
 					hero.ready = false;
 				}
@@ -299,13 +323,15 @@ public final class TurnClock {
 				blocked = (Char) idle;
 				return new Decided(idle, false);
 			case AUTO_WAIT:
+				String label = Messages.get(TurnClock.class, "auto_wait");
 				if (idle == hero) {
-					hero.rest(false);
+					heroSuspended = false;
+					hero.rest(false, label);
 				} else {
 					member.waitOneTurn();
+					CharSprite sprite = member.sprite;
+					if (sprite != null) sprite.showStatus(CharSprite.NEUTRAL, label);
 				}
-				CharSprite sprite = ((Char) idle).sprite;
-				if (sprite != null) sprite.showStatus(CharSprite.NEUTRAL, AUTO_WAIT_LABEL);
 				// Yield a frame, like any hero action, before the queue continues.
 				return new Decided(null, false);
 			case ACT:
@@ -317,48 +343,68 @@ public final class TurnClock {
 	/** Leaving party play (solo, the member died or left): the hero holds the queue again. */
 	static void endParty(Hero hero, float now) {
 		if (!partyActive) return;
-		boolean heroDetached = detached(hero);
-		if (hero != null && heroDetached && Actor.timeOf(hero) < now) Actor.setTime(hero, now);
-		if (hero != null && heroSuspended) hero.ready = true;
+		if (hero != null && detached(hero) && Actor.timeOf(hero) < now) Actor.setTime(hero, now);
+		if (hero != null && heroSuspended) {
+			// Take a normal turn so the interface is readied through Hero.act().
+			heroSuspended = false;
+		}
 		reset();
 	}
 
 	// ---- render thread ----
 
 	/**
-	 * Polls the blocked player from the render thread: releases the scheduler on input, and runs the grace
-	 * countdown. Only called while the host's game scene updates, so the countdown stops while it is paused.
+	 * Polls the blocked player from the render thread. Releases the scheduler when the waited-for member
+	 * sends a command, when a held member is gone, when the partner may act during a freeze, or when the grace
+	 * runs out. Only called while the host's game scene updates, so the countdown stops while it is paused.
+	 *
+	 * @param seconds wall-clock seconds since the previous frame
 	 */
-	public static void update(float elapsed) {
+	public static void update(float seconds) {
 		Char held = blocked;
 		if (held == null || !Actor.parked() || Actor.currentActor() != held) return;
 		Hero hero = Dungeon.hero;
+		if (held == hero && !hero.ready) {
+			// The hero started an action that finishes in a later callback: it ends with the hero's own next().
+			return;
+		}
 		InnPartyMember member = activeMember();
-		boolean heroInput = hero != null && heroHasInput(hero);
-		boolean memberInput = member != null && hasReadyAction(member);
+		boolean gone = held != hero && (held != member || !held.isAlive());
+		boolean memberInput = member != null && member.isAlive() && hasReadyAction(member);
+		float memberTime = member == null ? Float.NaN : Actor.timeOf(member);
+		boolean partnerMayAct = held == hero && memberInput && !stopsTime(hero) && memberTime <= Actor.timeOf(hero);
 		boolean release;
+		boolean suspend = false;
 		synchronized (LOCK) {
 			if (blocked != held) return;
-			if (countdown) {
-				// Partners ahead keep their queued input; only the waited-for player or the clock releases.
-				release = held == hero ? heroInput : memberInput;
-				// Clamp long frames so a stall does not consume the whole grace at once.
-				if (!release) release = state(held).grace.tick(Math.min(elapsed, 0.1f));
+			if (gone) {
+				release = true;
+			} else if (countdown) {
+				boolean expired = state(held).grace.tick(Math.max(0f, Math.min(seconds, MAX_FRAME_SECONDS)));
+				// Partners ahead keep their queued input; only the waited-for member's command or the clock releases.
+				release = expired || held == member && memberInput;
 			} else {
-				release = heroInput || memberInput;
+				suspend = partnerMayAct;
+				release = partnerMayAct || held != hero && memberInput;
 			}
 			if (release) {
 				blocked = null;
 				countdown = false;
+				if (suspend) {
+					heroSuspended = true;
+					suspendedAtMemberTime = memberTime;
+				}
 			}
 		}
+		// The actor thread is parked holding the hero, so taking the interface away here is race free.
+		if (suspend) hero.ready = false;
 		if (release) Actor.release(held);
 	}
 
 	/** Whose input the world is waiting for with a countdown: {@link #WAIT_HOST}, {@link #WAIT_GUEST} or none. */
 	public static int waitingOn() {
 		Char held = blocked;
-		if (held == null || !countdown) return WAIT_NONE;
+		if (held == null || !countdown || !held.isAlive()) return WAIT_NONE;
 		return held instanceof Hero ? WAIT_HOST : WAIT_GUEST;
 	}
 

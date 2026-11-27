@@ -73,13 +73,32 @@ public class AutoTest {
 
 	public static String status(){
 		Hero hero = Dungeon.hero;
+		com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty party = com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty.current();
+		if (hero == null && party != null && !party.host) {
+			//party guest: the host's latest snapshot as this screen applied it
+			com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty.Snapshot state = party.latest();
+			return "guest scene=" + Game.scene().getClass().getSimpleName() + (state == null ? " no snapshot"
+					: " rev=" + state.revision + " depth=" + state.depth + " ack=" + state.ack + " turn=" + state.turn
+					+ " grace=" + state.grace + " player=" + state.player + " actors=" + state.actors.split(";")[1]);
+		}
 		if (hero == null) return "no hero, scene=" + Game.scene().getClass().getSimpleName();
 		return "runs=" + runs + " deepest=" + deepest + " enabled=" + enabled + " depth=" + Dungeon.depth + " hp=" + hero.HP + "/" + hero.HT + " lvl=" + hero.lvl
 				+ " pos=" + hero.pos + " exit=" + (Dungeon.level == null ? -1 : Dungeon.level.exit())
 				+ " ready=" + hero.ready + " alive=" + hero.isAlive() + " actions=" + actions + " last=" + last
 				//game time in turns; it only advances when the player acts
 				+ " turns=" + (com.shatteredpixel.shatteredpixeldungeon.Statistics.duration + Actor.now())
+				+ (party != null && party.host ? partyStatus(hero) : "")
 				+ " scene=" + Game.scene().getClass().getSimpleName() + (stuck > 0 ? "\n" + around(hero.pos, 9) : "");
+	}
+
+	//party host: the turn clock and the guest's member
+	private static String partyStatus( Hero hero ){
+		com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember member =
+				com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock.activeMember();
+		return " heroTime=" + (Actor.now() + hero.cooldown())
+				+ (member == null ? " member=none" : " memberPos=" + member.pos + " memberTime=" + (Actor.now() + member.cooldown()))
+				+ " wait=" + com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock.waitingOn()
+				+ " grace=" + com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock.graceRemaining();
 	}
 
 	//terrain codes around a cell, '*' = hero, lowercase hex = impassable, '.' = passable; for debugging the driver

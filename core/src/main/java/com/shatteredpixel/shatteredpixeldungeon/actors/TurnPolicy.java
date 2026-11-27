@@ -14,6 +14,8 @@ package com.shatteredpixel.shatteredpixeldungeon.actors;
  *   <li>An idle engaged player gets a wall-clock grace countdown; on expiry it waits exactly one turn.
  *       After {@link #AFK_EXPIRIES} expiries without input the grace shortens to {@link #AFK_GRACE_SECONDS}.</li>
  * </ul>
+ * Only an action that actually spends the player's time counts as input: a rejected or zero-cost command
+ * leaves a running countdown and the AFK state alone, so it cannot hold the world indefinitely.
  */
 public final class TurnPolicy {
 
@@ -50,8 +52,10 @@ public final class TurnPolicy {
 		public boolean detached;
 		/** The player stops time for everyone else (time freeze effects); the world always waits for them. */
 		public boolean stopsTime;
-		/** The player was idle at its last decision; its next voluntary action counts as input. */
+		/** The player was idle at its last decision; spending time after this counts as input. */
 		public boolean waiting;
+		/** The player's time when it started waiting. */
+		public float waitingSince;
 		public final Grace grace = new Grace();
 
 		/** True while this player takes part in scheduling. */
@@ -132,21 +136,26 @@ public final class TurnPolicy {
 		return p.grace.expired() ? Decision.AUTO_WAIT : Decision.COUNTDOWN;
 	}
 
+	private static void startWaiting(Player p) {
+		if (!p.waiting) p.waitingSince = p.time;
+		p.waiting = true;
+	}
+
 	/** Applies the bookkeeping that goes with a decision for an idle player. */
 	public static void apply(Decision decision, Player p) {
 		switch (decision) {
 			case FREEZE:
 				p.grace.cancel();
-				p.waiting = true;
+				startWaiting(p);
 				break;
 			case SKIP:
 				p.grace.cancel();
 				p.detached = true;
-				p.waiting = true;
+				startWaiting(p);
 				break;
 			case COUNTDOWN:
 				p.grace.start();
-				p.waiting = true;
+				startWaiting(p);
 				break;
 			case AUTO_WAIT:
 				p.grace.autoWaited();
@@ -160,13 +169,27 @@ public final class TurnPolicy {
 	}
 
 	/**
-	 * Called when {@code p} is about to act with a ready action. {@code input} says whether the action came
-	 * from the player (rather than an automatic action such as paralysis); input cancels the grace countdown
-	 * and the AFK shortening.
+	 * Called with the player's current time whenever the scheduler looks at it. If a waiting player's time
+	 * moved on, it spent time on an action of its own: that is input, which cancels the grace countdown and the
+	 * AFK shortening. Returns true in that case.
 	 */
-	public static void acting(Player p, boolean input) {
+	public static boolean spent(Player p, float time) {
+		p.time = time;
+		if (!p.waiting || time <= p.waitingSince + 0.0001f) return false;
 		p.waiting = false;
-		if (input) p.grace.input();
+		p.grace.input();
+		return true;
+	}
+
+	/** An automatic turn (paralysis and the like) ends the wait for input without counting as input. */
+	public static void automatic(Player p) {
+		p.waiting = false;
+	}
+
+	/** The scheduler moved a waiting player's clock without an action (skipped player following the world). */
+	public static void follow(Player p, float time) {
+		if (p.waiting && time > p.waitingSince) p.waitingSince = time;
+		p.time = time;
 	}
 
 	/** Among players tied at the earliest time, the one with a ready action goes first. */
@@ -190,6 +213,6 @@ public final class TurnPolicy {
 
 	public static void reattach(Player p, float now) {
 		p.detached = false;
-		p.time = reentryTime(p.time, now);
+		follow(p, reentryTime(p.time, now));
 	}
 }

@@ -43,6 +43,7 @@ import com.shatteredpixel.shatteredpixeldungeon.journal.Catalog;
 import com.shatteredpixel.shatteredpixeldungeon.journal.Notes;
 import com.shatteredpixel.shatteredpixeldungeon.mechanics.Ballistica;
 import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
+import com.shatteredpixel.shatteredpixeldungeon.utils.GLog;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.CellSelector;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSprite;
@@ -202,9 +203,11 @@ public class Item implements Bundlable {
 	}
 
 	//in party play an item window can stay open while the world moves on, e.g. after a grace countdown
-	// ran out. Item actions then wait until it is the hero's turn again and the actor thread is idle.
+	// ran out or while the partner takes its turn. Item actions then wait until it is the hero's turn again.
 	private static boolean uiMayAct(Hero hero) {
-		return !TurnClock.partyActive() || hero.ready && Actor.parked();
+		if (!TurnClock.partyActive() || hero.ready && Actor.parked()) return true;
+		GLog.w(Messages.get(Item.class, "party_wait"));
+		return false;
 	}
 	
 	protected void onThrow( int cell ) {

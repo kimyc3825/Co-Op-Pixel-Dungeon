@@ -12,6 +12,8 @@ dependencies {
 
 test {
     useJUnit()
+    // The engine tests read the real message bundles.
+    systemProperty 'assets', file('src/main/assets').absolutePath
     testLogging {
         events 'passed', 'failed'
         exceptionFormat 'full'

@@ -1506,6 +1506,11 @@ public class Hero extends Char {
 	}
 	
 	public void rest( boolean fullRest ) {
+		rest( fullRest, Messages.get(this, "wait") );
+	}
+
+	/** Rest with a given status text over the hero, e.g. for the party clock's automatic wait. */
+	public void rest( boolean fullRest, String waitStatus ) {
 		spendAndNextConstant( TIME_TO_REST );
 		if (hasTalent(Talent.HOLD_FAST)){
 			if (heroClass != HeroClass.WARRIOR || buff(BrokenSeal.WarriorShield.class) != null) {
@@ -1517,7 +1522,7 @@ public class Hero extends Char {
 		}
 		if (!fullRest) {
 			if (sprite != null) {
-				sprite.showStatus(CharSprite.DEFAULT, Messages.get(this, "wait"));
+				sprite.showStatus(CharSprite.DEFAULT, waitStatus);
 			}
 		}
 		resting = fullRest;

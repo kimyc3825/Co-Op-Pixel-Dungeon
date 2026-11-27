@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // One inn room shard: presence, movement, chat, NPC notices, expedition preparation and matchmaking.
-// Every socket is hibernatable. Per-player state lives in the socket attachment, so it survives
-// hibernation; only recent room events and pending preparations are written to SQLite.
+//
+// Storage cost is zero rows: every socket is hibernatable and all per-player state (position,
+// queue, match, preparation) lives in its attachment; the recent-event history for newcomers is
+// kept in memory only and is lost when the object hibernates. Nothing is written to SQLite and no
+// alarm is set, so a room that empties leaves nothing behind. Hello timeouts and stale sockets are
+// swept lazily whenever someone connects or sends a frame.
 import { DurableObject } from 'cloudflare:workers';
 import type { Env, LinkConfig } from './env';
 import {
@@ -11,7 +15,8 @@ import {
 } from './protocol';
 import { Bucket, acknowledgeClose, close, digest, randomIndex, randomUint32, refuse, send } from './util';
 
-type Phase = 'new' | 'present' | 'away' | 'matched';
+/** `closed`: the server closed or replaced the socket; every path ignores it from then on. */
+type Phase = 'new' | 'present' | 'away' | 'matched' | 'closed';
 
 interface MatchInfo { id: string; role: 'host' | 'guest'; partnerId: string; partnerName: string }
 
@@ -21,8 +26,9 @@ interface Member {
   openedAt: number;
   shard: number;
   layout: string;
+  /** Client address, only for the per-address cap; never written to storage. */
+  address: string;
   id?: string;
-  keyHash?: string;
   name?: string;
   appearance?: Appearance;
   protocol?: number;
@@ -33,7 +39,8 @@ interface Member {
   friendlyFire?: boolean;
   theme?: Theme;
   match?: MatchInfo | null;
-  /** Last message time, persisted at most every 30 s so stale sockets are found after hibernation. */
+  preparation?: Preparation | null;
+  /** Last frame time, saved at most every 30 s so stale sockets are found after hibernation. */
   seenAt?: number;
 }
 
@@ -56,67 +63,64 @@ class Conn {
 }
 
 const visible = (member: Member) => member.phase === 'present' || member.phase === 'matched';
+const SWEEP_EVERY_MS = 5_000;
 
 export class InnRoom extends DurableObject<Env> {
   private readonly conns = new Map<WebSocket, Conn>();
+  /** Recent room events for newcomers' welcome. Memory only. */
+  private events: InnEvent[] = [];
   private lastEventId = 0;
+  private lastSweep = 0;
+  // Room-wide budgets, independent of how many sockets share the load.
+  private readonly roomEvents = new Bucket(20, 0.5);
+  private readonly roomJoins = new Bucket(LIMITS.socketsPerShard + 8, 2);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Keep-alive pings are answered by the runtime without waking the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
-    ctx.blockConcurrencyWhile(async () => {
-      ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, body TEXT NOT NULL)`);
-      ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS preparations (key TEXT PRIMARY KEY, id TEXT NOT NULL,
-        hp INTEGER NOT NULL, food INTEGER NOT NULL, expires INTEGER NOT NULL)`);
-      const row = ctx.storage.sql.exec<{ id: number | null }>('SELECT MAX(id) AS id FROM events').one();
-      this.lastEventId = row.id ?? 0;
-    });
   }
 
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
-    const shard = Number(request.headers.get('X-Inn-Shard'));
-    const layout = request.headers.get('X-Inn-Layout') ?? '';
+    const now = Date.now();
+    this.sweep(now, true);
+    const live = this.live();
     // The Worker tries the next shard on 409.
-    if (this.ctx.getWebSockets().length >= LIMITS.socketsPerShard) return new Response('inn_full', { status: 409 });
+    if (live.length >= LIMITS.socketsPerShard) return new Response('inn_full', { status: 409 });
+    const address = request.headers.get('X-Client-Address') ?? '';
+    if (address && live.filter(ws => this.conn(ws).member.address === address).length >= LIMITS.socketsPerAddress) {
+      return new Response('too_many_connections', { status: 403 });
+    }
+    if (!this.roomJoins.take(1, now)) return new Response('room_busy', { status: 429 });
     const [client, server] = Object.values(new WebSocketPair());
-    const member: Member = { conn: crypto.randomUUID(), phase: 'new', openedAt: Date.now(), shard, layout };
+    const member: Member = {
+      conn: crypto.randomUUID(), phase: 'new', openedAt: now,
+      shard: Number(request.headers.get('X-Inn-Shard')) || 0, layout: request.headers.get('X-Inn-Layout') ?? '', address,
+    };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(member);
     this.conns.set(server, new Conn(member));
-    await this.scheduleAlarm(Date.now() + LIMITS.helloTimeoutMs);
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const conn = this.conn(ws);
+    if (conn.member.phase === 'closed') return;
     const now = Date.now();
     if (now - (conn.member.seenAt ?? 0) >= 30_000) {
       conn.member.seenAt = now;
       this.save(ws, conn);
     }
-    if (!conn.all.take(1, now)) {
-      refuse(ws, CLOSE.rateLimited, 'rate_limited');
-      this.drop(ws, conn);
-      return;
-    }
+    this.sweep(now);
+    if (!conn.all.take(1, now)) return this.reject(ws, conn, CLOSE.rateLimited, 'rate_limited');
     const parsed = parseFrame(message, LIMITS.innFrameBytes);
-    if ('close' in parsed) {
-      refuse(ws, parsed.close, parsed.reason);
-      this.drop(ws, conn);
-      return;
-    }
+    if ('close' in parsed) return this.reject(ws, conn, parsed.close, parsed.reason);
     const frame = parsed.frame;
     const ref = isRef(frame.ref) ? frame.ref : undefined;
     if (conn.member.phase === 'new') {
-      if (frame.t !== 'hello') {
-        refuse(ws, CLOSE.badMessage, 'hello_required');
-        this.drop(ws, conn);
-        return;
-      }
-      await this.hello(ws, conn, frame);
-      return;
+      if (frame.t !== 'hello') return this.reject(ws, conn, CLOSE.badMessage, 'hello_required');
+      return this.hello(ws, conn, frame);
     }
     switch (frame.t) {
       case 'move': return this.move(ws, conn, frame, ref);
@@ -137,36 +141,15 @@ export class InnRoom extends DurableObject<Env> {
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     acknowledgeClose(ws, code, reason);
-    this.drop(ws, this.conn(ws));
+    this.retire(ws, this.conn(ws));
     this.conns.delete(ws);
+    await this.cleanUp();
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    this.drop(ws, this.conn(ws));
+    this.retire(ws, this.conn(ws));
     this.conns.delete(ws);
-  }
-
-  async alarm(): Promise<void> {
-    const now = Date.now();
-    let next = Infinity;
-    for (const ws of this.ctx.getWebSockets()) {
-      const conn = this.conn(ws);
-      const member = conn.member;
-      if (member.phase === 'new') {
-        const deadline = member.openedAt + LIMITS.helloTimeoutMs;
-        if (deadline <= now) {
-          refuse(ws, CLOSE.helloTimeout, 'hello_timeout');
-          this.drop(ws, conn);
-        } else next = Math.min(next, deadline);
-        continue;
-      }
-      const pinged = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0;
-      if (Math.max(member.seenAt ?? 0, pinged, member.openedAt) + LIMITS.staleMs <= now) {
-        close(ws, CLOSE.goingAway, 'stale');
-        this.drop(ws, conn);
-      } else next = Math.min(next, now + LIMITS.sweepMs);
-    }
-    if (next !== Infinity) await this.ctx.storage.setAlarm(next);
+    await this.cleanUp();
   }
 
   // ---- handlers ----
@@ -175,7 +158,7 @@ export class InnRoom extends DurableObject<Env> {
     if (frame.v !== WIRE_VERSION) {
       send(ws, { t: 'error', code: 'unsupported_version', supported: [WIRE_VERSION] });
       close(ws, CLOSE.unsupportedVersion, 'unsupported_version');
-      this.drop(ws, conn);
+      this.retire(ws, conn);
       return;
     }
     const name = cleanText(frame.name, LIMITS.nameChars);
@@ -187,32 +170,35 @@ export class InnRoom extends DurableObject<Env> {
     if (typeof frame.key !== 'string' || !KEY.test(frame.key) || !name || !appearance ||
         !isDungeonProtocol(frame.dungeonProtocol) || !isCoord(frame.x) || !isCoord(frame.y) ||
         present === null || queued === null || friendlyFire === null || !theme) {
-      refuse(ws, CLOSE.badMessage, 'invalid_hello');
-      this.drop(ws, conn);
-      return;
+      return this.reject(ws, conn, CLOSE.badMessage, 'invalid_hello');
     }
-    const [id, keyHash] = await Promise.all([digest('inn-player', frame.key, 22), digest('inn-preparation', frame.key)]);
-    // Other events may have run during the digest; re-check before mutating.
-    if (conn.member.phase !== 'new' || !this.ctx.getWebSockets().includes(ws)) return;
+    // Synchronous: no other event can run between here and the end of the takeover below.
+    const id = digest('inn-player', frame.key, 22);
     let match: MatchInfo | null = null;
-    for (const other of this.ctx.getWebSockets()) {
+    let preparation: Preparation | null = null;
+    let wasVisible = false;
+    for (const other of this.live()) {
       if (other === ws) continue;
       const previous = this.conn(other);
       if (previous.member.id !== id) continue;
-      // A reconnect replaces the older socket of the same player without a leave/join flicker.
+      // A reconnect takes over the older socket of the same player without a leave/join flicker.
       if (previous.member.phase === 'matched') match = previous.member.match ?? null;
-      previous.member.phase = 'new';
+      preparation ??= previous.member.preparation ?? null;
+      wasVisible ||= visible(previous.member);
+      previous.member.phase = 'closed';
       this.save(other, previous);
       refuse(other, CLOSE.replaced, 'replaced');
     }
     const member = conn.member;
     Object.assign(member, {
-      phase: present ? (match ? 'matched' : 'present') : 'away', id, keyHash, name, appearance,
-      protocol: frame.dungeonProtocol, x: frame.x, y: frame.y, queuedAt: 0, friendlyFire, theme, match,
+      phase: present ? (match ? 'matched' : 'present') : 'away', id, name, appearance,
+      protocol: frame.dungeonProtocol, x: frame.x, y: frame.y, queuedAt: 0, friendlyFire, theme,
+      match: present ? match : null, preparation,
     } satisfies Partial<Member>);
     this.save(ws, conn);
     this.welcome(ws, conn);
     if (visible(member)) this.broadcast({ t: 'person', person: this.person(member) }, ws);
+    else if (wasVisible) this.broadcast({ t: 'gone', id }, ws);
     if (queued && member.phase === 'present') {
       member.queuedAt = Date.now();
       this.save(ws, conn);
@@ -225,17 +211,15 @@ export class InnRoom extends DurableObject<Env> {
     const member = conn.member;
     const now = Date.now();
     const people: Person[] = [];
-    for (const other of this.ctx.getWebSockets()) {
+    for (const other of this.live()) {
       const candidate = this.conn(other).member;
       if (visible(candidate) && candidate.id) people.push(this.person(candidate));
     }
-    const events = this.ctx.storage.sql.exec<{ body: string }>(
-      'SELECT body FROM events WHERE at >= ? ORDER BY id DESC LIMIT ?', now - LIMITS.eventMaxAgeMs, LIMITS.eventsKept,
-    ).toArray().reverse().map(row => JSON.parse(row.body) as InnEvent);
+    const events = this.recentEvents(now);
     send(ws, {
       t: 'welcome', v: WIRE_VERSION, selfId: member.id, layoutId: member.layout, shard: member.shard, now,
       present: visible(member), people, events, after: events.at(-1)?.id ?? 0,
-      queued: Boolean(member.queuedAt), match: member.match ?? null, preparation: this.preparation(member),
+      queued: Boolean(member.queuedAt), match: member.match ?? null, preparation: member.preparation ?? null,
       limits: { name: LIMITS.nameChars, chat: LIMITS.chatChars },
     });
   }
@@ -261,6 +245,7 @@ export class InnRoom extends DurableObject<Env> {
     if (!text) return this.fail(ws, ref, 'invalid_message');
     if (!visible(conn.member)) return this.fail(ws, ref, 'not_in_inn');
     if (!conn.chat.take()) return this.fail(ws, ref, 'activity_rate_limited');
+    if (!this.roomEvents.take()) return this.fail(ws, ref, 'room_busy');
     this.addEvent(conn.member, { kind: 'chat', text });
     this.ok(ws, ref);
   }
@@ -268,6 +253,7 @@ export class InnRoom extends DurableObject<Env> {
   private drink(ws: WebSocket, conn: Conn, ref?: number): void {
     if (!visible(conn.member)) return this.fail(ws, ref, 'not_in_inn');
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
+    if (!this.roomEvents.take()) return this.fail(ws, ref, 'room_busy');
     this.addEvent(conn.member, { kind: 'drink' });
     this.ok(ws, ref);
   }
@@ -276,6 +262,7 @@ export class InnRoom extends DurableObject<Env> {
     if (typeof frame.npcId !== 'string' || !NPC_ID.test(frame.npcId)) return this.fail(ws, ref, 'invalid_message');
     if (!visible(conn.member)) return this.fail(ws, ref, 'not_in_inn');
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
+    if (!this.roomEvents.take()) return this.fail(ws, ref, 'room_busy');
     this.addEvent(conn.member, { kind: 'interact', npcId: frame.npcId });
     this.ok(ws, ref);
   }
@@ -297,24 +284,21 @@ export class InnRoom extends DurableObject<Env> {
     const member = conn.member;
     if (member.phase !== 'present') return this.fail(ws, ref, 'not_in_inn');
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
-    let preparation = this.preparation(member);
-    if (!preparation) {
-      // Guessed from the clients: maximum HP changes by 0 or ±2 and rations by 0 or ±1.
-      preparation = { id: crypto.randomUUID(), hp: [-2, 0, 2][randomIndex(3)], food: [-1, 0, 1][randomIndex(3)] };
-      const now = Date.now();
-      this.ctx.storage.sql.exec('DELETE FROM preparations WHERE expires < ?', now);
-      this.ctx.storage.sql.exec('INSERT OR REPLACE INTO preparations (key, id, hp, food, expires) VALUES (?, ?, ?, ?, ?)',
-        member.keyHash, preparation.id, preparation.hp, preparation.food, now + LIMITS.preparationTtlMs);
-    }
-    send(ws, { t: 'preparation', preparation });
+    // Guessed from the clients: maximum HP changes by 0 or ±2 and rations by 0 or ±1.
+    member.preparation ??= { id: crypto.randomUUID(), hp: [-2, 0, 2][randomIndex(3)], food: [-1, 0, 1][randomIndex(3)] };
+    this.save(ws, conn);
+    send(ws, { t: 'preparation', preparation: member.preparation });
     this.ok(ws, ref);
   }
 
   private usePreparation(ws: WebSocket, conn: Conn, frame: Json, ref?: number): void {
     if (typeof frame.id !== 'string' || !PREPARATION_ID.test(frame.id)) return this.fail(ws, ref, 'invalid_message');
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
-    this.ctx.storage.sql.exec('DELETE FROM preparations WHERE key = ? AND id = ?', conn.member.keyHash, frame.id);
-    send(ws, { t: 'preparation', preparation: this.preparation(conn.member) });
+    if (conn.member.preparation?.id === frame.id) {
+      conn.member.preparation = null;
+      this.save(ws, conn);
+    }
+    send(ws, { t: 'preparation', preparation: conn.member.preparation ?? null });
     this.ok(ws, ref);
   }
 
@@ -346,7 +330,7 @@ export class InnRoom extends DurableObject<Env> {
     if (typeof frame.targetId !== 'string' || frame.targetId === member.id || !this.matchOptions(conn, frame)) {
       return this.fail(ws, ref, 'invalid_message');
     }
-    const target = this.ctx.getWebSockets().find(other => this.conn(other).member.id === frame.targetId);
+    const target = this.live().find(other => other !== ws && this.conn(other).member.id === frame.targetId);
     const host = target && this.conn(target);
     if (!target || !host || host.member.phase !== 'present' || !host.member.queuedAt) {
       return this.fail(ws, ref, 'partner_unavailable');
@@ -367,6 +351,7 @@ export class InnRoom extends DurableObject<Env> {
   }
 
   private away(ws: WebSocket, conn: Conn, ref?: number): void {
+    if (!conn.lobby.take()) return this.fail(ws, ref, 'activity_rate_limited');
     const member = conn.member;
     if (visible(member)) {
       member.phase = 'away';
@@ -395,7 +380,7 @@ export class InnRoom extends DurableObject<Env> {
 
   private async tryMatch(ws: WebSocket, conn: Conn): Promise<void> {
     let best: [WebSocket, Conn] | null = null;
-    for (const other of this.ctx.getWebSockets()) {
+    for (const other of this.live()) {
       if (other === ws) continue;
       const candidate = this.conn(other);
       const m = candidate.member;
@@ -409,14 +394,14 @@ export class InnRoom extends DurableObject<Env> {
   private async pair(hostWs: WebSocket, host: Conn, guestWs: WebSocket, guest: Conn): Promise<boolean> {
     const id = crypto.randomUUID();
     const sides = [[hostWs, host, 'host'], [guestWs, guest, 'guest']] as const;
-    const preparations = sides.map(([, conn]) => this.preparation(conn.member));
+    // The run uses the preparations; take them out of the inn so they cannot be used twice.
+    const preparations = sides.map(([, conn]) => conn.member.preparation ?? null);
     for (const [ws, conn, role] of sides) {
       const partner = conn === host ? guest.member : host.member;
       conn.member.phase = 'matched';
       conn.member.queuedAt = 0;
+      conn.member.preparation = null;
       conn.member.match = { id, role, partnerId: partner.id!, partnerName: partner.name! };
-      // The run uses the preparation; consume it now so it cannot be carried into another expedition.
-      this.ctx.storage.sql.exec('DELETE FROM preparations WHERE key = ?', conn.member.keyHash);
       this.save(ws, conn);
       this.broadcastPerson(conn.member);
     }
@@ -428,21 +413,25 @@ export class InnRoom extends DurableObject<Env> {
         preparation: preparations[index],
       })),
     };
+    const ours = (conn: Conn) => conn.member.phase === 'matched' && conn.member.match?.id === id;
     try {
       await this.env.LINK.get(this.env.LINK.idFromName(id)).init(config);
     } catch {
-      for (const [ws, conn] of sides) {
-        if (conn.member.match?.id !== id) continue;
+      // Sides that left in the meantime stay gone; the others get their preparation back.
+      sides.forEach(([ws, conn], index) => {
+        if (!ours(conn)) return;
         conn.member.phase = 'present';
         conn.member.match = null;
+        conn.member.preparation = preparations[index];
         this.save(ws, conn);
         this.broadcastPerson(conn.member);
+        send(ws, { t: 'preparation', preparation: conn.member.preparation });
         send(ws, { t: 'error', code: 'match_failed' });
-      }
+      });
       return false;
     }
     for (const [ws, conn] of sides) {
-      if (conn.member.match?.id !== id) continue;
+      if (!ours(conn)) continue;
       send(ws, { t: 'preparation', preparation: null });
       send(ws, { t: 'matched', match: conn.member.match });
     }
@@ -455,30 +444,71 @@ export class InnRoom extends DurableObject<Env> {
     let conn = this.conns.get(ws);
     if (!conn) {
       const member = (ws.deserializeAttachment() as Member | null) ??
-        { conn: crypto.randomUUID(), phase: 'new', openedAt: Date.now(), shard: 0, layout: '' };
+        { conn: crypto.randomUUID(), phase: 'closed', openedAt: Date.now(), shard: 0, layout: '', address: '' };
       conn = new Conn(member);
       this.conns.set(ws, conn);
     }
     return conn;
   }
 
+  /** Sockets the room still serves (not closed by the server). */
+  private live(): WebSocket[] {
+    return this.ctx.getWebSockets().filter(ws => this.conn(ws).member.phase !== 'closed');
+  }
+
   private save(ws: WebSocket, conn: Conn): void {
     try { ws.serializeAttachment(conn.member); } catch { /* socket already gone */ }
   }
 
+  /** Sends a refusal, closes the socket and takes it out of the room. */
+  private reject(ws: WebSocket, conn: Conn, code: number, reason: string): void {
+    refuse(ws, code, reason);
+    this.retire(ws, conn);
+  }
+
   /**
-   * Takes a closing socket out of the room and tells the others. The attachment is rewritten so a
-   * later close event for the same socket, possibly after hibernation, does not announce it twice.
+   * Takes a socket out of the room for good and tells the others. The attachment is rewritten as
+   * `closed`, so later frames or a second close event for it (even after hibernation) do nothing.
    */
-  private drop(ws: WebSocket, conn: Conn): void {
+  private retire(ws: WebSocket, conn: Conn): void {
     const member = conn.member;
+    if (member.phase === 'closed') return;
     const wasVisible = visible(member);
-    member.phase = 'new';
-    member.queuedAt = 0;
+    Object.assign(member, { phase: 'closed', queuedAt: 0, match: null } satisfies Partial<Member>);
     this.save(ws, conn);
     if (!wasVisible || !member.id) return;
-    const replaced = this.ctx.getWebSockets().some(other => other !== ws && this.conn(other).member.id === member.id);
-    if (!replaced) this.broadcast({ t: 'gone', id: member.id }, ws);
+    const stillHere = this.live().some(other => visible(this.conn(other).member) && this.conn(other).member.id === member.id);
+    if (!stillHere) this.broadcast({ t: 'gone', id: member.id }, ws);
+  }
+
+  /** Closes sockets that never said hello and sockets that went silent. */
+  private sweep(now: number, force = false): void {
+    if (!force && now - this.lastSweep < SWEEP_EVERY_MS) return;
+    this.lastSweep = now;
+    for (const ws of this.live()) {
+      const conn = this.conn(ws);
+      const member = conn.member;
+      if (member.phase === 'new') {
+        if (member.openedAt + LIMITS.helloTimeoutMs <= now) this.reject(ws, conn, CLOSE.helloTimeout, 'hello_timeout');
+        continue;
+      }
+      const pinged = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0;
+      if (Math.max(member.seenAt ?? 0, pinged, member.openedAt) + LIMITS.staleMs <= now) {
+        close(ws, CLOSE.goingAway, 'stale');
+        this.retire(ws, conn);
+      }
+    }
+  }
+
+  /**
+   * Nothing is ever written, but drop anything an older version may have stored once the room
+   * empties. An object that never wrote reports a single empty 4 KiB page.
+   */
+  private async cleanUp(): Promise<void> {
+    if (this.live().length === 0 && this.ctx.storage.sql.databaseSize > 4096) {
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+    }
   }
 
   private person(member: Member): Person {
@@ -495,10 +525,15 @@ export class InnRoom extends DurableObject<Env> {
   /** Sends to every socket currently shown the room, optionally skipping one. */
   private broadcast(message: unknown, except?: WebSocket): void {
     const text = JSON.stringify(message);
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of this.live()) {
       if (ws === except) continue;
       if (visible(this.conn(ws).member)) send(ws, text);
     }
+  }
+
+  private recentEvents(now: number): InnEvent[] {
+    this.events = this.events.filter(event => event.time >= now - LIMITS.eventMaxAgeMs).slice(-LIMITS.eventsKept);
+    return this.events;
   }
 
   private addEvent(member: Member, fields: Pick<InnEvent, 'kind'> & Partial<InnEvent>): void {
@@ -507,19 +542,9 @@ export class InnRoom extends DurableObject<Env> {
     const id = Math.max(this.lastEventId + 1, time * 1000);
     this.lastEventId = id;
     const event: InnEvent = { id, playerId: member.id!, name: member.name!, time, ...fields };
-    this.ctx.storage.sql.exec('INSERT INTO events (id, at, body) VALUES (?, ?, ?)', id, time, JSON.stringify(event));
-    // Keep only a short window of chat; nothing older is retained.
-    this.ctx.storage.sql.exec('DELETE FROM events WHERE at < ? OR id <= (SELECT id FROM events ORDER BY id DESC LIMIT 1 OFFSET ?)',
-      time - LIMITS.eventMaxAgeMs, LIMITS.eventsKept);
+    this.events.push(event);
+    this.recentEvents(time);
     this.broadcast({ t: 'event', now: time, event });
-  }
-
-  private preparation(member: Member): Preparation | null {
-    if (!member.keyHash) return null;
-    const row = this.ctx.storage.sql.exec<{ id: string; hp: number; food: number }>(
-      'SELECT id, hp, food FROM preparations WHERE key = ? AND expires >= ?', member.keyHash, Date.now(),
-    ).toArray()[0];
-    return row ? { id: row.id, hp: row.hp, food: row.food } : null;
   }
 
   private ok(ws: WebSocket, ref?: number): void {
@@ -528,10 +553,5 @@ export class InnRoom extends DurableObject<Env> {
 
   private fail(ws: WebSocket, ref: number | undefined, code: string): void {
     send(ws, { t: 'error', ref, code });
-  }
-
-  private async scheduleAlarm(at: number): Promise<void> {
-    const current = await this.ctx.storage.getAlarm();
-    if (current === null || current > at) await this.ctx.storage.setAlarm(at);
   }
 }

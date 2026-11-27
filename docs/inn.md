@@ -82,18 +82,18 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 
 ## 웹 배포
 
-공개 저장소의 `main`에 푸시하면 GitHub Actions가 서버를 테스트하고 던전 런타임(`html:dist`)을 빌드한 뒤, `scripts/stage-web-client.mjs`로 웹 여관과 함께 `server/public`에 배치하고 `wrangler deploy`로 Cloudflare에 배포합니다. 브라우저에서 제공하는 여관의 소스는 `web-client/play`에 있습니다. 정적 파일은 Worker를 거치지 않고 제공됩니다.
+공개 저장소의 `main`에 푸시하면 GitHub Actions의 `build` 작업이 서버를 테스트하고 던전 런타임(`html:dist`)을 빌드한 뒤, `scripts/stage-web-client.mjs`로 웹 여관과 함께 `server/public`에 배치합니다. 이어서 `deploy` 작업이 그 결과만 받아 고정된 버전의 Wrangler로 Cloudflare에 배포합니다. Cloudflare 비밀 값은 `deploy` 작업에만 주어지고, Gradle과 npm 의존성은 그 작업에서 실행되지 않습니다. 브라우저에서 제공하는 여관의 소스는 `web-client/play`에 있습니다. 정적 파일은 Worker를 거치지 않고 제공됩니다.
 
 | 경로 | 내용 |
 | --- | --- |
-| `/play/` | 여관 페이지. `<base>`가 아래 버전 폴더를 가리킵니다. |
+| `/play/` | 여관 페이지(`/play/index.html`). `<base>`가 아래 버전 폴더를 가리킵니다. |
 | `/play/client/<커밋>-<서명>/` | 여관 모듈과 그림, 간이 전투 런타임 |
 | `/play/original/manifest.json`, `catalogue/<버전>.json` | 원본 런타임의 현재 버전과 파일 목록 |
 | `/play/original/runtime/<버전>/` | `html/build/dist/web` |
 
-배포마다 직전 배포의 버전 폴더를 한 번 더 포함해, 배포 전에 연 페이지도 파일을 계속 받을 수 있습니다.
+`/play/generations.json`에 최근 세 번의 배포가 기록되며, 앞선 두 배포의 버전 폴더를 함께 올려 배포 전에 연 페이지도 파일을 계속 받을 수 있습니다. 같은 커밋을 다시 배포해도 앞선 배포가 사라지지 않습니다. HTML 경로는 자동으로 바꾸지 않습니다(`html_handling: none`). 원본 런타임의 `index.html`이 리다이렉트 없이 제공되어야 캐시 서비스 워커가 시작 파일을 모두 저장할 수 있기 때문입니다. `/`와 `/play`는 `_redirects`가 `/play/`로 보냅니다.
 
-처음 배포할 때는 저장소 Secrets에 `CLOUDFLARE_API_TOKEN`(Workers Scripts 편집 권한)과 `CLOUDFLARE_ACCOUNT_ID`를 등록합니다. 첫 배포가 끝나면 Wrangler가 알려 주는 `workers.dev` 주소를 저장소 변수 `COOP_PUBLIC_ORIGIN`(배포 후 점검), `README.md`의 플레이 링크, `inn-client/src/main/resources/inn-origin.txt`에 적습니다. 직접 배포하려면 빌드와 배치 뒤 `server`에서 `npx wrangler deploy`를 실행합니다.
+처음 배포하기 전에 Cloudflare 대시보드의 Workers & Pages에서 계정의 `workers.dev` 하위 도메인을 등록해야 합니다. 하위 도메인이 없으면 첫 배포가 실패합니다. 그다음 저장소 Secrets에 `CLOUDFLARE_API_TOKEN`(Workers Scripts 편집 권한)과 `CLOUDFLARE_ACCOUNT_ID`를 등록합니다. 첫 배포가 끝나면 Wrangler가 알려 주는 `workers.dev` 주소를 저장소 변수 `COOP_PUBLIC_ORIGIN`(배포 후 점검), `README.md`의 플레이 링크, `inn-client/src/main/resources/inn-origin.txt`에 적습니다. 직접 배포하려면 빌드와 배치 뒤 `server`에서 `npx wrangler deploy`를 실행합니다.
 
 [웹 배포 실행 기록](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/actions/workflows/deploy-web.yml)에서 배포가 완료됐는지 확인할 수 있습니다. Windows 패키지는 [GitHub Releases](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases)에 게시합니다.
 
@@ -101,11 +101,13 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 
 클라이언트는 여관 WebSocket에 접속해 배치 ID와 시작 좌표를 보냅니다. 여관 방의 Durable Object가 위치, 채팅, NPC 상호작용 알림과 프로필 옵션 ID를 모두에게 바로 전하고, 원정 준비와 파티 매칭을 맡습니다. 배치 ID가 다르면 다른 방이며, 한 방에는 32명까지 들어가고 차면 같은 배치의 다음 방으로 넘어갑니다. 한 방 안에서 같은 던전 프로토콜의 참가자끼리 매칭하며, 먼저 모집한 사람이 파티장입니다. 매칭되면 서버가 역할, 시드와 파티장의 옵션을 양쪽에 함께 전합니다. 서버 소스는 [server/](../server/)에 있고, 메시지 형식은 [PROTOCOL.md](../server/PROTOCOL.md)에 있습니다.
 
-파티장의 원본 엔진이 층 생성, 충돌, 적 행동, 피해와 전리품을 한 번 처리합니다. 동료는 층 번호와 순서 번호가 있는 이동·평타 명령을 보내고, 파티장은 확인 번호와 최신 탐색 지형, 위치·체력·턴 대기 상태, 표시할 전리품을 공유합니다. 층이 바뀌면 이전 층의 명령을 버립니다. 이 데이터는 파티마다 하나인 연결 WebSocket으로 오가며, 서버가 받은 순서대로 바로 상대에게 넘깁니다. 연결이 잠시 끊기면 20초 동안 다시 접속을 기다리고 그동안의 데이터를 순서대로 모아 둡니다.
+파티장의 원본 엔진이 층 생성, 충돌, 적 행동, 피해와 전리품을 한 번 처리합니다. 동료는 층 번호와 순서 번호가 있는 이동·평타 명령을 보내고, 파티장은 확인 번호와 최신 탐색 지형, 위치·체력·턴 대기 상태, 표시할 전리품을 공유합니다. 층이 바뀌면 이전 층의 명령을 버립니다. 이 데이터는 파티마다 하나인 연결 WebSocket으로 오가며, 서버가 받은 순서대로 바로 상대에게 넘깁니다. 연결이 잠시 끊기면 20초 동안 다시 접속을 기다리고 그동안의 데이터를 순서대로 모아 둡니다. 서버가 다시 시작되어 끊긴 쪽을 알리지 못한 경우에도, 서버는 깨어날 때 빠진 쪽을 찾아 같은 20초 뒤 원정을 끝냅니다.
 
 동료가 쓰러지면 해당 원정에서 쓰러진 상태를 유지합니다. 어느 쪽이 연결을 종료하면 해당 파티 원정을 종료합니다.
 
-여관은 `/api/v5/inn`, 연결은 `/api/v5/link` WebSocket을 사용합니다. `GET /api/v5/health`로 서버의 준비 상태를 확인할 수 있습니다. Windows 클라이언트는 아직 이전 HTTP API(`/api/v2`, `/api/v4`)를 사용하므로, 새 프로토콜로 옮기기 전까지 새 서버에 접속할 수 없습니다.
+여관은 `/api/v5/inn`, 연결은 `/api/v5/link` WebSocket을 사용합니다. `GET /api/v5/health`로 서버의 준비 상태를 확인할 수 있습니다.
+
+여관 방은 저장소에 아무것도 쓰지 않습니다. 접속, 위치, 모집, 매칭과 원정 준비는 각 연결에 붙은 상태로만 두고, 새로 들어온 사람에게 보여 줄 최근 대화는 메모리에만 둡니다. 그래서 방이 잠들면 최근 대화 기록이 사라지고, 연결이 완전히 끊기면 원정 준비도 사라집니다. 같은 주소에서는 한 방에 8개까지 연결할 수 있고(한집의 친구들이나 통신사 공유 주소를 고려한 값), 방 전체에도 채팅·입장 빈도 한도가 있습니다. 파티 연결은 원정이 끝날 때까지 설정 한 줄만 저장하고, 끝나면 모두 지웁니다.
 
 ## 원본과 라이선스
 
