@@ -33,9 +33,19 @@ final class DungeonSession implements AutoCloseable {
     private static final long START_TIMEOUT_MS = 150_000;
     /** The server ends a run 20 s after a socket drops; stop retrying a little earlier (§9). */
     private static final long RECONNECT_WINDOW_MS = 15_000;
+    /** How long a run that ends while the socket is down keeps trying to deliver its `leave`. */
+    private static final long LEAVE_GRACE_MS = 5_000;
     private static final long[] BACKOFF_MS = {500, 1_000, 2_000, 4_000, 8_000};
     static final int MAX_PAYLOAD_BYTES = 24 * 1024;
     private static final int MAX_BUFFERED = 512;
+    /**
+     * The host's packets are full-state snapshots, so only the newest matters: they are coalesced to
+     * at most this many frames per second, latest wins, which keeps the host well inside the relay
+     * limit whose breach ends the run (§6). Decided by role, never by looking inside the payload.
+     */
+    private static final long HOST_FRAME_INTERVAL_MS = 1_000 / 15;
+    /** Guest packets are commands: every one is sent, in order; this bounds the backlog while offline. */
+    private static final int MAX_GUEST_BACKLOG = 512;
 
     private final InnApi api;
     private final String key;
@@ -52,19 +62,29 @@ final class DungeonSession implements AutoCloseable {
     private volatile boolean closed;
 
     private InnChannel channel;
-    /** The current channel received its `link`; until then only `hello` may be sent on it. */
+    /** The current channel received its `link`: the server has joined it to the run. */
     private boolean linked;
+    /** Some channel was joined once, so ending the run needs a `leave` (else the partner waits 20 s). */
+    private boolean joined;
     private InnApi.Link link;
     private boolean paired;
     private boolean peerReady;
     private boolean launched;
     private boolean ready;
     private boolean terminal;
+    /** Terminal, but still reconnecting to deliver the `leave` the server has not had yet. */
+    private boolean leaving;
     private long deadline;
     private long lostAt;
     private int attempt;
     private String lastError;
     private ScheduledFuture<?> reconnect;
+    /** Host: the newest snapshot not sent yet. */
+    private String hostPending;
+    private long hostSentAt = now() - HOST_FRAME_INTERVAL_MS;
+    private ScheduledFuture<?> hostFlush;
+    /** Guest: commands waiting for the partner's `ready` or for the link to come back, in order. */
+    private final ArrayDeque<String> guestBacklog = new ArrayDeque<>();
 
     /** @param role the role the inn's `matched` frame announced; the link must agree. */
     DungeonSession(InnApi api, String key, String matchId, String role, OriginalListener listener) {
@@ -87,29 +107,65 @@ final class DungeonSession implements AutoCloseable {
             // Otherwise acceptLink sends it once the (re)connected channel is linked.
             if (linked) channel.send(InnApi.frame("ready"));
             while (!inbound.isEmpty()) listener.receive(this, inbound.removeFirst());
+            flushOutbound();
         });
     }
 
     /**
-     * Sends one InnOriginalParty packet. Packets are delivered in the order given; none replaces
-     * another. Before both sides are ready (step 4 of §7.4) and while reconnecting they are
-     * dropped: the host resends snapshots and the guest its pending command until acknowledged.
+     * Sends one InnOriginalParty packet. Data goes out only after both sides are ready and while the
+     * socket is linked (step 4 of §7.4). The guest's packets are all sent, in order, holding them
+     * back until then; the host's snapshots are coalesced, latest wins, at most 15 per second.
      */
     void sendOriginal(String payload) {
         if (closed || payload == null || payload.isEmpty() || payload.length() > MAX_PAYLOAD_BYTES ||
             payload.getBytes(StandardCharsets.UTF_8).length > MAX_PAYLOAD_BYTES) return;
         submit(() -> {
-            if (terminal || !ready || !peerReady || !linked) return;
-            JsonObject data = InnApi.frame("data");
-            data.addProperty("d", payload);
-            channel.send(data);
+            if (terminal || link == null) return;
+            if (link.host()) {
+                hostPending = payload;
+            } else {
+                if (guestBacklog.size() >= MAX_GUEST_BACKLOG) guestBacklog.removeFirst();
+                guestBacklog.addLast(payload);
+            }
+            flushOutbound();
         });
+    }
+
+    private boolean canSendData() {
+        return !terminal && ready && peerReady && linked && channel != null;
+    }
+
+    private void flushOutbound() {
+        if (!canSendData() || link == null) return;
+        if (!link.host()) {
+            while (!guestBacklog.isEmpty()) sendData(guestBacklog.removeFirst());
+            return;
+        }
+        if (hostPending == null || hostFlush != null) return;
+        long wait = hostSentAt + HOST_FRAME_INTERVAL_MS - now();
+        if (wait > 0) {
+            hostFlush = schedule(() -> {
+                hostFlush = null;
+                flushOutbound();
+            }, wait);
+            return;
+        }
+        String payload = hostPending;
+        hostPending = null;
+        hostSentAt = now();
+        sendData(payload);
+    }
+
+    private void sendData(String payload) {
+        JsonObject data = InnApi.frame("data");
+        data.addProperty("d", payload);
+        channel.send(data);
     }
 
     // ---- socket ----
 
     private void connect() {
-        if (closed || terminal || channel != null) return;
+        if (channel != null || (!leaving && (closed || terminal))) return;
         reconnect = null;
         lastError = null;
         linked = false;
@@ -138,13 +194,25 @@ final class DungeonSession implements AutoCloseable {
     private void disconnected(int code) {
         channel = null;
         linked = false;
+        if (leaving) {
+            // Still owed a `leave`: try again until the grace period ends, unless the run is gone.
+            if (code == 4004 || code == 4010 || code == 4003 || code == 4009) {
+                stopLeaving();
+            } else {
+                schedule(this::connect, 300);
+            }
+            return;
+        }
         if (closed || terminal) return;
         switch (code) {
             case 4004, 4010, 1000 -> finish(endedNotice(lastError));
             case 4009 -> finish("다른 곳에서 이 원정에 접속했습니다.");
-            case 4000, 4001, 4003 -> finish("파티 연결 정보를 확인할 수 없습니다.");
+            case 4001, 4003 -> finish("파티 연결 정보를 확인할 수 없습니다.");
+            // §8/§9: on a joined link these mean the server ended the run for both sides.
+            case 4000, 1003, 1009 -> finish("파티 연결에 문제가 생겨 원정이 끝났습니다.");
             case 4008 -> finish("파티 연결 요청이 너무 많아 원정이 끝났습니다.");
             default -> {
+                // 1001, 1006, 1011, 4002, 4013 link_full (§8: like a drop), a missing pong, …
                 long time = now();
                 if (lostAt == 0) lostAt = time;
                 if (time - lostAt >= RECONNECT_WINDOW_MS) {
@@ -152,19 +220,24 @@ final class DungeonSession implements AutoCloseable {
                     return;
                 }
                 long base = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
-                long delay = (long) (base * (0.75 + ThreadLocalRandom.current().nextDouble() / 2));
-                try {
-                    reconnect = network.schedule(this::connect, delay, TimeUnit.MILLISECONDS);
-                } catch (RejectedExecutionException ignored) {
-                    // Closing.
-                }
+                reconnect = schedule(this::connect, (long) (base * (0.75 + ThreadLocalRandom.current().nextDouble() / 2)));
             }
         }
     }
 
     private void receive(JsonObject frame) {
+        String type = InnApi.string(frame, "t");
+        if ("link".equals(type)) {
+            // The server has joined this socket to the run; from now on ending it needs a `leave`.
+            linked = true;
+            joined = true;
+            if (leaving) {
+                leaveLink();
+                return;
+            }
+        }
         if (terminal) return;
-        switch (InnApi.string(frame, "t")) {
+        switch (type) {
             case "link" -> acceptLink(frame);
             case "paired" -> {
                 if (link != null) paired();
@@ -192,17 +265,18 @@ final class DungeonSession implements AutoCloseable {
         if (next == null || !matchId.equals(next.id()) || (role != null && !role.equals(next.role())) ||
             next.dungeonProtocol() != InnApi.DUNGEON_PROTOCOL ||
             (link != null && (link.seed() != next.seed() || !link.role().equals(next.role())))) {
+            // The socket is joined: finish sends `leave`, so the partner is not left waiting.
             finish("파티 연결 정보를 확인할 수 없습니다.");
             return;
         }
         lostAt = 0;
         attempt = 0;
         link = next;
-        linked = true;
         // After a reconnect the server remembers readiness; repeating it is harmless (§9).
         if (ready) channel.send(InnApi.frame("ready"));
         if (next.paired()) paired();
         if (next.partnerReady()) peerReady();
+        flushOutbound();
     }
 
     private void paired() {
@@ -217,6 +291,7 @@ final class DungeonSession implements AutoCloseable {
     private void peerReady() {
         peerReady = true;
         if (link.host() && paired) launch();
+        flushOutbound();
     }
 
     private void launch() {
@@ -252,16 +327,52 @@ final class DungeonSession implements AutoCloseable {
         listener.end(this, notice);
     }
 
+    /**
+     * Ends the run on the server. On a joined socket that is `leave`. If the server joined an earlier
+     * socket but the current one is down or not linked yet, reconnect for a few seconds to send
+     * `hello` and then `leave`; otherwise the partner would wait for the server's 20 s `partner_lost`.
+     */
     private void leaveLink() {
         if (reconnect != null) reconnect.cancel(false);
-        InnChannel current = channel;
-        boolean joined = linked;
-        channel = null;
-        linked = false;
-        if (current == null) return;
-        // Before its `link` the server may still be checking the hello and would refuse the frame.
-        if (joined) current.send(InnApi.frame("leave"));
-        closing.track(current.close(1000, "leave"));
+        reconnect = null;
+        if (linked && channel != null) {
+            InnChannel current = channel;
+            channel = null;
+            linked = false;
+            current.send(InnApi.frame("leave"));
+            closing.track(current.close(1000, "leave"));
+            stopLeaving();
+            return;
+        }
+        if (!joined) {
+            // The server never joined this side; there is no run to end on its behalf.
+            if (channel != null) channel.close(1000, "bye");
+            channel = null;
+            stopLeaving();
+            return;
+        }
+        if (leaving) return;
+        leaving = true;
+        schedule(this::stopLeaving, LEAVE_GRACE_MS);
+        if (channel == null) connect();
+        // A socket in its handshake sends hello; its `link` frame triggers the leave.
+    }
+
+    private void stopLeaving() {
+        if (leaving) {
+            leaving = false;
+            if (channel != null) channel.close(1000, "bye");
+            channel = null;
+        }
+        if (closed) network.shutdown();
+    }
+
+    private ScheduledFuture<?> schedule(Runnable task, long delayMs) {
+        try {
+            return network.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException ignored) {
+            return null; // Closing.
+        }
     }
 
     private static long now() {
@@ -276,15 +387,22 @@ final class DungeonSession implements AutoCloseable {
         }
     }
 
-    /** Ends the run for both sides (`leave`) without notifying the listener. */
+    /**
+     * Ends the run for both sides (`leave`) without notifying the listener. When the socket is down
+     * the session lives on for up to {@value #LEAVE_GRACE_MS} ms to deliver the `leave`.
+     */
     @Override
     public void close() {
         if (closed) return;
         closed = true;
         submit(() -> {
-            terminal = true;
-            leaveLink();
-            network.shutdown();
+            if (!terminal) {
+                terminal = true;
+                leaveLink();
+            } else if (!leaving) {
+                stopLeaving();
+            }
+            // While leaving, stopLeaving() shuts the executor down when it is done.
         });
     }
 

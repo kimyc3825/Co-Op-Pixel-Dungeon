@@ -78,6 +78,7 @@ public final class NativeInnScene extends PixelScene {
     private PredictedStep queuedStep;
     private long nextStepAt;
     private boolean displayedTestMode;
+    private boolean displayedPreparing;
     private boolean hasDisplayed;
     private boolean chatPinned;
     private boolean modalOpen;
@@ -211,7 +212,8 @@ public final class NativeInnScene extends PixelScene {
         boolean profileConfirmed = NativeClient.profileConfirmed();
         profile.enabled(!profileConfirmed || NativeClient.canChooseExpeditionTheme());
         expeditions.enabled(profileConfirmed);
-        if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode) {
+        boolean preparingParty = NativeClient.preparingParty();
+        if (!hasDisplayed || snapshot != displayed || testMode != displayedTestMode || preparingParty != displayedPreparing) {
             boolean online = snapshot != null && snapshot.online() && snapshot.state() != null;
             InnApi.State state = snapshot == null ? null : snapshot.state();
             List<InnApi.Event> history = snapshot == null ? List.of() : snapshot.history();
@@ -229,7 +231,11 @@ public final class NativeInnScene extends PixelScene {
                 nextStepAt = 0;
             }
             board.showState(state, history, testMode, visualStep == null ? null : visualStep.target(), NativeClient.appearance());
-            replace(presence, online ? "접속 " + state.people().size() + "명" : profileConfirmed ? "서버 연결 중" : "프로필 설정");
+            replace(presence, online ? "접속 " + state.people().size() + "명"
+                : preparingParty ? "원정 준비 중"
+                : !profileConfirmed ? "프로필 설정"
+                : snapshot != null && snapshot.stopped() ? "오프라인"
+                : "서버 연결 중");
             presence.hardlight(online ? GREEN : MUTED);
             replace(expeditionStatus, state != null && state.match() != null ? "연결 중" :
                 state != null && state.queued() ? "동료 찾는 중" : "");
@@ -239,6 +245,7 @@ public final class NativeInnScene extends PixelScene {
             if (!online) closeComposer();
             displayed = snapshot;
             displayedTestMode = testMode;
+            displayedPreparing = preparingParty;
             hasDisplayed = true;
         }
 

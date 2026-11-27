@@ -565,7 +565,8 @@ final class LobbySession implements AutoCloseable {
             case "protocol_mismatch" -> notice("이 모험가와는 게임 버전이 달라 함께할 수 없습니다.");
             case "busy" -> notice("이미 동료와 연결되었습니다.");
             case "activity_rate_limited" -> notice("잠시 뒤 다시 시도해 주세요.");
-            case "room_busy" -> notice("여관이 붐빕니다. 잠시 뒤 다시 시도해 주세요.");
+            // Chat: the room's shared budget is spent; the caller keeps the unsent text.
+            case "room_busy" -> notice("여관이 붐벼서 지금은 말을 전할 수 없습니다. 잠시 뒤 다시 보내 주세요.");
             case "not_in_inn" -> notice("여관에 들어온 뒤에 할 수 있습니다.");
             case "invalid_message" -> notice("대화는 한 줄, 160자까지 보낼 수 있습니다.");
             case "invalid_profile" -> notice("닉네임을 1~20자로 입력하세요.");
@@ -663,7 +664,13 @@ final class LobbySession implements AutoCloseable {
     }
 
     void drink() {
-        submit(() -> action(InnApi.frame("drink"), ok -> { }));
+        submit(() -> {
+            if (!online || away || state == null) return;
+            // The room's shared event budget being spent (`room_busy`) is not worth a notice here.
+            request(InnApi.frame("drink"), (ok, code) -> {
+                if (!ok && !"room_busy".equals(code)) actionFailed(code);
+            });
+        });
     }
 
     /** A notice for the others; the conversation itself is local, so failures are ignored. */

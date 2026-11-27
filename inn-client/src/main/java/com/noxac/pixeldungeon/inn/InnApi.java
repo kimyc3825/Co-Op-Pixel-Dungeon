@@ -71,7 +71,9 @@ final class InnApi {
             return "최대 체력 " + delta(hp) + " · 식량 " + delta(food);
         }
 
-        private static String delta(int value) { return value > 0 ? "+" + value : "−" + -value; }
+        private static String delta(int value) {
+            return value > 0 ? "+" + value : value < 0 ? "−" + -value : "±0";
+        }
     }
 
     /** The `link` frame of the party link (PROTOCOL.md §7.1). */

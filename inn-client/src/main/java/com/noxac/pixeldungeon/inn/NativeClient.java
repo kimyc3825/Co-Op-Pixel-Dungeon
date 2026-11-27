@@ -55,6 +55,13 @@ final class NativeClient {
     }
 
     private static void onInn(LobbySession.Snapshot snapshot) {
+        LobbySession.Snapshot previous = innSnapshot;
+        if (view == View.ENTERING && snapshot.state() == null && previous != null && previous.state() != null) {
+            // Left the room view for the party (`away` on paired) but the dungeon has not started:
+            // keep showing the room as it was, read-only, instead of an empty hall.
+            snapshot = new LobbySession.Snapshot(previous.state(), snapshot.history(), false,
+                snapshot.networkStatus(), "", snapshot.notice(), snapshot.stopped());
+        }
         innSnapshot = snapshot;
         if (view != View.INN || !snapshot.online() || snapshot.state().match() == null) return;
         InnApi.Match match = snapshot.state().match();
@@ -101,6 +108,9 @@ final class NativeClient {
         else inn.updateProfile(nickname, appearance);
     }
 
+    /** Between a match and the start of the party dungeon. */
+    static boolean preparingParty() { return view == View.ENTERING; }
+
     static String innNotice() {
         return view == View.ENTERING || System.nanoTime() < noticeUntil ? innNotice : "";
     }
@@ -120,12 +130,18 @@ final class NativeClient {
         view = View.ENTERING;
         // Returning always sends `enter`, which also clears a match that never reached the dungeon.
         leftInn = true;
-        innNotice = "동료와 원본 던전에 들어가는 중…";
+        innNotice = "동료와 파티 연결을 여는 중…";
         party = new DungeonSession(api, inn.sessionKey(), match.id(), match.role(), new DungeonSession.OriginalListener() {
             @Override
             public void paired(DungeonSession source) {
                 if (!shuttingDown) Gdx.app.postRunnable(() -> {
-                    if (source == party && view == View.ENTERING) inn.leaveRoom();
+                    if (source != party || view != View.ENTERING) return;
+                    // The guest starts at once; the host waits until the guest's dungeon is ready,
+                    // which can take a while when the guest loads the web runtime first.
+                    innNotice = "host".equals(match.role())
+                        ? "동료가 던전을 불러오는 중입니다. 준비되면 함께 출발합니다…"
+                        : "파티 던전을 불러오는 중…";
+                    inn.leaveRoom();
                 });
             }
 
