@@ -1,0 +1,31 @@
+// Cloudflare Worker for the Co-Op-Pixel-Dungeon inn, matchmaking and party relay.
+// Deploy: `npm run deploy` after `node ../scripts/stage-web-client.mjs` has filled ./public.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "co-op-pixel-dungeon",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-20",
+  "workers_dev": true,
+  "assets": {
+    // Staged web lobby and TeaVM runtime (generated, not in Git). Requests matching a file are
+    // served without invoking the Worker; everything else reaches src/index.ts.
+    "directory": "./public",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "INN", "class_name": "InnRoom" },
+      { "name": "LINK", "class_name": "PartyLink" }
+    ]
+  },
+  // SQLite-backed classes are the only kind available on the Workers Free plan.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["InnRoom", "PartyLink"] }
+  ],
+  "vars": {
+    // Comma-separated browser origins allowed besides the Worker's own (e.g. a local preview).
+    "ALLOWED_ORIGINS": ""
+  },
+  "observability": { "enabled": true }
+}

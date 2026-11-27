@@ -49,12 +49,11 @@ abstract public class Tweener extends Gizmo {
 			kill();
 			return;
 		}
-		float frameElapsed = tweenElapsed();
-		elapsed += frameElapsed;
+		elapsed += Game.elapsed;
 		
 		//it's better to skip this frame ahead and finish one frame early
 		// if doing one more frame would result in lots of overshoot
-		if ((interval - elapsed) < frameElapsed/2f){
+		if ((interval - elapsed) < Game.elapsed/2f){
 			elapsed = interval;
 		}
 		
@@ -65,10 +64,6 @@ abstract public class Tweener extends Gizmo {
 		} else {
 			updateValues( elapsed / interval );
 		}
-	}
-
-	protected float tweenElapsed() {
-		return Game.elapsed;
 	}
 	
 	public void stop( boolean complete ){

@@ -59,7 +59,7 @@ public class MovieClip extends Image {
 			
 			int lastFrame = curFrame;
 			
-			frameTimer += animationElapsed();
+			frameTimer += Game.elapsed;
 			while (frameTimer > curAnim.delay) {
 				frameTimer -= curAnim.delay;
 				if (curFrame >= curAnim.frames.length - 1) {
@@ -88,10 +88,6 @@ public class MovieClip extends Image {
 			}
 			
 		}
-	}
-
-	protected float animationElapsed() {
-		return Game.elapsed;
 	}
 	
 	public void play( Animation anim ) {

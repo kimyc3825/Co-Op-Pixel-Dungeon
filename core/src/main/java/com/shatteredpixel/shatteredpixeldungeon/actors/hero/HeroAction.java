@@ -22,30 +22,14 @@
 package com.shatteredpixel.shatteredpixeldungeon.actors.hero;
 
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
-import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
 
 public class HeroAction {
 	
 	public int dst;
 	
 	public static class Move extends HeroAction {
-		public final boolean singleStep;
-
-		public Move( int dst, boolean singleStep ) {
+		public Move( int dst ) {
 			this.dst = dst;
-			this.singleStep = singleStep;
-		}
-	}
-
-	public static final class Jump extends HeroAction {
-		public final Level level;
-		public final int from;
-		public final int cell;
-
-		public Jump(Level level, int from, int target) {
-			this.level = level;
-			this.from = from;
-			this.cell = target;
 		}
 	}
 	

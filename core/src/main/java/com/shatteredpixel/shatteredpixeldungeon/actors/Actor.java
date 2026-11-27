@@ -22,8 +22,6 @@
 package com.shatteredpixel.shatteredpixeldungeon.actors;
 
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
-import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
-import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.Statistics;
 import com.shatteredpixel.shatteredpixeldungeon.actors.blobs.Blob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Buff;
@@ -31,8 +29,6 @@ import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember;
 import com.shatteredpixel.shatteredpixeldungeon.effects.TargetedCell;
-import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TimekeepersHourglass;
-import com.shatteredpixel.shatteredpixeldungeon.plants.Swiftthistle;
 import com.watabou.noosa.Game;
 import com.watabou.utils.Bundlable;
 import com.watabou.utils.Bundle;
@@ -163,38 +159,41 @@ public abstract class Actor implements Bundlable {
 	private static int nextID = 1;
 
 	private static volatile float now = 0;
-	private static final float SECONDS_PER_TURN = 1f;
-	private static final float MAX_ATB_LEAD = 1.5f;
-	private static float atbDeadline;
-	private static volatile boolean atbPaused;
-	private static volatile boolean atbActing;
+	//true while the actor thread waits for the render thread at the end of a scheduler pass
+	private static volatile boolean parked;
 	
 	public static float now(){
 		return now;
 	}
 
-	private static boolean freezesWorld(Hero hero) {
-		return hero != null && (hero.buff(TimekeepersHourglass.timeFreeze.class) != null
-				|| hero.buff(Swiftthistle.TimeBubble.class) != null);
+	static float timeOf( Actor actor ){
+		return actor.time;
 	}
 
-	/** Feed the original actor scheduler from rendered game time. */
-	public static void updateAtb(float elapsed, boolean paused) {
-		boolean frozen = !paused && freezesWorld(Dungeon.hero);
-		synchronized (Actor.class) {
-			atbPaused = paused;
-			if (!paused && !frozen) {
-				atbDeadline = Math.min(now + MAX_ATB_LEAD,
-						Math.max(now, atbDeadline) + Math.max(0, elapsed) / SECONDS_PER_TURN);
-			}
+	static void setTime( Actor actor, float time ){
+		actor.time = time;
+	}
+
+	/** True while the actor thread is idle, so the render thread can read the game state safely. */
+	public static boolean parked(){
+		return parked;
+	}
+
+	static Actor currentActor(){
+		return current;
+	}
+
+	/** Lets the scheduler continue past a player it was waiting for (see {@link TurnClock}). */
+	static synchronized void release( Actor held ){
+		if (current == held) {
+			current = null;
 		}
 	}
 	
 	public static synchronized void clear() {
 		
 		now = 0;
-		atbDeadline = 0;
-		atbPaused = false;
+		TurnClock.reset();
 
 		all.clear();
 		chars.clear();
@@ -208,6 +207,8 @@ public abstract class Actor implements Bundlable {
 		
 		float min = Float.MAX_VALUE;
 		for (Actor a : all) {
+			//a skipped party player follows the current time and must not pin it
+			if (TurnClock.detached(a) && a.time < now) a.time = now;
 			if (a.time < min) {
 				min = a.time;
 			}
@@ -225,7 +226,6 @@ public abstract class Actor implements Bundlable {
 			Statistics.duration += min;
 		}
 		now -= min;
-		atbDeadline -= min;
 	}
 	
 	public static void init() {
@@ -269,7 +269,7 @@ public abstract class Actor implements Bundlable {
 	}
 
 	public static boolean processing(){
-		return current != null || atbActing;
+		return current != null;
 	}
 
 	public static int curActorPriority() {
@@ -277,46 +277,6 @@ public abstract class Actor implements Bundlable {
 	}
 	
 	public static boolean keepActorThreadAlive = true;
-
-	private static Actor selectTimedActor(Hero hero, boolean frozen) {
-		if (atbPaused) return null;
-		Actor heroActor = hero;
-		boolean idle = hero != null && !frozen && hero.atbCanSkipIdle();
-		float heroAt = Float.POSITIVE_INFINITY;
-		if (hero != null && !idle) {
-			if (frozen) {
-				heroAt = hero.atbNextActionAt(now, now);
-			} else if (hero.sprite == null || !hero.sprite.isMoving) {
-				heroAt = hero.atbNextActionAt(heroActor.time, now);
-			}
-		}
-
-		synchronized (Actor.class) {
-			if (atbPaused) return null;
-			Actor chosen = null;
-			float earliest = Float.MAX_VALUE;
-			for (Actor actor : all) {
-				if (frozen && actor != hero) continue;
-				float eligibleAt = actor == hero ? heroAt : actor.time;
-				if (!frozen && eligibleAt > atbDeadline) continue;
-				if (eligibleAt < earliest ||
-						eligibleAt == earliest && (chosen == null || actor.actPriority > chosen.actPriority)) {
-					earliest = eligibleAt;
-					chosen = actor;
-				}
-			}
-			if (chosen != null) {
-				now = Math.max(now, earliest);
-				if (chosen == hero) chosen.time = now;
-			} else if (!frozen) {
-				// The real-time clock must still reach actors due after a long delay.
-				now = Math.max(now, atbDeadline);
-			}
-			// Item windows can spend time directly while the hero is awaiting input.
-			if (idle && heroActor.time < now) heroActor.time = now;
-			return chosen;
-		}
-	}
 	
 	public static void process() {
 		
@@ -326,17 +286,22 @@ public abstract class Actor implements Bundlable {
 		do {
 			
 			current = null;
+			//party play: the hero and the host's party member share an action-driven turn clock
 			Hero hero = Dungeon.hero;
-			boolean timed = InnAdventure.atb();
-			if (timed && hero != null) hero.applyInnTravelStop();
-			boolean frozen = timed && !atbPaused && freezesWorld(hero);
-			if (!interrupted && !Game.switchingScene() && timed) {
-				current = selectTimedActor(hero, frozen);
-			} else if (!interrupted && !Game.switchingScene()) {
+			InnPartyMember member = hero != null && hero.isAlive() ? TurnClock.activeMember() : null;
+			if (member == null) TurnClock.endParty(hero, now);
+
+			if (!interrupted && !Game.switchingScene()) {
+				if (member != null) TurnClock.beginPass(hero, member, now);
+				boolean heroSkipped = member != null && TurnClock.detached(hero);
+				boolean memberSkipped = member != null && TurnClock.detached(member);
 				float earliest = Float.MAX_VALUE;
 
 				synchronized (Actor.class) {
 					for (Actor actor : all) {
+
+						//skipped party players do not hold the queue
+						if (heroSkipped && actor == hero || memberSkipped && actor == member) continue;
 
 						//some actors will always go before others if time is equal.
 						if (actor.time < earliest ||
@@ -347,60 +312,56 @@ public abstract class Actor implements Bundlable {
 
 					}
 				}
+
+				if (member != null) current = TurnClock.preferReady(current, hero, member);
 			}
 
 			if  (current != null) {
 
-				if (!timed) now = current.time;
+				now = current.time;
 				Actor acting = current;
 
-				if (acting instanceof Char && ((Char) acting).sprite != null) {
-					// If it's character's turn to act, but its sprite
-					// is moving, wait till the movement is over
-					try {
-						synchronized (((Char)acting).sprite) {
-							if (((Char)acting).sprite.isMoving) {
-								((Char) acting).sprite.wait();
-							}
-						}
-					} catch (InterruptedException e) {
-						interrupted = true;
-					}
-				}
-				
-				interrupted = interrupted || Thread.interrupted();
-				
-				if (interrupted || timed && atbPaused){
-					doNext = false;
-					current = null;
+				if (member != null && TurnClock.isPlayer(acting, hero, member) && !TurnClock.hasReadyAction(acting)) {
+
+					//an idle player is the earliest actor: freeze, skip, count down or wait automatically
+					TurnClock.Decided decided = TurnClock.decideIdle(acting, hero, member, now);
+					current = decided.hold;
+					doNext = decided.doNext;
+
 				} else {
-					if (timed) atbActing = true;
-					try {
-						Char mover = timed && !frozen && (acting == hero || acting instanceof InnPartyMember)
-								? (Char) acting : null;
-						int before = mover == null ? -1 : mover.pos;
-						doNext = acting.act();
-						if (mover != null && mover.pos != before && !Game.switchingScene() && !freezesWorld(hero)) {
-							for (Mob mob : Dungeon.level.mobs.toArray(new Mob[0])) {
-								mob.checkInnApproach(mover);
+
+					if (acting instanceof Char && ((Char) acting).sprite != null) {
+						// If it's character's turn to act, but its sprite
+						// is moving, wait till the movement is over
+						try {
+							synchronized (((Char)acting).sprite) {
+								if (((Char)acting).sprite.isMoving) {
+									((Char) acting).sprite.wait();
+								}
 							}
+						} catch (InterruptedException e) {
+							interrupted = true;
 						}
-					} finally {
-						if (timed) atbActing = false;
 					}
-					if (timed && !frozen && acting == hero && hero.atbCanSkipIdle()) {
-						// An idle hero no longer holds up the rest of the actor queue.
-						current = null;
-						doNext = true;
-					}
-					if (doNext && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
+					
+					interrupted = interrupted || Thread.interrupted();
+					
+					if (interrupted){
 						doNext = false;
 						current = null;
-					} else if (timed && hero != null && !Game.switchingScene() &&
-							(acting instanceof Mob || acting == hero && doNext)) {
-						if (acting instanceof Mob && doNext && hero.atbCanSkipIdle() && hero.fieldOfView != null) hero.checkVisibleMobs();
-						else hero.observeInnEncounter();
-						GameScene.refreshAtbAttackIndicator();
+					} else {
+						if (member != null && TurnClock.isPlayer(acting, hero, member)) TurnClock.acting(acting);
+						doNext = acting.act();
+						if (member != null && acting == hero && !doNext && current == hero && TurnClock.heroIdle(hero)) {
+							//the hero found nothing to do this turn
+							TurnClock.Decided decided = TurnClock.decideIdle(hero, hero, member, now);
+							current = decided.hold;
+							doNext = decided.doNext;
+						}
+						if (doNext && (Dungeon.hero == null || !Dungeon.hero.isAlive())) {
+							doNext = false;
+							current = null;
+						}
 					}
 				}
 			} else {
@@ -420,10 +381,13 @@ public abstract class Actor implements Bundlable {
 					//signals to the gamescene that actor processing is finished for now
 					Thread.currentThread().notify();
 					
+					parked = true;
 					try {
 						Thread.currentThread().wait();
 					} catch (InterruptedException e) {
 						interrupted = true;
+					} finally {
+						parked = false;
 					}
 				}
 			}

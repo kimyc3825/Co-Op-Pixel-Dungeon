@@ -22,12 +22,10 @@
 package com.shatteredpixel.shatteredpixeldungeon.scenes;
 
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
-import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
-import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroAction;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.items.Heap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTilemap;
@@ -152,24 +150,8 @@ public class CellSelector extends ScrollArea {
 	}
 	
 	public void select( int cell, int button ) {
-		if (InnAdventure.atb() && button == PointerEvent.LEFT && cell >= 0
-				&& GameScene.isDefaultCellListener(listener) && atbInputAllowed()) {
-			atbTap = null;
-			if (!Dungeon.hero.ready) {
-				atbClick = cell;
-				return;
-			}
-			atbClick = -1;
-			atbTargetBlocked = false;
-			atbBlockedAction = null;
-			listener.onSelect(cell);
-			GameScene.ready();
-			return;
-		}
 		if (enabled && Dungeon.hero.ready && !GameScene.interfaceBlockingHero()
 				&& listener != null && cell != -1) {
-			if (Dungeon.hero.innExhausted() && !GameScene.isDefaultCellListener(listener)
-					&& button != PointerEvent.RIGHT) return;
 
 			switch (button){
 				default:
@@ -273,12 +255,6 @@ public class CellSelector extends ScrollArea {
 	private float heldDelay = 0f;
 	private boolean delayingForRelease = false;
 
-	private Point atbTap;
-	private int atbClick = -1;
-	private boolean atbHeldRequested;
-	private boolean atbTargetBlocked;
-	private HeroAction atbBlockedAction;
-
 	private static float initialDelay(){
 		switch (SPDSettings.movementHoldSensitivity()){
 			case 0:
@@ -313,15 +289,6 @@ public class CellSelector extends ScrollArea {
 					return true;
 				}
 				
-				boolean atb = InnAdventure.atb();
-				if (atb && action != SPDAction.NONE && (action == heldAction1 || action == heldAction2)
-						&& !atbHeldRequested && !delayingForRelease && atbInputAllowed()) {
-					// Preserve a short tap, including a diagonal chord, while an action finishes.
-					atbTap = movementDirection(heldAction1, heldAction2);
-					atbClick = -1;
-					atbHeldRequested = true;
-				}
-
 				if (heldAction1 != SPDAction.NONE && heldAction1 == action) {
 					heldAction1 = SPDAction.NONE;
 					if (heldAction2 != SPDAction.NONE){
@@ -344,14 +311,13 @@ public class CellSelector extends ScrollArea {
 
 				//move from the action immediately if it was being delayed
 				// and another key wasn't recently released
-				if (!atb && heldDelay > 0f && !delayingForRelease){
+				if (heldDelay > 0f && !delayingForRelease){
 					heldDelay = 0f;
 					moveFromActions(action, heldAction1, heldAction2);
 				}
 
 				if (heldAction1 == GameAction.NONE && heldAction2 == GameAction.NONE) {
-					heldAction3 = SPDAction.NONE;
-					if (!atb) resetKeyHold();
+					resetKeyHold();
 					return true;
 				} else {
 					delayingForRelease = true;
@@ -361,14 +327,6 @@ public class CellSelector extends ScrollArea {
 				}
 
 			} else if (!directionFromAction(action).isZero()) {
-				if (InnAdventure.atb()) {
-					if (!atbInputAllowed()) return false;
-					if (action == heldAction1 || action == heldAction2 || action == heldAction3) return true;
-					atbClick = -1;
-					atbTap = null;
-					atbHeldRequested = false;
-					delayingForRelease = false;
-				}
 
 				Dungeon.hero.resting = false;
 				lastCellMoved = -1;
@@ -401,13 +359,11 @@ public class CellSelector extends ScrollArea {
 		GameAction newLeftStick = actionFromStick(ControllerHandler.leftStickPosition.x,
 				ControllerHandler.leftStickPosition.y);
 
-		if (GameScene.interfaceBlockingHero()){
-			if (InnAdventure.atb()) resetKeyHold();
-			return;
-		}
-		if (newLeftStick == leftStickAction && leftStickAction == GameAction.NONE
-				&& heldAction1 == SPDAction.NONE && atbTap == null && atbClick < 0) {
-			lastCellMoved = -1;
+		//skip logic here if there's no input, or if input is blocked
+		if ((newLeftStick == leftStickAction
+				&& leftStickAction == GameAction.NONE
+					&& heldAction1 == SPDAction.NONE)
+					|| GameScene.interfaceBlockingHero()){
 			return;
 		}
 
@@ -417,12 +373,7 @@ public class CellSelector extends ScrollArea {
 				Dungeon.hero.resting = false;
 			} else if (newLeftStick == SPDAction.NONE && heldDelay > 0f){
 				heldDelay = 0f;
-				if (InnAdventure.atb()) {
-					atbTap = directionFromAction(leftStickAction);
-					atbClick = -1;
-				} else {
-					moveFromActions(leftStickAction);
-				}
+				moveFromActions(leftStickAction);
 			}
 			leftStickAction = newLeftStick;
 		}
@@ -431,58 +382,11 @@ public class CellSelector extends ScrollArea {
 			heldDelay -= Game.elapsed;
 		}
 
-		if (InnAdventure.atb()) {
-			processAtbInput();
-		} else if (heldAction1 == SPDAction.NONE && leftStickAction == SPDAction.NONE) {
+		if ((heldAction1 == SPDAction.NONE && leftStickAction == SPDAction.NONE)){
 			lastCellMoved = -1;
 		} else if (Dungeon.hero.ready){
 			processKeyHold();
 		}
-	}
-
-	private boolean atbInputAllowed() {
-		return Dungeon.hero != null && Dungeon.hero.isAlive() && Dungeon.hero.paralysed == 0
-				&& !GameScene.interfaceBlockingHero();
-	}
-
-	private void processAtbInput() {
-		if (!atbInputAllowed() || !Dungeon.hero.ready) return;
-		if (atbClick >= 0) {
-			int cell = atbClick;
-			atbClick = -1;
-			if (GameScene.isDefaultCellListener(listener)) select(cell, PointerEvent.LEFT);
-			return;
-		}
-		if (atbTap != null) {
-			Point direction = atbTap;
-			atbTap = null;
-			moveAtb(direction);
-			return;
-		}
-		if (heldDelay <= 0) {
-			Point direction = leftStickAction != SPDAction.NONE
-					? directionFromAction(leftStickAction) : movementDirection(heldAction1, heldAction2);
-			if (moveAtb(direction)) atbHeldRequested = true;
-		}
-	}
-
-	private boolean moveAtb(Point direction) {
-		if (direction.isZero() || GameScene.cancelCellSelector()) return false;
-		int cell = adjacentCell(direction);
-		if (cell < 0 || cell >= Dungeon.level.length()) return false;
-		boolean blocked = Dungeon.hero.rooted || Actor.findChar(cell) != null
-				|| !Dungeon.level.passable[cell] && !Dungeon.level.avoid[cell];
-		// Retry a held direction when an obstruction leaves this cell, without repeating attacks.
-		if (cell == lastCellMoved && (!atbTargetBlocked || blocked
-				|| Dungeon.hero.curAction != null && Dungeon.hero.curAction != atbBlockedAction)) return false;
-		lastCellMoved = cell;
-		atbTargetBlocked = blocked;
-		Dungeon.observe();
-		if (!Dungeon.hero.handle(cell)) return false;
-		atbBlockedAction = blocked ? Dungeon.hero.curAction : null;
-		Dungeon.hero.ready = false;
-		Dungeon.hero.next();
-		return true;
 	}
 
 	//prevents repeated inputs when the hero isn't moving
@@ -497,7 +401,14 @@ public class CellSelector extends ScrollArea {
 			return false;
 		}
 
-		int cell = adjacentCell(movementDirection(actions));
+		Point direction = new Point();
+		for (GameAction action : actions) {
+			direction.offset(directionFromAction(action));
+		}
+		int cell = Dungeon.hero.pos;
+		//clamp to adjacent values (-1 to +1)
+		cell += GameMath.gate(-1, direction.x, +1);
+		cell += GameMath.gate(-1, direction.y, +1) * Dungeon.level.width();
 
 		if (cell != Dungeon.hero.pos && cell != lastCellMoved){
 			lastCellMoved = cell;
@@ -510,17 +421,6 @@ public class CellSelector extends ScrollArea {
 			return false;
 		}
 
-	}
-
-	private int adjacentCell(Point direction) {
-		return Dungeon.hero.pos + (int) GameMath.gate(-1, direction.x, +1)
-				+ (int) GameMath.gate(-1, direction.y, +1) * Dungeon.level.width();
-	}
-
-	private Point movementDirection(GameAction... actions) {
-		Point direction = new Point();
-		for (GameAction action : actions) direction.offset(directionFromAction(action));
-		return direction;
 	}
 
 	private Point directionFromAction(GameAction action){
@@ -562,10 +462,6 @@ public class CellSelector extends ScrollArea {
 	}
 
 	public void processKeyHold() {
-		if (InnAdventure.atb()) {
-			processAtbInput();
-			return;
-		}
 		//prioritize moving by controller stick over moving via keys
 		if (!directionFromAction(leftStickAction).isZero() && heldDelay < 0) {
 			enabled = Dungeon.hero.ready = true;
@@ -585,10 +481,6 @@ public class CellSelector extends ScrollArea {
 	
 	public void resetKeyHold(){
 		heldAction1 = heldAction2 = heldAction3 = SPDAction.NONE;
-		atbTap = null;
-		atbClick = -1;
-		atbBlockedAction = null;
-		atbTargetBlocked = false;
 	}
 	
 	public void cancel() {

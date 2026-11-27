@@ -24,12 +24,10 @@ package com.shatteredpixel.shatteredpixeldungeon.levels.features;
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
-import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Bleeding;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Buff;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Cripple;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
-import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroAction;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.effects.Speck;
 import com.shatteredpixel.shatteredpixeldungeon.items.potions.elixirs.ElixirOfFeatherFall;
@@ -53,21 +51,16 @@ import com.watabou.utils.Random;
 
 public class Chasm implements Hero.Doom {
 
-	public static boolean canJumpFrom(Hero hero, HeroAction.Jump jump) {
-		return !Game.switchingScene() && Dungeon.hero == hero && Dungeon.level == jump.level && hero.isAlive()
-				&& hero.pos == jump.from && hero.paralysed == 0 && !hero.rooted
-				&& jump.level.insideMap(jump.cell) && jump.level.adjacent(jump.from, jump.cell)
-				&& jump.level.pit[jump.cell] && !jump.level.solid[jump.cell] && Actor.findChar(jump.cell) == null;
-	}
-
-	public static void showJumpConfirmation(final Hero hero, int step) {
-		HeroAction.Jump jump = new HeroAction.Jump(Dungeon.level, hero.pos, step);
+	public static boolean jumpConfirmed = false;
+	private static int heroPos;
+	
+	public static void heroJump( final Hero hero ) {
+		heroPos = hero.pos;
 		Game.runOnRenderThread(new Callback() {
 			@Override
 			public void call() {
-				if (!canJumpFrom(hero, jump) || GameScene.showingWindow()) return;
 				GameScene.show(
-						new WndOptions( new Image(jump.level.tilesTex(), 176, 16, 16, 16),
+						new WndOptions( new Image(Dungeon.level.tilesTex(), 176, 16, 16, 16),
 								Messages.get(Chasm.class, "chasm"),
 								Messages.get(Chasm.class, "jump"),
 								Messages.get(Chasm.class, "yes"),
@@ -90,10 +83,11 @@ public class Chasm implements Hero.Doom {
 
 							@Override
 							protected void onSelect( int index ) {
-								if (index != 0 || elapsed <= 0.2f) return;
-								if (canJumpFrom(hero, jump)) hero.confirmChasmJump(jump);
-								else if (Dungeon.hero == hero && Dungeon.level == jump.level && hero.isAlive()) {
-									logJumpUnavailable();
+								if (index == 0 && elapsed > 0.2f) {
+									if (Dungeon.hero.pos == heroPos) {
+										jumpConfirmed = true;
+										hero.resume();
+									}
 								}
 							}
 						}
@@ -101,13 +95,11 @@ public class Chasm implements Hero.Doom {
 			}
 		});
 	}
-
-	public static void logJumpUnavailable() {
-		GLog.w(Messages.get(Chasm.class, "jump_unavailable"));
-	}
 	
 	public static void heroFall( int pos ) {
 		
+		jumpConfirmed = false;
+				
 		Sample.INSTANCE.play( Assets.Sounds.FALLING );
 
 		Level.beforeTransition();

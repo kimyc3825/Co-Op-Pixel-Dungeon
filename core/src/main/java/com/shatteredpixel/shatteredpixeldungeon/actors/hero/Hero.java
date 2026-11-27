@@ -26,8 +26,6 @@ import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Bones;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
-import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
-import com.shatteredpixel.shatteredpixeldungeon.InnEncounter;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
@@ -111,7 +109,6 @@ import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.MasterThievesArm
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.SkeletonKey;
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TalismanOfForesight;
 import com.shatteredpixel.shatteredpixeldungeon.items.artifacts.TimekeepersHourglass;
-import com.shatteredpixel.shatteredpixeldungeon.plants.Swiftthistle;
 import com.shatteredpixel.shatteredpixeldungeon.items.bags.MagicalHolster;
 import com.shatteredpixel.shatteredpixeldungeon.items.journal.Guidebook;
 import com.shatteredpixel.shatteredpixeldungeon.items.keys.CrystalKey;
@@ -197,7 +194,6 @@ import com.watabou.utils.Random;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class Hero extends Char {
 
@@ -224,7 +220,7 @@ public class Hero extends Char {
 	private int attackSkill = 10;
 	private int defenseSkill = 5;
 
-	public boolean ready = false;
+	public volatile boolean ready = false;
 	public boolean damageInterrupt = true;
 	public volatile HeroAction curAction = null;
 	public HeroAction lastAction = null;
@@ -825,150 +821,7 @@ public class Hero extends Char {
 
 	@Override
 	public void spendConstant(float time) {
-		boolean atb = innAtbActive();
 		super.spendConstant(time);
-		if (!atb) return;
-		switch (atbSpend) {
-			case MOVE:
-				atbIndependent = true;
-				atbMoving = true;
-				atbMoveAt = Actor.now() + 0.225f * time;
-				if (time > 0 && innEncounter.phase().costsMovement()) InnAtb.spend(1);
-				break;
-			case MELEE:
-				atbIndependent = true;
-				atbMeleeAt = Actor.now() + time;
-				if (time > 0) InnAtb.spend(atbCommittedMeleeCost);
-				break;
-			case WAIT:
-				if (time > 0) atbIndependent = false;
-				break;
-			default:
-				if (time > 0) atbIndependent = false;
-				if (time != 0) InnAtb.spend(time);
-				break;
-		}
-	}
-
-	private enum AtbSpend { NORMAL, MOVE, MELEE, WAIT }
-	private AtbSpend atbSpend = AtbSpend.NORMAL;
-	private final InnEncounter innEncounter = new InnEncounter();
-	// Only movement and melee replace the original hero-wide cooldown.
-	private boolean atbIndependent;
-	private volatile boolean atbMoving;
-	private float atbMoveAt;
-	private float atbMeleeAt;
-	private float atbCommittedMeleeCost;
-	private volatile HeroAction atbWaiting;
-	private final AtomicReference<HeroAction> atbTravelToStop = new AtomicReference<>();
-	private AtbSpend atbWaitKind;
-
-	public void requestInnTravelStop() {
-		HeroAction action = curAction;
-		if (action instanceof HeroAction.Move || action instanceof HeroAction.LvlTransition || action instanceof HeroAction.Jump) {
-			atbTravelToStop.set(action);
-		}
-		resting = false;
-	}
-
-	/** Finish a committed step, then discard the rest of that same route. */
-	public void applyInnTravelStop() {
-		if (atbTravelToStop.get() == null) return;
-		HeroAction action = atbTravelToStop.getAndSet(null);
-		if (action != null && curAction == action) curAction = null;
-	}
-
-	public boolean innAtbActive() {
-		return InnAdventure.atb() && Dungeon.hero == this
-				&& buff(TimekeepersHourglass.timeFreeze.class) == null
-				&& buff(Swiftthistle.TimeBubble.class) == null;
-	}
-
-	public boolean canSpendInnAtb(float cost) {
-		return !innExhausted() && (!innAtbActive() || InnAtb.canSpend(cost));
-	}
-
-	public boolean innExhausted() {
-		return InnAdventure.atb() && Dungeon.hero == this && InnAtb.exhausted();
-	}
-
-	public boolean atbCanSkipIdle() {
-		return innAtbActive() && ready && curAction == null && !resting && paralysed == 0;
-	}
-
-	public float atbNextActionAt(float scheduled, float now) {
-		if (curAction != null && paralysed == 0 && innExhausted()) return Float.POSITIVE_INFINITY;
-		if (!innAtbActive() || paralysed > 0) return scheduled;
-		if (atbCanSkipIdle()) return Float.POSITIVE_INFINITY;
-		if (atbWaiting != null && curAction == atbWaiting) {
-			if (atbWaitKind == AtbSpend.MELEE) {
-				return atbHasMeleeEnergy() ? Math.max(now, atbMeleeAt) : Float.POSITIVE_INFINITY;
-			}
-			return atbHasMoveEnergy() ? Math.max(now, atbMoveAt) : Float.POSITIVE_INFINITY;
-		}
-		return atbIndependent ? Math.max(now, atbMoveAt) : scheduled;
-	}
-
-	@Override
-	public void fixTime(float decrement) {
-		super.fixTime(decrement);
-		atbMoveAt = Math.max(0, atbMoveAt - decrement);
-		atbMeleeAt = Math.max(0, atbMeleeAt - decrement);
-	}
-
-	private boolean atbHasMoveEnergy() {
-		return InnAtb.canSpend(!innEncounter.phase().costsMovement() || buff(GreaterHaste.class) != null ? 0 : 1);
-	}
-
-	public InnEncounter innEncounter() {
-		return innEncounter;
-	}
-
-	public void observeInnEncounter() {
-		Level level = Dungeon.level;
-		if (level != null) innEncounter.observe(this, level, level.mobs.toArray(new Mob[0]));
-	}
-
-	private boolean atbHasMeleeEnergy() {
-		return InnAtb.canSpend(innMeleeCost());
-	}
-
-	private float innMeleeCost() {
-		if (buff(Talent.LethalMomentumTracker.class) != null) return 0;
-		KindOfWeapon weapon = belongings.attackingWeapon();
-		if (RingOfForce.fightingUnarmed(this)) {
-			return RingOfForce.unarmedGetsWeaponAugment(this)
-					? ((Weapon) belongings.weapon).augment.delayFactor(1f) : 1f;
-		}
-		if (weapon instanceof Weapon) {
-			Weapon ordinary = (Weapon) weapon;
-			return ordinary.augment.delayFactor(ordinary.DLY);
-		}
-		return 1f;
-	}
-
-	public boolean waitingForInnAtbEnergy() {
-		HeroAction waiting = atbWaiting;
-		return innExhausted() || waiting != null && waiting == curAction && innAtbActive()
-				&& (atbWaitKind == AtbSpend.MELEE ? !atbHasMeleeEnergy() : !atbHasMoveEnergy());
-	}
-
-	private void deferInnAtb(AtbSpend kind) {
-		atbWaitKind = kind;
-		atbWaiting = curAction;
-		ready = true;
-		next();
-	}
-
-	private void spendInnAtb(float time, AtbSpend kind, boolean constant) {
-		AtbSpend previous = atbSpend;
-		atbSpend = kind;
-		try {
-			if (constant) spendConstant(time);
-			else spend(time);
-		} finally {
-			atbSpend = previous;
-		}
 	}
 
 	public void spendAndNextConstant(float time ) {
@@ -985,7 +838,6 @@ public class Hero extends Char {
 	
 	@Override
 	public boolean act() {
-		atbWaiting = null;
 		
 		//calls to dungeon.observe will also update hero's local FOV.
 		fieldOfView = Dungeon.level.heroFOV;
@@ -1012,23 +864,15 @@ public class Hero extends Char {
 			
 			curAction = null;
 			
-			busy();
-			spendInnAtb(TICK, AtbSpend.WAIT, false);
-			next();
+			spendAndNext( TICK );
 			return false;
 		}
 		
-		if (curAction != null && innExhausted()) {
-			ready = true;
-			next();
-			return true;
-		}
-
 		boolean actResult;
 		if (curAction == null) {
 			
 			if (resting) {
-				spendInnAtb(TIME_TO_REST, AtbSpend.WAIT, true);
+				spendConstant( TIME_TO_REST );
 				next();
 			} else {
 				ready();
@@ -1053,8 +897,6 @@ public class Hero extends Char {
 			
 			if (curAction instanceof HeroAction.Move) {
 				actResult = actMove( (HeroAction.Move)curAction );
-			} else if (curAction instanceof HeroAction.Jump) {
-				actResult = actChasmJump((HeroAction.Jump) curAction);
 				
 			} else if (curAction instanceof HeroAction.Interact) {
 				actResult = actInteract( (HeroAction.Interact)curAction );
@@ -1103,8 +945,7 @@ public class Hero extends Char {
 		ready = true;
 		canSelfTrample = true;
 
-		if (InnAdventure.atb()) GameScene.refreshAtbAttackIndicator();
-		else AttackIndicator.updateState();
+		AttackIndicator.updateState();
 		
 		GameScene.ready();
 		//check statistics to see if vault warned?
@@ -1145,30 +986,13 @@ public class Hero extends Char {
 	}
 	
 	public void interrupt() {
-		interrupt(true);
-	}
-
-	public void interruptForCombat() {
-		boolean timed = innAtbActive();
-		HeroAction action = curAction;
-		// Keep a single escape step queued while its ATB movement gate recovers.
-		if (timed && action instanceof HeroAction.Move && ((HeroAction.Move)action).singleStep
-				&& Dungeon.level.adjacent(pos, action.dst)) {
-			resting = false;
-			return;
-		}
-		// Stop automatic travel and resting without forgetting physically held directions.
-		interrupt(!timed);
-	}
-
-	private void interrupt(boolean resetKeyHold) {
 		if (isAlive() && curAction != null &&
 			((curAction instanceof HeroAction.Move && curAction.dst != pos) ||
 			(curAction instanceof HeroAction.LvlTransition))) {
 			lastAction = curAction;
 		}
 		curAction = null;
-		if (resetKeyHold) GameScene.resetKeyHold();
+		GameScene.resetKeyHold();
 		resting = false;
 	}
 	
@@ -1176,12 +1000,6 @@ public class Hero extends Char {
 		curAction = lastAction;
 		lastAction = null;
 		damageInterrupt = false;
-		next();
-	}
-
-	public void confirmChasmJump(HeroAction.Jump jump) {
-		lastAction = null;
-		curAction = jump;
 		next();
 	}
 
@@ -1214,25 +1032,6 @@ public class Hero extends Char {
 		}
 	}
 	
-	private boolean actChasmJump(HeroAction.Jump jump) {
-		float delay = buff(GreaterHaste.class) == null ? 1f : 0f;
-		if (!Chasm.canJumpFrom(this, jump) || !wouldFallIntoChasm(jump.cell, delay)) {
-			Chasm.logJumpUnavailable();
-			ready();
-			return false;
-		}
-		if (innAtbActive() && (Actor.now() < atbMoveAt || !atbHasMoveEnergy())) {
-			deferInnAtb(AtbSpend.MOVE);
-			return true;
-		}
-		curAction = null;
-		flying = false;
-		// Remove levitation without pressing the current tile again.
-		remove(buff(Levitation.class));
-		Chasm.heroFall(jump.cell);
-		return false;
-	}
-
 	private boolean actInteract( HeroAction.Interact action ) {
 		
 		Char ch = action.ch;
@@ -1670,15 +1469,6 @@ public class Hero extends Char {
 		}
 
 		if (attackTarget.isAlive() && canAttack(attackTarget) && attackTarget.invisible == 0) {
-			if (innAtbActive()) {
-				float cost = innMeleeCost();
-				if (Actor.now() < atbMeleeAt || !InnAtb.canSpend(cost)) {
-					attackTarget = null;
-					deferInnAtb(AtbSpend.MELEE);
-					return true;
-				}
-				atbCommittedMeleeCost = cost;
-			}
 
 			if (heroClass != HeroClass.DUELIST
 					&& hasTalent(Talent.AGGRESSIVE_BARRIER)
@@ -1716,10 +1506,7 @@ public class Hero extends Char {
 	}
 	
 	public void rest( boolean fullRest ) {
-		if (innExhausted()) return;
-		busy();
-		spendInnAtb(TIME_TO_REST, AtbSpend.WAIT, true);
-		next();
+		spendAndNextConstant( TIME_TO_REST );
 		if (hasTalent(Talent.HOLD_FAST)){
 			if (heroClass != HeroClass.WARRIOR || buff(BrokenSeal.WarriorShield.class) != null) {
 				Buff.affect(this, HoldFast.class).pos = pos;
@@ -1850,7 +1637,7 @@ public class Hero extends Char {
 		//regular damage interrupt, triggers on any damage except specific mild DOT effects
 		// unless the player recently hit 'continue moving', in which case this is ignored
 		if (!(src instanceof Hunger || src instanceof Viscosity.DeferedDamage) && damageInterrupt) {
-			interruptForCombat();
+			interrupt();
 		}
 
 		if (this.buff(Drowsy.class) != null){
@@ -1921,8 +1708,8 @@ public class Hero extends Char {
 				} else {
 					Sample.INSTANCE.play(Assets.Sounds.HEALTH_WARN, 1/3f + flashIntensity * 4f);
 				}
-				//serious damage interrupts even if the player recently chose to continue moving
-				interruptForCombat();
+				//hero gets interrupted on taking serious damage, regardless of any other factor
+				interrupt();
 				damageInterrupt = true;
 			}
 		}
@@ -1934,8 +1721,7 @@ public class Hero extends Char {
 		boolean newMob = false;
 
 		Mob target = null;
-		Mob[] mobs = Dungeon.level.mobs.toArray(new Mob[0]);
-		for (Mob m : mobs) {
+		for (Mob m : Dungeon.level.mobs.toArray(new Mob[0])) {
 			if (fieldOfView[ m.pos ] && m.landmark() != null){
 				Notes.add(m.landmark());
 			}
@@ -1976,11 +1762,10 @@ public class Hero extends Char {
 			if (resting){
 				Dungeon.observe();
 			}
-			interruptForCombat();
+			interrupt();
 		}
 
 		visibleEnemies = visible;
-		if (InnAdventure.atb()) innEncounter.observe(this, Dungeon.level, mobs);
 
 		//we also scan for blob landmarks here
 		for (Blob b : Dungeon.level.blobs.values().toArray(new Blob[0])){
@@ -2022,12 +1807,6 @@ public class Hero extends Char {
 	}
 	
 	private boolean walkingToVisibleTrapInFog = false;
-
-	private boolean wouldFallIntoChasm(int cell, float delay) {
-		Levitation levitation = buff(Levitation.class);
-		return Dungeon.level.pit[cell] && !Dungeon.level.solid[cell]
-				&& (!flying || levitation != null && levitation.detachesWithinDelay(delay / speed()));
-	}
 	
 	private boolean getCloser( final int target ) {
 
@@ -2038,7 +1817,7 @@ public class Hero extends Char {
 			PixelScene.shake( 1, 1f );
 			return false;
 		}
-
+		
 		int step = -1;
 		
 		if (Dungeon.level.adjacent( pos, target )) {
@@ -2089,17 +1868,12 @@ public class Hero extends Char {
 				}
 			}
 
-			if (path == null || path.isEmpty()) return false;
-			step = path.getFirst();
+			if (path == null) return false;
+			step = path.removeFirst();
 
 		}
 
 		if (step != -1) {
-			if (innAtbActive() && (Actor.now() < atbMoveAt || !atbHasMoveEnergy())) {
-				deferInnAtb(AtbSpend.MOVE);
-				return true;
-			}
-			if (path != null) path.removeFirst();
 
 			float delay = 1;
 
@@ -2107,11 +1881,16 @@ public class Hero extends Char {
 				delay = 0;
 			}
 
-			if (wouldFallIntoChasm(step, delay)) {
-				Chasm.showJumpConfirmation(this, step);
-				lastAction = null;
-				curAction = null;
-				GameScene.resetKeyHold();
+			if (Dungeon.level.pit[step] && !Dungeon.level.solid[step]
+					&& (!flying || buff(Levitation.class) != null && buff(Levitation.class).detachesWithinDelay(delay / speed()))){
+				if (!Chasm.jumpConfirmed){
+					Chasm.heroJump(this);
+					interrupt();
+				} else {
+					flying = false;
+					remove(buff(Levitation.class)); //directly remove to prevent cell pressing
+					Chasm.heroFall(target);
+				}
 				canSelfTrample = false;
 				return false;
 			}
@@ -2127,7 +1906,7 @@ public class Hero extends Char {
 			sprite.move(pos, step);
 			move(step);
 
-			spendInnAtb(delay / speed(), AtbSpend.MOVE, false);
+			spend( delay / speed() );
 			
 			search(false);
 
@@ -2223,7 +2002,7 @@ public class Hero extends Char {
 			
 		}  else {
 			
-			curAction = new HeroAction.Move( cell, Dungeon.level.adjacent(pos, cell) );
+			curAction = new HeroAction.Move( cell );
 			lastAction = null;
 			
 		}
@@ -2551,17 +2330,9 @@ public class Hero extends Char {
 
 	@Override
 	public void move(int step, boolean travelling) {
-		Level level = Dungeon.level;
-		int from = pos;
-		boolean wasHighGrass = level.map[step] == Terrain.HIGH_GRASS;
+		boolean wasHighGrass = Dungeon.level.map[step] == Terrain.HIGH_GRASS;
 
 		super.move( step, travelling);
-
-		// ATB can make the hero ready at the end of the tween without another actor turn.
-		if (InnAdventure.atb() && Dungeon.hero == this && Dungeon.level == level
-				&& pos != from && isAlive() && !Game.switchingScene()) {
-			Dungeon.observe();
-		}
 		
 		if (!flying && travelling) {
 			if (Dungeon.level.water[pos]) {
@@ -2598,7 +2369,7 @@ public class Hero extends Char {
 		boolean hit = attack(attackTarget);
 		
 		Invisibility.dispel();
-		spendInnAtb(attackDelay(), AtbSpend.MELEE, false);
+		spend( attackDelay() );
 
 		if (hit && subClass == HeroSubClass.GLADIATOR && wasEnemy){
 			Buff.affect( this, Combo.class ).hit(attackTarget);
@@ -2616,10 +2387,6 @@ public class Hero extends Char {
 	
 	@Override
 	public void onMotionComplete() {
-		if (atbMoving) {
-			atbMoving = false;
-			if (innAtbActive() && atbIndependent && isAlive() && paralysed == 0) ready = true;
-		}
 		GameScene.checkKeyHold();
 	}
 	
@@ -2725,7 +2492,7 @@ public class Hero extends Char {
 
 	public boolean search( boolean intentional ) {
 		
-		if (!isAlive() || intentional && innExhausted()) return false;
+		if (!isAlive()) return false;
 		
 		boolean smthFound = false;
 

@@ -21,9 +21,6 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.ui;
 
-import com.badlogic.gdx.Input;
-import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
-import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.watabou.input.ControllerHandler;
 import com.watabou.input.GameAction;
@@ -54,13 +51,6 @@ public class Button extends Component {
 		hotArea = new PointerArea( 0, 0, 0, 0 ) {
 			@Override
 			protected void onPointerDown( PointerEvent event ) {
-				if (!tracksLongClick()) {
-					if (curEvent == event) {
-						clickReady = true;
-						Button.this.onPointerDown();
-					}
-					return;
-				}
 				pressedButton = Button.this;
 				pressTime = 0;
 				clickReady = true;
@@ -68,10 +58,6 @@ public class Button extends Component {
 			}
 			@Override
 			protected void onPointerUp( PointerEvent event ) {
-				if (!tracksLongClick()) {
-					if (curEvent == event) Button.this.onPointerUp();
-					return;
-				}
 				if (pressedButton == Button.this){
 					pressedButton = null;
 				} else {
@@ -105,11 +91,11 @@ public class Button extends Component {
 				if (text != null){
 					int key = 0;
 					if (keyAction() != null){
-						key = tooltipKey(keyAction());
+						key = KeyBindings.getFirstKeyForAction(keyAction(), ControllerHandler.controllerActive);
 					}
 
 					if (key == 0 && secondaryTooltipAction() != null){
-						key = tooltipKey(secondaryTooltipAction());
+						key = KeyBindings.getFirstKeyForAction(secondaryTooltipAction(), ControllerHandler.controllerActive);
 					}
 
 					if (key != 0){
@@ -157,18 +143,6 @@ public class Button extends Component {
 	}
 	
 	private Signal.Listener<KeyEvent> keyListener;
-
-	private static int tooltipKey(GameAction action) {
-		int key = KeyBindings.getFirstKeyForAction(action, ControllerHandler.controllerActive);
-		if (key == Input.Keys.SPACE && InnAdventure.atb() &&
-				(action == SPDAction.WAIT || action == SPDAction.WAIT_OR_PICKUP)) {
-			for (int alternate : KeyBindings.getKeyboardKeysForAction(action)) {
-				if (alternate != Input.Keys.SPACE) return alternate;
-			}
-			return 0;
-		}
-		return key;
-	}
 	
 	public GameAction keyAction(){
 		return null;
@@ -185,7 +159,7 @@ public class Button extends Component {
 		
 		hotArea.active = visible;
 		
-		if (pressedButton == this && tracksLongClick() && (pressTime += Game.elapsed) >= longClick) {
+		if (pressedButton == this && (pressTime += Game.elapsed) >= longClick) {
 			pressedButton = null;
 			if (onLongClick()) {
 
@@ -205,7 +179,6 @@ public class Button extends Component {
 	protected void onClick() {} //left click, default key type
 	protected void onRightClick() {}
 	protected void onMiddleClick() {}
-	protected boolean tracksLongClick() { return true; }
 	protected boolean onLongClick() {
 		return false;
 	}
