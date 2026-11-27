@@ -864,6 +864,8 @@ public class GameScene extends PixelScene {
 	
 	@Override
 	public synchronized void onPause() {
+		//the time spent paused is not charged to a party grace countdown
+		lastRealTime = 0;
 		try {
 			//the actor thread may only be idle while parked; hero.ready alone does not say so in party play
 			if (!Actor.parked()) waitForActorThread(500, false);
@@ -1802,17 +1804,36 @@ public class GameScene extends PixelScene {
 		}
 	}
 	
+	/** Called when the hero is ready for input (Hero.ready()). */
 	public static void ready() {
 		if (TurnClock.refreshingHero() && targetingStillValid()) {
 			//party play: the hero's turn was refreshed because the partner acted while the player was aiming.
 			// Keep the same listener and prompt; the selector is live again once the hero is ready.
 			cellSelector.enabled = Dungeon.hero.ready;
+			if (QuickSlotButton.lastTarget != null && !QuickSlotButton.lastTarget.isAlive()) {
+				//the auto-aim marker pointed at a monster that died meanwhile
+				QuickSlotButton.cancel();
+				InventoryPane.cancelTargeting();
+			}
+			updateTagsIfNeeded();
 		} else {
-			selectCell( defaultCellListener );
-			QuickSlotButton.cancel();
-			InventoryPane.cancelTargeting();
-			if (scene != null && scene.toolbar != null) scene.toolbar.examining = false;
+			resetSelection();
 		}
+	}
+
+	/**
+	 * Ends any open cell selection and returns to the default listener, as the original ready() does. Explicit
+	 * selections and cancels always use this, never the party keep path above.
+	 */
+	public static void resetSelection() {
+		selectCell( defaultCellListener );
+		QuickSlotButton.cancel();
+		InventoryPane.cancelTargeting();
+		if (scene != null && scene.toolbar != null) scene.toolbar.examining = false;
+		updateTagsIfNeeded();
+	}
+
+	private static void updateTagsIfNeeded() {
 		if (tagDisappeared) {
 			tagDisappeared = false;
 			updateTags = true;
@@ -1827,8 +1848,7 @@ public class GameScene extends PixelScene {
 		Hero hero = Dungeon.hero;
 		return cellSelector != null && cellSelector.listener != null && cellSelector.listener != defaultCellListener
 				&& hero != null && hero.isAlive() && hero.paralysed == 0
-				&& (selectionItem == null || hero.belongings.contains(selectionItem))
-				&& (QuickSlotButton.lastTarget == null || QuickSlotButton.lastTarget.isAlive());
+				&& (selectionItem == null || hero.belongings.contains(selectionItem));
 	}
 
 	/** The prompt of an open cell selection, or null while the default listener is active. */

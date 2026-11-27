@@ -38,8 +38,11 @@ public final class TurnClock {
 	public static final int WAIT_HOST = 1;
 	public static final int WAIT_GUEST = 2;
 
-	/** Longest render frame counted against a grace; a longer gap (a paused or stalled game) is not charged at all. */
-	public static final float MAX_FRAME_SECONDS = 1f;
+	/**
+	 * Longest render frame counted against a grace; a longer gap (a stalled game) is not charged at all. A
+	 * paused game never reaches this: GameScene restarts its frame clock on pause.
+	 */
+	public static final float MAX_FRAME_SECONDS = 2.5f;
 
 	private static final Object LOCK = new Object();
 	private static final TurnPolicy.Player heroState = new TurnPolicy.Player();

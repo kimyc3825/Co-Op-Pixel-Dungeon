@@ -50,11 +50,14 @@ configurations.matching { !it.name.startsWith('seedcheck') }.configureEach {
 }
 
 // Version info, the equivalent of the manifest attributes DesktopLauncher reads.
-// -PwebDebug marks the build as INDEV (enables debug features, like desktop's 'debug' task)
+// -PwebDebug=true marks the build as INDEV (enables debug and test features, like desktop's 'debug' task).
+// Only the explicit value true counts, so a stray property (=false, gradle.properties, environment) cannot.
+def webDebug = project.findProperty('webDebug')?.toString()?.trim()?.equalsIgnoreCase('true') ?: false
 def buildConfigDir = layout.buildDirectory.dir('generated/sources/webBuildConfig')
-def webVersionName = appVersionName + (project.hasProperty('webDebug') ? '-INDEV' : '')
+def webVersionName = appVersionName + (webDebug ? '-INDEV' : '')
 tasks.register('generateWebBuildConfig') {
     inputs.property('version', webVersionName)
+    inputs.property('indev', webDebug)
     inputs.property('code', appVersionCode)
     outputs.dir(buildConfigDir)
     doLast {
@@ -67,7 +70,7 @@ public class WebBuildConfig {
 	public static final String VERSION = "${webVersionName}";
 	public static final int VERSION_CODE = ${appVersionCode};
 	//compile-time constant: code behind it is left out of release builds entirely
-	public static final boolean INDEV = ${project.hasProperty('webDebug')};
+	public static final boolean INDEV = ${webDebug};
 }
 """
     }

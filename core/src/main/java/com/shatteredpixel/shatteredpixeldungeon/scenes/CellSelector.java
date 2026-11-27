@@ -162,7 +162,7 @@ public class CellSelector extends ScrollArea {
 					listener.onRightClick( cell );
 					break;
 			}
-			GameScene.ready();
+			GameScene.resetSelection();
 			
 		} else if (TurnClock.partyActive() && !Dungeon.hero.ready
 				&& Dungeon.hero.curAction == null && !Dungeon.hero.resting) {
@@ -496,7 +496,8 @@ public class CellSelector extends ScrollArea {
 			listener.onSelect( null );
 		}
 		
-		GameScene.ready();
+		//an explicit cancel always ends the selection, even while the party clock keeps it on refresh
+		GameScene.resetSelection();
 	}
 
 	@Override

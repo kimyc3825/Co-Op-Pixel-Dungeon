@@ -22,6 +22,7 @@ import com.watabou.utils.PathFinder;
  *   <li>{@code rat host|guest}: an awake rat next to that player, hunting it.</li>
  *   <li>{@code hiddenrat host|guest}: the same, invisible, so only the hunted player is engaged.</li>
  *   <li>{@code apart}: moves the guest's member to a free cell out of the host's view.</li>
+ *   <li>{@code walk}: starts the host walking to the farthest explored cell it can reach.</li>
  *   <li>{@code clear}: removes every hostile mob on the floor.</li>
  *   <li>{@code heal}: restores both players' health.</li>
  * </ul>
@@ -69,6 +70,8 @@ final class DebugTools {
 				return "cleared " + removed;
 			case "apart":
 				return moveApart();
+			case "walk":
+				return walkFar();
 			case "heal":
 				Dungeon.hero.HP = Dungeon.hero.HT;
 				Char member = TurnClock.activeMember();
@@ -77,6 +80,23 @@ final class DebugTools {
 			default:
 				return "unknown command " + command;
 		}
+	}
+
+	private static String walkFar() {
+		Level level = Dungeon.level;
+		boolean[] known = new boolean[level.length()];
+		for (int i = 0; i < known.length; i++) known[i] = level.passable[i] && (level.visited[i] || level.mapped[i]);
+		PathFinder.buildDistanceMap(Dungeon.hero.pos, known);
+		int best = -1;
+		for (int cell = 0; cell < level.length(); cell++) {
+			int d = PathFinder.distance[cell];
+			if (d < Integer.MAX_VALUE && Actor.findChar(cell) == null && (best < 0 || d > PathFinder.distance[best])) best = cell;
+		}
+		if (best < 0 || PathFinder.distance[best] < 4) return "nowhere to walk";
+		int steps = PathFinder.distance[best];
+		if (!Dungeon.hero.handle(best)) return "walk refused";
+		Dungeon.hero.next();
+		return "walking to " + best + " (" + steps + " steps)";
 	}
 
 	private static String moveApart() {

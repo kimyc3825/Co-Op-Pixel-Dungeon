@@ -697,6 +697,187 @@ public class TurnClockEngineTest {
 		}
 	}
 
+	/** Hero sprite whose step animation lasts until the test ends it, as CharSprite.move does for 0.1 s. */
+	public static class WalkingSprite extends TestHeroSprite {
+		@Override public void move(int from, int to) { synchronized (this) { isMoving = true; } }
+	}
+
+	@Test
+	public void inputFlowsDuringTheHostsOwnWalkAndAClickStopsIt() throws Exception {
+		Field sceneField = com.watabou.noosa.Game.class.getDeclaredField("scene");
+		sceneField.setAccessible(true);
+		java.lang.reflect.Method hold = com.watabou.noosa.Game.class.getDeclaredMethod("holdInput");
+		hold.setAccessible(true);
+		Object previous = sceneField.get(com.watabou.noosa.Game.instance);
+		try {
+			EngineHarness.width = 20;
+			newParty(20, 15, cell(2, 3), cell(2, 10));
+			WalkingSprite sprite = alloc(WalkingSprite.class);
+			sprite.link(hero);
+			frames(3, FRAME);
+			sceneField.set(com.watabou.noosa.Game.instance, alloc(GameScene.class));
+			java.util.Arrays.fill(level.visited, true);
+			int target = cell(16, 3);
+			assertTrue(hero.handle(target));
+			hero.next();
+			int heldFrames = 0, moving = 0, frames = 0;
+			int start = hero.pos;
+			// Walk a few steps with a real step animation: the actor thread waits on the hero's sprite between steps.
+			while (frames < 60 && Math.abs((hero.pos % 20) - 2) < 4) {
+				frames++;
+				if (sprite.isMoving && ++moving >= 6) {
+					synchronized (sprite) { sprite.isMoving = false; sprite.notifyAll(); }
+					moving = 0;
+				}
+				frame(FRAME);
+				if ((Boolean) hold.invoke(com.watabou.noosa.Game.instance)) heldFrames++;
+			}
+			assertNotEquals(start, hero.pos);
+			assertEquals("input was held during the host's own walk", 0, heldFrames);
+			// The player clicks: in the original game the first click interrupts the walk.
+			selector().select(cell(2, 8), com.watabou.input.PointerEvent.LEFT);
+			assertEquals(null, hero.curAction);
+			// Let the step in progress finish (frame() cannot settle while the actor thread waits on the sprite).
+			long until = System.currentTimeMillis() + 5000;
+			while (System.currentTimeMillis() < until && !(hero.ready && !sprite.isMoving && Actor.parked())) {
+				if (sprite.isMoving) synchronized (sprite) { sprite.isMoving = false; sprite.notifyAll(); }
+				TurnClock.update(FRAME);
+				if (!Actor.processing()) Actor.notifyActorThread(actorThread);
+				Thread.sleep(5);
+			}
+			assertEquals(null, hero.curAction);
+			assertTrue("the click did not stop the walk", Math.abs((hero.pos % 20) - 16) > 3);
+			assertTrue(state() + " moving=" + sprite.isMoving, hero.ready);
+		} finally {
+			sceneField.set(com.watabou.noosa.Game.instance, previous);
+			EngineHarness.width = 15;
+		}
+	}
+
+	@Test
+	public void keptPromptIsNotCancelledByADeadAutoAimTarget() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		Dummy old = addDummy(cell(3, 6));
+		frames(3, FRAME);
+		com.shatteredpixel.shatteredpixeldungeon.ui.QuickSlotButton.lastTarget = old; // fought earlier ...
+		old.HP = 0;
+		level.mobs.remove(old);
+		Actor.remove(old); // ... and killed
+		frames(2, FRAME);
+		try {
+			Aim aim = new Aim();
+			GameScene.selectCell(aim);
+			for (int i = 0; i < 6; i++) {
+				guest("M", i % 2 == 0 ? 1 : -1, 0);
+				frames(4, FRAME);
+				assertSame("partner step " + i + " cancelled the prompt", aim, selector().listener);
+			}
+			assertEquals(0, aim.cancels);
+		} finally {
+			com.shatteredpixel.shatteredpixeldungeon.ui.QuickSlotButton.lastTarget = null;
+		}
+	}
+
+	/** Like effects.Pushing: acts before the hero and holds the scheduler until its animation ends. */
+	public static class Effect extends Actor {
+		{ actPriority = VFX_PRIO; }
+		volatile boolean started;
+		@Override protected boolean act() { started = true; return false; }
+		void finish() { Actor.remove(this); next(); }
+	}
+
+	/** Starts such an effect and hunts the host during the host's skipped turn (a knockback). */
+	public static class Pusher extends Dummy {
+		volatile Effect effect;
+		@Override protected boolean act() {
+			Effect e = effect;
+			if (e != null) {
+				effect = null;
+				Actor.add(e);
+				hunt(Dungeon.hero);
+			}
+			return super.act();
+		}
+	}
+
+	@Test
+	public void explicitCancelEndsAKeptPrompt() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		Pusher pusher = new Pusher();
+		pusher.pos = cell(12, 12);
+		alloc(TestSprite.class).link(pusher);
+		level.mobs.add(pusher);
+		Actor.add(pusher);
+		pusher.sleepNow();
+		frames(3, FRAME);
+		Aim aim = new Aim();
+		GameScene.selectCell(aim);
+		Effect effect = new Effect();
+		pusher.effect = effect;
+		guest("M", 1, 0);
+		frames(3, FRAME);
+		assertTrue(effect.started);
+		assertTrue(TurnClock.refreshingHero());
+		assertTrue(GameScene.cancel()); // the player presses back / Esc
+		// The original game tells the listener twice (cancel(), then ready() -> selectCell()); so does this.
+		assertEquals(2, aim.cancels);
+		assertNotEquals("the cancelled prompt stayed armed", aim, selector().listener);
+		effect.finish();
+		frames(4, FRAME);
+		assertTrue(hero.ready);
+		selector().select(cell(3, 7), com.watabou.input.PointerEvent.LEFT);
+		assertEquals("a later click reached the cancelled listener", null, aim.chosen);
+		assertEquals(2, aim.cancels);
+	}
+
+	@Test
+	public void parkedIsClearedBeforeTheActorThreadIsWoken() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		assertTrue(Actor.parked());
+		// Holding the monitor keeps the actor thread from waking: the flag must already be false.
+		synchronized (actorThread) {
+			Actor.notifyActorThread(actorThread);
+			assertFalse("parked stayed true after the wake-up", Actor.parked());
+		}
+		settle();
+		assertTrue(Actor.parked());
+	}
+
+	@Test
+	public void itemActionsAreRefusedWhileThePartnersTurnRuns() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		Rock rock = new Rock();
+		hero.belongings.backpack.items.add(rock);
+		member.sprite.isMoving = true;
+		guest("M", 1, 0);
+		TurnClock.update(FRAME);
+		Actor.notifyActorThread(actorThread);
+		Thread.sleep(50);
+		assertFalse(Actor.parked());
+		assertFalse("an item window acted during the partner's turn", rock.executeFromUi(hero, Item.AC_THROW));
+		synchronized (member.sprite) {
+			member.sprite.isMoving = false;
+			member.sprite.notifyAll();
+		}
+		settle();
+		frames(4, FRAME);
+		assertTrue(rock.executeFromUi(hero, Item.AC_THROW));
+	}
+
+	@Test
+	public void zeroCostPartnerCommandDoesNotRefreshTheHero() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		int acts = heroActs;
+		guest("A", 99999, 0); // rejected, no time spent: nothing else could act
+		frames(4, FRAME);
+		assertEquals(1, ack());
+		assertTrue(hero.ready);
+		assertEquals("the hero took an extra turn for a command that changed nothing", acts, heroActs);
+	}
+
 	// ---- second review: fixTime, lost input, leftovers, wire and input bookkeeping ----
 
 	/** Two host expiries in a row: the host is AFK and its next grace is the short one. */
@@ -809,8 +990,8 @@ public class TurnClockEngineTest {
 		float grace = TurnClock.graceRemaining();
 		frame(3f); // the first frame after the host's game resumes
 		assertEquals(grace, TurnClock.graceRemaining(), 1e-4f);
-		frame(1f); // a slow but running game is still counted
-		assertEquals(grace - 1f, TurnClock.graceRemaining(), 1e-3f);
+		frame(2f); // a very slow but running game (0.5 fps) is still counted
+		assertEquals(grace - 2f, TurnClock.graceRemaining(), 1e-3f);
 	}
 
 	@Test
