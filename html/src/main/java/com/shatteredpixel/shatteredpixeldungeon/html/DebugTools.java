@@ -21,6 +21,7 @@ import com.watabou.utils.PathFinder;
  * <ul>
  *   <li>{@code rat host|guest}: an awake rat next to that player, hunting it.</li>
  *   <li>{@code hiddenrat host|guest}: the same, invisible, so only the hunted player is engaged.</li>
+ *   <li>{@code apart}: moves the guest's member to a free cell out of the host's view.</li>
  *   <li>{@code clear}: removes every hostile mob on the floor.</li>
  *   <li>{@code heal}: restores both players' health.</li>
  * </ul>
@@ -66,6 +67,8 @@ final class DebugTools {
 					}
 				}
 				return "cleared " + removed;
+			case "apart":
+				return moveApart();
 			case "heal":
 				Dungeon.hero.HP = Dungeon.hero.HT;
 				Char member = TurnClock.activeMember();
@@ -74,6 +77,27 @@ final class DebugTools {
 			default:
 				return "unknown command " + command;
 		}
+	}
+
+	private static String moveApart() {
+		Char member = TurnClock.activeMember();
+		if (member == null) return "no guest";
+		Level level = Dungeon.level;
+		for (int cell = 0; cell < level.length(); cell++) {
+			if (level.passable[cell] && !level.pit[cell] && !level.heroFOV[cell] && Actor.findChar(cell) == null
+					&& level.distance(Dungeon.hero.pos, cell) >= 8) {
+				int free = 0;
+				for (int offset : PathFinder.NEIGHBOURS8) {
+					int next = cell + offset;
+					if (level.insideMap(next) && level.passable[next] && !level.heroFOV[next]) free++;
+				}
+				if (free < 3) continue;
+				member.pos = cell;
+				if (member.sprite != null) member.sprite.place(cell);
+				return "guest moved to " + cell;
+			}
+		}
+		return "no cell out of view";
 	}
 
 	private static Char target(String who) {
