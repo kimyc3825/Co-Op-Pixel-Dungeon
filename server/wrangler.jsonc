@@ -27,5 +27,7 @@
     // Comma-separated browser origins allowed besides the Worker's own (e.g. a local preview).
     "ALLOWED_ORIGINS": ""
   },
-  "observability": { "enabled": true }
+  // Workers Logs would keep request metadata (headers, client addresses); the server stores no
+  // personal data, so logging stays off. Enable temporarily when debugging a deploy.
+  "observability": { "enabled": false }
 }

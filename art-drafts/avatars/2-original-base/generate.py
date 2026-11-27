@@ -104,8 +104,8 @@ BASE = {"head": (4, 4), "torso": (5, 11)}
 def pose(legs="stand", near="side", far="side", head=(0, 0), torso=(0, 0), eyes="open", bob=0):
     return dict(legs=legs, near=near, far=far, head=head, torso=torso, eyes=eyes, bob=bob)
 
-# 18 frames, same slots as SPD HeroSprite: idle 0-1, run 2-7, die 8-12,
-# attack 13-15, operate 16-17.  "rot" frames are the idle pose laid down.
+# 21 frames, same slots as SPD HeroSprite: idle 0-1, run 2-7, die 8-12,
+# attack 13-15, operate 16-17, fly 18, read 19-20.  "rot" frames are the idle pose laid down.
 FRAMES = [
     pose(),                                                   # 0 idle
     pose(head=(0, 1), torso=(0, 1)),                          # 1 idle breathe
@@ -125,9 +125,13 @@ FRAMES = [
     pose("stand", "half", "side", head=(1, 0)),                             # 15 recover
     pose("kneel", "reach", "reach", head=(1, 2), torso=(0, 2)),             # 16 operate
     pose("kneel", "half", "reach", head=(1, 2), torso=(0, 2)),              # 17 operate
+    pose("passB", "fwd", "fwd", bob=-1),                                    # 18 fly / jump
+    pose("stand", "half", "guard", head=(0, 1)),                            # 19 read
+    pose("stand", "half", "guard", head=(0, 1), eyes="closed"),             # 20 read (blink)
 ]
-ANIMS = {"idle": [0, 1], "run": [2, 3, 4, 5, 6, 7], "die": [8, 9, 10, 11, 12],
-         "attack": [13, 14, 15], "operate": [16, 17]}
+ANIMS = {"idle": [0, 0, 0, 1, 0, 0, 1, 1], "run": [2, 3, 4, 5, 6, 7],
+         "die": [8, 9, 10, 11, 12, 11], "attack": [13, 14, 15, 0], "operate": [16, 17, 16, 17],
+         "fly": [18], "read": [19, 20, 20, 20, 20, 20, 20, 20, 20, 19]}
 
 
 def anchors(f):
@@ -260,8 +264,10 @@ def rotated(look, settle=False, apply_clip=True):
     PIL's ROTATE_90 is an exact pixel permutation (no resampling), so every
     layer turns identically and stays aligned."""
     src = layers_for(pose(eyes="closed"), look, apply_clip)
-    flat = flatten(src).transpose(Image.Transpose.ROTATE_90)
-    bb = flat.getbbox() or (0, 0, FH, FW)
+    # The offset comes from the bare mannequin so it is identical for every
+    # look and every layer row of the sheet (layers stay aligned).
+    man = layers_for(pose(eyes="closed"), Look(job=None, hair="none"))["body"]
+    bb = man.transpose(Image.Transpose.ROTATE_90).getbbox()
     dx = (FW - (bb[2] - bb[0])) // 2 - bb[0]
     dy = (FH - (1 if settle else 0)) - bb[3]
     out = {}
@@ -383,15 +389,15 @@ class Canvas:
             self.parts.append(("t", self.y, sub, SMALL, SUB))
             self.y += 16
 
-    def row(self, items, cell_w=FW + 4, label_h=14, floor=True):
+    def row(self, items, cell_w=FW + 4, label_h=14, floor=True, s=S, x0=12):
         """items: list of (native image, label)."""
-        x = 12
-        h = max(im.height for im, _ in items) * S
+        x = x0
+        h = max(im.height for im, _ in items) * s
         for im, lab in items:
-            self.parts.append(("i", x, self.y, im, floor))
+            self.parts.append(("i", x, self.y, im, floor, s))
             if lab:
                 self.parts.append(("l", x, self.y + h + 2, lab))
-            x += cell_w * S
+            x += cell_w * s
         self.y += h + label_h + 8
 
     def render(self):
@@ -407,10 +413,11 @@ class Canvas:
             elif p[0] == "l":
                 d.text((p[1], p[2]), p[3], font=SMALL, fill=SUB)
             else:
-                _, x, y, im, floor = p
+                _, x, y, im, floor = p[:5]
+                s = p[5] if len(p) > 5 else S
                 if floor:
-                    d.rectangle((x - 2, y - 2, x + im.width * S + 1, y + im.height * S + 1), fill=PANEL)
-                img.paste(up(im), (x, y), up(im))
+                    d.rectangle((x - 2, y - 2, x + im.width * s + 1, y + im.height * s + 1), fill=PANEL)
+                img.paste(up(im, s), (x, y), up(im, s))
         return img
 
 
@@ -488,13 +495,20 @@ def build_preview():
     ]
     c.row([(frame(m), None) for m in mixes[:7]], label_h=0)
     c.row([(frame(m), None) for m in mixes[7:]], label_h=0)
-    c.title("ANIMATION  (sheet slots: idle 0-1 | run 2-7 | die 8-12 | attack 13-15 | operate 16-17)")
+    c.title("LAYERS FOLLOW THE POSE  (x4: rows = frames 0,3,5,9,14,16; cols = final + each layer)",
+            "back | hair_back | outfit_back | body | outfit | hair_front | face | hat")
+    lkL = Look("tan", "ponytail", "ginger", "huntress", "teal", "feathercap", "glasses", "quiver")
+    for fi in (0, 3, 5, 9, 14, 16):
+        ly = layers_for(fi, lkL)
+        # the body row of the sheet is the full mannequin (what the game draws)
+        ly["body"] = layers_for(fi, Look(skin=lkL.skin, job=None, hair="none"))["body"]
+        c.row([(flatten(ly), None)] + [(ly[k], None) for k in LAYER_ORDER], label_h=0, s=4)
+    c.title("ANIMATION  (slots = SPD hero: idle 0-1 | run 2-7 | die 8-12 | attack 13-15 | operate 16-17 | fly 18 | read 19-20)")
     lk = mixes[3]
-    c.row([(frame(lk, i), str(i)) for i in range(9)])
-    c.row([(frame(lk, i), str(i)) for i in range(9, 18)])
-    lk2 = mixes[1]
-    c.row([(frame(lk2, i), str(i)) for i in range(9)])
-    c.row([(frame(lk2, i), str(i)) for i in range(9, 18)])
+    n = len(FRAMES)
+    for l in (lk, mixes[1]):
+        c.row([(frame(l, i), str(i)) for i in range(11)])
+        c.row([(frame(l, i), str(i)) for i in range(11, n)])
     img = c.render()
     img.save(HERE / "preview.png")
     return img
