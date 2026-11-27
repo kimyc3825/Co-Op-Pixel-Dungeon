@@ -122,8 +122,9 @@ final class AvatarProfileWindow extends Window {
     }
 
     private void apply() {
-        String value = nickname.getText().strip();
-        if (!LobbySession.validName(value)) {
+        // Trimmed the way the server trims it (no-break spaces included).
+        String value = LobbySession.cleanName(nickname.getText());
+        if (value == null) {
             error.text("닉네임을 1~20자로 입력하세요.");
             error.visible = true;
             return;

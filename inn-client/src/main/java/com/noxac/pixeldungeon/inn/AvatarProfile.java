@@ -40,9 +40,8 @@ final class AvatarProfile {
     static Saved restore(String encoded) {
         try {
             Saved saved = GSON.fromJson(encoded, Saved.class);
-            if (saved != null && saved.name() != null && LobbySession.validName(saved.name().strip())) {
-                return new Saved(saved.name().strip(), normalize(saved.appearance()));
-            }
+            String name = saved == null ? null : LobbySession.cleanName(saved.name());
+            if (name != null) return new Saved(name, normalize(saved.appearance()));
         } catch (JsonParseException ignored) {
             // Reopen the editor if a stored profile cannot be decoded.
         }

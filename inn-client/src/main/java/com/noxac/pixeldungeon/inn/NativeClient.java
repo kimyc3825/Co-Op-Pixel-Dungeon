@@ -42,7 +42,8 @@ final class NativeClient {
         AvatarProfile.Saved saved = AvatarProfile.restore(SETTINGS.get("inn-avatar-profile", ""));
         profileConfirmed = saved != null;
         nickname = saved == null ? SETTINGS.get("nickname", "") : saved.name();
-        if (!LobbySession.validName(nickname)) nickname = LobbySession.guestName();
+        nickname = LobbySession.cleanName(nickname);
+        if (nickname == null) nickname = LobbySession.guestName();
         appearance = saved == null ? AvatarProfile.normalize(null) : saved.appearance();
         if (profileConfirmed) connectInn();
     }
@@ -87,8 +88,8 @@ final class NativeClient {
 
     static void saveProfile(String name, InnApi.Appearance draft) {
         if (!canChooseExpeditionTheme()) return;
-        String value = name == null ? "" : name.strip();
-        if (!LobbySession.validName(value)) {
+        String value = LobbySession.cleanName(name);
+        if (value == null) {
             notice("닉네임을 1~20자로 입력하세요.");
             return;
         }

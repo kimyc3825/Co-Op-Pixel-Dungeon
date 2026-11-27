@@ -9,10 +9,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
@@ -22,22 +25,37 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 
 /**
  * The inn socket (PROTOCOL.md §4–§5, §9): presence, movement, chat, NPC notices, preparation and
  * matchmaking, all pushed by the server. Every field below is confined to the "inn-network" thread.
+ *
+ * <p>The client's intent (in a dungeon or not, its profile, the matches it has finished) is kept
+ * apart from what the server last said. A `hello` fixes presence and profile when it is sent, and a
+ * takeover can carry an old match into the `welcome`; every `welcome` is therefore compared with the
+ * intent and corrected with `away`, `enter` or `profile` (§5.1, §9).
  */
 final class LobbySession implements AutoCloseable {
+    /**
+     * @param stopped the client gave up connecting (placeholder build, refused by the server, an
+     *                update is needed); {@code networkStatus} says why.
+     */
     record Snapshot(InnApi.State state, List<InnApi.Event> history, boolean online,
-                    String networkStatus, String matchStatus, String notice) {}
+                    String networkStatus, String matchStatus, String notice, boolean stopped) {}
 
     private static final SecureRandom RANDOM = new SecureRandom();
     static final long MOVE_INTERVAL = Duration.ofMillis(150).toNanos();
     private static final long[] BACKOFF_MS = {500, 1_000, 2_000, 4_000, 8_000};
     private static final long REQUEST_TIMEOUT_MS = 8_000;
+    private static final long NOTICE_MS = 5_000;
     private static final int MAX_HISTORY = 60;
     static final String CONNECTING = "여관에 접속하는 중…";
     private static final String RECONNECTING = "여관 서버에 다시 연결하는 중…";
+    /** JavaScript's String.prototype.trim() set: what the server strips from names (§4.1). */
+    private static final Pattern JS_TRIM = Pattern.compile(
+        "^[\\t\\n\\u000B\\f\\r\\u2028\\u2029\\uFEFF\\p{Zs}]+|[\\t\\n\\u000B\\f\\r\\u2028\\u2029\\uFEFF\\p{Zs}]+$");
+    private static final Pattern FORBIDDEN = Pattern.compile("[\\p{C}\\p{Zl}\\p{Zp}]");
 
     private record Pending(BiConsumer<Boolean, String> done, ScheduledFuture<?> timeout) {}
 
@@ -53,37 +71,59 @@ final class LobbySession implements AutoCloseable {
     private final TreeMap<Long, InnApi.Event> history = new TreeMap<>();
     private final InnChannel.Closing closing = new InnChannel.Closing();
     private final Map<Long, Pending> requests = new HashMap<>();
+    /** Every match this session has seen; returning from a dungeon marks them all finished. */
+    private final Set<String> seenMatches = new HashSet<>();
+    private final Set<String> finishedMatches = new HashSet<>();
     private volatile String key = newKey();
     private volatile boolean friendlyFire;
     private volatile long nextMoveAt;
+
+    // ---- intent ----
     private String name;
     private InnApi.Appearance appearance;
-    private InnChannel channel;
-    /** Set once the current channel received its first `welcome`; requests need it. */
-    private boolean welcomed;
-    /** The room view; null while away, before the first welcome and after leaving. */
-    private InnApi.State state;
-    private boolean online;
-    /** In a dungeon: reconnects say `present:false` and room traffic is not expected. */
+    /** In a dungeon (solo or party): the server should not show this player. */
     private boolean away;
     /** Recruiting; a reconnect restores it with `queued:true`. */
     private boolean recruiting;
     private int x = -1;
     private int y = -1;
+
+    // ---- the current socket ----
+    private InnChannel channel;
+    /** Bumped for every socket, so replies to an older socket's requests are ignored. */
+    private int generation;
+    /** The current socket has sent its `hello`; later frames may be pipelined behind it (§2). */
+    private boolean helloSent;
+    private boolean welcomed;
+    /** `away` / `enter` sent on the current socket and not answered yet. */
+    private int awayInFlight;
+    private int enterInFlight;
+    /** The profile the server was last given (in `hello` or `profile`). */
+    private String sentName;
+    private InnApi.Appearance sentAppearance;
+
+    // ---- what the server said ----
+    /** The room view; null while away, before the first welcome and after leaving. */
+    private InnApi.State state;
+    private boolean online;
     private Integer shard;
+
     private int attempt;
     private ScheduledFuture<?> reconnect;
     private long nextRef;
     private String lastError;
+    private Long retryAfterSeconds;
     private boolean stopped;
+    private int stopCode;
     private boolean closed;
     private String connectionMessage = CONNECTING;
     private String notice = "";
     private long noticeUntil;
+    private ScheduledFuture<?> noticeExpiry;
 
     LobbySession(InnApi api, String name, InnApi.Appearance appearance, boolean friendlyFire, Consumer<Snapshot> listener) {
         this.api = api;
-        this.name = name;
+        this.name = Objects.requireNonNullElseGet(cleanName(name), LobbySession::guestName);
         this.appearance = appearance;
         this.friendlyFire = friendlyFire;
         this.listener = listener;
@@ -105,9 +145,20 @@ final class LobbySession implements AutoCloseable {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes(32));
     }
 
+    /**
+     * The name as the server will store it: trimmed like JavaScript's trim() (which also removes
+     * no-break and other Unicode spaces), 1–20 code points, no C, Zl or Zp characters. Null when the
+     * server would refuse it.
+     */
+    static String cleanName(String raw) {
+        if (raw == null) return null;
+        String value = JS_TRIM.matcher(raw).replaceAll("");
+        if (value.isEmpty() || value.codePointCount(0, value.length()) > 20 || FORBIDDEN.matcher(value).find()) return null;
+        return value;
+    }
+
     static boolean validName(String name) {
-        return !name.isEmpty() && name.codePointCount(0, name.length()) <= 20 &&
-            !name.matches("(?s).*[\\p{C}\\p{Zl}\\p{Zp}].*");
+        return cleanName(name) != null;
     }
 
     // ---- socket ----
@@ -115,15 +166,19 @@ final class LobbySession implements AutoCloseable {
     private void connect() {
         if (closed || stopped || channel != null) return;
         if (!api.configured()) {
-            stopped = true;
-            offline("이 빌드에는 여관 서버 주소가 설정되어 있지 않습니다. 혼자 하는 원정만 할 수 있습니다.");
+            stop("이 빌드에는 여관 서버 주소가 설정되어 있지 않습니다. 혼자 하는 원정만 할 수 있습니다.", 0);
             publish();
             return;
         }
         if (reconnect != null) reconnect.cancel(false);
         reconnect = null;
+        int current = ++generation;
+        helloSent = false;
         welcomed = false;
+        awayInFlight = 0;
+        enterInFlight = 0;
         lastError = null;
+        retryAfterSeconds = null;
         Map<String, String> query = new LinkedHashMap<>();
         query.put("layout", layout.id());
         // Return to the same room when it has space (§4).
@@ -131,17 +186,17 @@ final class LobbySession implements AutoCloseable {
         channel = api.open(InnApi.INN_PATH, query, network, new InnChannel.Handler() {
             @Override
             public void opened(InnChannel source) {
-                if (source == channel) hello(source);
+                if (source == channel && current == generation) hello(source);
             }
 
             @Override
             public void frame(InnChannel source, JsonObject frame) {
-                if (source == channel) receive(frame);
+                if (source == channel && current == generation) receive(frame);
             }
 
             @Override
             public void closed(InnChannel source, int code, String reason) {
-                if (source == channel) disconnected(source, code, reason);
+                if (source == channel && current == generation) disconnected(source, code, reason);
             }
         });
     }
@@ -160,7 +215,11 @@ final class LobbySession implements AutoCloseable {
         hello.addProperty("queued", recruiting && !away);
         hello.addProperty("friendlyFire", friendlyFire);
         hello.addProperty("theme", InnApi.SEWERS);
-        source.send(hello);
+        if (source.send(hello)) {
+            helloSent = true;
+            sentName = name;
+            sentAppearance = appearance;
+        }
     }
 
     private void spawn() {
@@ -170,22 +229,40 @@ final class LobbySession implements AutoCloseable {
     }
 
     private void disconnected(InnChannel source, int code, String reason) {
-        channel = null;
-        welcomed = false;
-        online = false;
-        failRequests("offline");
+        dropChannel();
         if (closed) return;
         String error = lastError;
         switch (code) {
-            case 4001 -> stop("새 버전이 나왔습니다. 클라이언트를 업데이트해 주세요.");
-            case 4009 -> stop("다른 곳에서 같은 모험가로 여관에 접속했습니다.");
-            // A refused hello or layout is refused again on every retry (PROTOCOL.md §8).
+            case 4001 -> stop("새 버전이 나왔습니다. 클라이언트를 업데이트해 주세요.", code);
+            case 4009 -> stop("다른 곳에서 같은 모험가로 여관에 접속했습니다.", code);
+            // A refused hello or layout is refused again on every retry (PROTOCOL.md §8). A corrected
+            // profile (updateProfile) tries again.
             case 4000 -> stop("여관 서버가 이 클라이언트의 요청을 거부했습니다 (" +
-                (error != null ? error : reason) + "). 클라이언트를 업데이트해 주세요.");
-            case 4013 -> retry("여관이 가득 찼습니다. 자리가 나면 입장합니다.", 5_000);
-            case 4008 -> retry("접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.", 10_000);
+                (error != null ? error : reason) + "). 모험가 정보를 고치거나 클라이언트를 업데이트해 주세요.", code);
+            case 4013 -> retry("여관이 가득 찼습니다. 자리가 나면 입장합니다.",
+                jitter(1_000 * (retryAfterSeconds != null && retryAfterSeconds > 0 ? Math.min(retryAfterSeconds, 600) : 30)));
+            case 4029 -> retry("같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.", jitter(30_000));
+            case 4008 -> retry("room_busy".equals(error) ? "여관이 붐빕니다. 잠시 뒤 다시 연결합니다."
+                : "접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.", jitter(10_000));
             default -> retry(source.wasOpened() ? RECONNECTING : unreachable(reason), backoff());
         }
+        publish();
+    }
+
+    private void dropChannel() {
+        channel = null;
+        generation++;
+        helloSent = false;
+        welcomed = false;
+        online = false;
+        failRequests("offline");
+    }
+
+    /** Closes the current socket on purpose and opens a new one, whose `hello` restates the intent. */
+    private void restartSocket(String reason) {
+        if (channel != null) channel.close(1000, reason);
+        dropChannel();
+        retry(RECONNECTING, backoff());
         publish();
     }
 
@@ -199,7 +276,10 @@ final class LobbySession implements AutoCloseable {
     }
 
     private long backoff() {
-        long base = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
+        return jitter(BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)]);
+    }
+
+    private static long jitter(long base) {
         return (long) (base * (0.75 + ThreadLocalRandom.current().nextDouble() / 2));
     }
 
@@ -213,8 +293,9 @@ final class LobbySession implements AutoCloseable {
         }
     }
 
-    private void stop(String message) {
+    private void stop(String message, int code) {
         stopped = true;
+        stopCode = code;
         offline(message);
     }
 
@@ -230,7 +311,7 @@ final class LobbySession implements AutoCloseable {
                 pending.done().accept("ok".equals(type), InnApi.string(frame, "code"));
                 return;
             }
-            if ("error".equals(type)) unsolicitedError(InnApi.string(frame, "code"));
+            if ("error".equals(type)) unsolicitedError(frame);
             return;
         }
         if ("welcome".equals(type)) {
@@ -282,6 +363,7 @@ final class LobbySession implements AutoCloseable {
                 InnApi.Match match = api.match(frame.get("match"));
                 if (match == null) return;
                 recruiting = false;
+                seenMatches.add(match.id());
                 state = state.withQueue(false, match);
             }
             default -> {
@@ -291,39 +373,60 @@ final class LobbySession implements AutoCloseable {
         publish();
     }
 
-    private void unsolicitedError(String code) {
+    private void unsolicitedError(JsonObject frame) {
+        String code = InnApi.string(frame, "code");
         if (code == null) return;
         switch (code) {
             case "match_failed" -> {
                 notice("동료와 연결하지 못했습니다. 다시 시도해 주세요.");
                 publish();
             }
+            case "inn_full" -> {
+                lastError = code;
+                retryAfterSeconds = InnApi.integer(frame, "retryAfter");
+            }
             // The close that follows explains these.
-            case "replaced", "inn_full", "rate_limited", "unsupported_version", "hello_timeout",
-                 "invalid_json", "invalid_frame", "hello_required", "invalid_hello", "invalid_layout" -> lastError = code;
+            case "replaced", "rate_limited", "room_busy", "too_many_connections", "unsupported_version",
+                 "hello_timeout", "invalid_json", "invalid_frame", "hello_required", "invalid_hello",
+                 "invalid_layout" -> lastError = code;
             default -> { } // move_rejected (followed by `you`) and fire-and-forget notices.
         }
     }
 
     private void welcome(JsonObject frame) {
         Long shardValue = InnApi.integer(frame, "shard");
+        Integer previousShard = shard;
         if (shardValue != null && shardValue >= 0 && shardValue < 64) shard = shardValue.intValue();
-        attempt = 0;
         welcomed = true;
-        connectionMessage = "";
         String selfId = InnApi.string(frame, "selfId");
         boolean present = !Boolean.FALSE.equals(InnApi.bool(frame, "present"));
-        if (away || !present || selfId == null) {
-            // Reconnected while in a dungeon: `people` is filled but means nothing (§5.1).
-            state = null;
-            online = false;
+        if (selfId == null || !layout.id().equals(InnApi.string(frame, "layoutId"))) {
+            stop("여관 배치가 서버와 맞지 않습니다. 클라이언트를 업데이트해 주세요.", 4000);
+            if (channel != null) channel.close(1000, "layout");
+            dropChannel();
             publish();
             return;
         }
-        if (!layout.id().equals(InnApi.string(frame, "layoutId"))) {
-            stop("여관 배치가 서버와 맞지 않습니다. 클라이언트를 업데이트해 주세요.");
-            if (channel != null) channel.close(1000, "layout");
-            channel = null;
+        if (away) {
+            // In a dungeon. A welcome that still shows this player (its hello said present:true, or
+            // an `enter` crossed with the departure) is corrected with `away`.
+            attempt = 0;
+            state = null;
+            online = false;
+            if (!stopped) connectionMessage = "";
+            if (present && awayInFlight == 0) sendAway();
+            reconcileProfile();
+            publish();
+            return;
+        }
+        if (!present) {
+            // Back from a dungeon while a reconnect's hello(present:false) was on its way.
+            attempt = 0;
+            state = null;
+            online = false;
+            if (!stopped) connectionMessage = CONNECTING;
+            if (enterInFlight == 0) sendEnter();
+            reconcileProfile();
             publish();
             return;
         }
@@ -343,13 +446,21 @@ final class LobbySession implements AutoCloseable {
             }
         }
         if (self == null) {
-            // The server always lists a present player; without it the room cannot be shown.
-            retryLater();
+            // The server always lists a present player; without it the room cannot be shown. The
+            // back-off keeps growing, so this cannot become a fast reconnect loop.
+            if (channel != null) channel.close(1000, "invalid_state");
+            dropChannel();
+            retry(RECONNECTING, backoff());
+            publish();
             return;
         }
+        attempt = 0;
+        connectionMessage = "";
         x = self.x();
         y = self.y();
-        history.clear();
+        // The history is memory-only on the server and may come back empty (§5.1): keep what this
+        // client already showed for the same room and add what the server still remembers.
+        if (previousShard != null && !previousShard.equals(shard)) history.clear();
         JsonElement events = frame.get("events");
         if (events != null && events.isJsonArray()) {
             List<InnApi.Event> parsed = new ArrayList<>();
@@ -361,6 +472,9 @@ final class LobbySession implements AutoCloseable {
         }
         Long now = InnApi.integer(frame, "now");
         InnApi.Match match = api.match(frame.get("match"));
+        boolean staleMatch = match != null && finishedMatches.contains(match.id());
+        if (staleMatch) match = null;
+        else if (match != null) seenMatches.add(match.id());
         boolean queued = Boolean.TRUE.equals(InnApi.bool(frame, "queued"));
         List<InnApi.Event> recent = List.copyOf(history.values());
         state = new InnApi.State(selfId, List.copyOf(people), layout.map(), recent,
@@ -368,15 +482,17 @@ final class LobbySession implements AutoCloseable {
             queued || recruiting && match == null, match, layout.npcs(), api.preparation(frame.get("preparation")),
             layout.id(), layout.expeditionGate());
         online = true;
+        // A takeover can hand back a match this client already finished or gave up (§5.1): leave it
+        // behind with `enter` at the current position; until then the server answers `busy`.
+        if (staleMatch && enterInFlight == 0) sendEnter();
+        reconcileProfile();
         publish();
     }
 
-    private void retryLater() {
-        if (channel != null) channel.close(1000, "invalid_state");
-        channel = null;
-        online = false;
-        retry(RECONNECTING, backoff());
-        publish();
+    /** A profile saved while the hello was on its way, or refused, is sent again. */
+    private void reconcileProfile() {
+        if (Objects.equals(name, sentName) && Objects.equals(appearance, sentAppearance)) return;
+        sendProfile();
     }
 
     private void upsert(InnApi.Person person) {
@@ -402,8 +518,9 @@ final class LobbySession implements AutoCloseable {
 
     // ---- requests ----
 
+    /** Sends a request on the current socket once its hello is out (pipelining, §2). */
     private void request(JsonObject frame, BiConsumer<Boolean, String> done) {
-        if (channel == null || !welcomed || !channel.isOpen()) {
+        if (channel == null || !helloSent || !channel.isOpen()) {
             done.accept(false, "offline");
             return;
         }
@@ -448,6 +565,8 @@ final class LobbySession implements AutoCloseable {
             case "protocol_mismatch" -> notice("이 모험가와는 게임 버전이 달라 함께할 수 없습니다.");
             case "busy" -> notice("이미 동료와 연결되었습니다.");
             case "activity_rate_limited" -> notice("잠시 뒤 다시 시도해 주세요.");
+            case "room_busy" -> notice("여관이 붐빕니다. 잠시 뒤 다시 시도해 주세요.");
+            case "not_in_inn" -> notice("여관에 들어온 뒤에 할 수 있습니다.");
             case "invalid_message" -> notice("대화는 한 줄, 160자까지 보낼 수 있습니다.");
             case "invalid_profile" -> notice("닉네임을 1~20자로 입력하세요.");
             case "offline", "timeout" -> notice(RECONNECTING);
@@ -458,15 +577,38 @@ final class LobbySession implements AutoCloseable {
 
     void updateProfile(String value, InnApi.Appearance avatar) {
         submit(() -> {
-            name = value;
-            appearance = avatar;
-            if (online && state != null) {
-                JsonObject profile = InnApi.frame("profile");
-                profile.addProperty("name", name);
-                profile.add("appearance", api.gson.toJsonTree(appearance));
-                action(profile, ok -> { });
+            String cleaned = cleanName(value);
+            if (cleaned == null) {
+                notice("닉네임을 1~20자로 입력하세요.");
+                publish();
+                return;
             }
-            // Otherwise the next hello carries the profile.
+            name = cleaned;
+            appearance = avatar;
+            if (stopped && stopCode == 4000) {
+                // The server refused the previous hello; a corrected profile tries again.
+                stopped = false;
+                stopCode = 0;
+                attempt = 0;
+                connectionMessage = CONNECTING;
+                connect();
+                publish();
+                return;
+            }
+            // Otherwise the next hello, or the next welcome's reconciliation, carries it.
+            if (helloSent) sendProfile();
+        });
+    }
+
+    private void sendProfile() {
+        if (channel == null || !helloSent) return;
+        JsonObject profile = InnApi.frame("profile");
+        profile.addProperty("name", name);
+        profile.add("appearance", api.gson.toJsonTree(appearance));
+        sentName = name;
+        sentAppearance = appearance;
+        request(profile, (ok, code) -> {
+            if (!ok && !"offline".equals(code)) actionFailed(code);
         });
     }
 
@@ -584,30 +726,41 @@ final class LobbySession implements AutoCloseable {
             if (away) return;
             away = true;
             recruiting = false;
-            boolean shown = online && state != null;
             state = null;
             online = false;
             if (!stopped) connectionMessage = "";
-            if (shown) request(InnApi.frame("away"), (ok, code) -> { });
+            // Pipelined behind a hello still on its way, if need be; a socket still in its handshake
+            // says present:false in its hello instead.
+            sendAway();
             publish();
+        });
+    }
+
+    private void sendAway() {
+        if (channel == null || !helloSent) return;
+        int current = generation;
+        awayInFlight++;
+        request(InnApi.frame("away"), (ok, code) -> {
+            if (current != generation) return;
+            awayInFlight--;
+            // A refused `away` (rate limited) would leave the avatar standing in the room for the
+            // whole run: start over with a socket whose hello says present:false.
+            if (!ok && away && !"offline".equals(code)) restartSocket("retry_away");
         });
     }
 
     private void consumePreparation(InnApi.Preparation preparation) {
         JsonObject use = InnApi.frame("use_preparation");
         use.addProperty("id", preparation.id());
+        int current = generation;
         request(use, (ok, code) -> {
             if (ok) return;
             // A preparation that could not be consumed must not carry over into another expedition:
-            // continue under a new identity, which has none.
+            // continue under a new identity, which has none. A new key needs a new socket (§3).
             key = newKey();
             shard = null;
-            if (channel != null) {
-                channel.close(1000, "rekey");
-                channel = null;
-                welcomed = false;
-            }
-            failRequests("offline");
+            if (current == generation && channel != null) channel.close(1000, "new_key");
+            if (current == generation) dropChannel();
             attempt = 0;
             connect();
         });
@@ -617,41 +770,47 @@ final class LobbySession implements AutoCloseable {
     void returnFromDungeon(boolean normalExit) {
         submit(() -> {
             if (!normalExit) notice("던전을 정상적으로 열거나 종료하지 못했습니다.");
-            if (!away && online) {
+            // Whatever run brought this player out of the room is over now.
+            finishedMatches.addAll(seenMatches);
+            if (!away) {
                 // A party that ended before both players left the room: `enter` in place clears the
-                // match, which otherwise keeps this player `busy` (§4.5).
-                if (state != null && state.match() != null && channel != null && welcomed) enter();
+                // match, which otherwise keeps this player `busy` (§4.5). While reconnecting, the
+                // next welcome does it.
+                if (state != null && state.match() != null) {
+                    state = state.withQueue(state.queued(), null);
+                    if (enterInFlight == 0) sendEnter();
+                }
                 publish();
                 return;
             }
             away = false;
             spawn();
             if (!stopped) connectionMessage = CONNECTING;
-            if (channel != null && welcomed && channel.isOpen()) {
-                enter();
+            if (channel != null && helloSent) {
+                sendEnter();
             } else if (channel == null && !stopped) {
                 attempt = 0;
                 connect();
             }
-            // A channel still in its handshake says `present:true` in its hello.
+            // A socket still in its handshake says present:true in its hello.
             publish();
         });
     }
 
-    private void enter() {
+    private void sendEnter() {
+        if (channel == null || !helloSent) return;
+        if (x < 0 || !InnLayout.walkable(layout.map(), x, y)) spawn();
         JsonObject enter = InnApi.frame("enter");
         enter.addProperty("x", x);
         enter.addProperty("y", y);
+        int current = generation;
+        enterInFlight++;
         // The welcome that follows shows the room again.
         request(enter, (ok, code) -> {
-            if (ok || away || online || "offline".equals(code)) return;
-            try {
-                network.schedule(() -> {
-                    if (!away && !online && channel != null && welcomed) enter();
-                }, 2, TimeUnit.SECONDS);
-            } catch (RejectedExecutionException ignored) {
-                // Closing.
-            }
+            if (current != generation) return;
+            enterInFlight--;
+            // Still away (or still matched) on the server: a new socket's hello brings the player back.
+            if (!ok && !away && !"offline".equals(code)) restartSocket("retry_enter");
         });
     }
 
@@ -662,9 +821,16 @@ final class LobbySession implements AutoCloseable {
         connectionMessage = message;
     }
 
+    /** Shows a notice for five seconds; a publish at the expiry removes it even in a quiet room. */
     private void notice(String message) {
         notice = message;
-        noticeUntil = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        noticeUntil = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(NOTICE_MS);
+        if (noticeExpiry != null) noticeExpiry.cancel(false);
+        try {
+            noticeExpiry = network.schedule(this::publish, NOTICE_MS + 20, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException ignored) {
+            // Closing.
+        }
     }
 
     private String matchStatus() {
@@ -676,7 +842,7 @@ final class LobbySession implements AutoCloseable {
 
     private void publish() {
         listener.accept(new Snapshot(state, List.copyOf(history.values()), online && state != null,
-            connectionMessage, matchStatus(), System.nanoTime() < noticeUntil ? notice : ""));
+            connectionMessage, matchStatus(), System.nanoTime() < noticeUntil ? notice : "", stopped));
     }
 
     private boolean submit(Runnable task) {
@@ -695,6 +861,7 @@ final class LobbySession implements AutoCloseable {
         submit(() -> {
             closed = true;
             if (reconnect != null) reconnect.cancel(false);
+            if (noticeExpiry != null) noticeExpiry.cancel(false);
             failRequests("offline");
             if (channel != null) closing.track(channel.close(1000, "bye"));
             channel = null;

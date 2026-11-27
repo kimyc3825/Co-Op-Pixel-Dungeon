@@ -36,11 +36,14 @@ final class InnChannel {
 
     /** No close frame was received: the network failed or the handshake did not complete. */
     static final int ABNORMAL = 1006;
-    private static final long PING_SECONDS = 25;
+    /** PROTOCOL.md §2: every 25 s (a system property shortens it for network tests). */
+    private static final long PING_SECONDS = Math.max(1, Long.getLong("noxac.inn.pingSeconds", 25));
+    /** A `ping` that is not followed by any frame within this time means the connection is dead. */
+    private static final long PONG_TIMEOUT_SECONDS = 10;
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(8);
     private static final long CLOSE_TIMEOUT_SECONDS = 5;
-    /** Longest server frame accepted: twice the link frame limit, so a valid frame is never cut off. */
-    private static final int MAX_FRAME_CHARS = 64 * 1024;
+    /** Longest server frame accepted: above the 148,480-byte link frame limit (PROTOCOL.md §2). */
+    private static final int MAX_FRAME_CHARS = 160 * 1024;
 
     private final ScheduledExecutorService executor;
     private final Handler handler;
@@ -51,6 +54,8 @@ final class InnChannel {
     private volatile boolean outputClosed;
     /** Set by {@link #close}: the owner wants no further calls. */
     private volatile boolean ownerClosed;
+    /** System.nanoTime() of the last fragment received; any frame, `pong` included, is a sign of life. */
+    private volatile long lastHeard = System.nanoTime();
     private ScheduledFuture<?> pinger;
     private CompletableFuture<?> sends = CompletableFuture.completedFuture(null);
 
@@ -103,10 +108,10 @@ final class InnChannel {
     CompletableFuture<?> close(int code, String reason) {
         ownerClosed = true;
         finished.set(true);
-        cancelPinger();
         WebSocket current;
         CompletableFuture<?> closed;
         synchronized (this) {
+            cancelPinger();
             if (outputClosed) return sends.handle((ignored, error) -> null);
             outputClosed = true;
             current = socket;
@@ -153,9 +158,9 @@ final class InnChannel {
 
     private void finish(int code, String reason) {
         if (!finished.compareAndSet(false, true)) return;
-        cancelPinger();
         // After a close frame java.net.http answers it itself; after an error the socket is already gone.
         synchronized (this) {
+            cancelPinger();
             outputClosed = true;
         }
         // Queued behind the frames that arrived before the close, which are still delivered.
@@ -164,9 +169,29 @@ final class InnChannel {
         });
     }
 
+    /** Called with the lock held, so it cannot interleave with the pinger being scheduled in onOpen. */
     private void cancelPinger() {
         ScheduledFuture<?> current = pinger;
         if (current != null) current.cancel(false);
+    }
+
+    /**
+     * Sends the keep-alive `ping` (PROTOCOL.md §2) and checks that something comes back: the server
+     * answers `pong` at once, so silence means a half-open connection that TCP has not noticed yet.
+     */
+    private void keepAlive() {
+        long sentAt = System.nanoTime();
+        if (!sendText("ping")) return;
+        try {
+            executor.schedule(() -> {
+                WebSocket current = socket;
+                if (finished.get() || lastHeard - sentAt >= 0 || current == null) return;
+                finish(ABNORMAL, "pong_timeout");
+                current.abort();
+            }, PONG_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException ignored) {
+            // The owner shut down.
+        }
     }
 
     private void deliver(Runnable task) {
@@ -192,19 +217,21 @@ final class InnChannel {
             synchronized (InnChannel.this) {
                 socket = webSocket;
                 opened = true;
+                lastHeard = System.nanoTime();
                 if (outputClosed) {
                     // Closed by the owner while the handshake was still running.
                     webSocket.sendClose(1000, "").whenComplete((ignored, error) -> webSocket.abort());
                     abortLater(webSocket);
                     return;
                 }
+                // Scheduled under the lock: close() and finish() cancel it under the same lock.
+                try {
+                    pinger = executor.scheduleAtFixedRate(InnChannel.this::keepAlive, PING_SECONDS, PING_SECONDS, TimeUnit.SECONDS);
+                } catch (RejectedExecutionException ignored) {
+                    // The owner shut down during the handshake.
+                }
             }
             webSocket.request(1);
-            try {
-                pinger = executor.scheduleAtFixedRate(() -> sendText("ping"), PING_SECONDS, PING_SECONDS, TimeUnit.SECONDS);
-            } catch (RejectedExecutionException ignored) {
-                // The owner shut down during the handshake.
-            }
             deliver(() -> {
                 if (!ownerClosed) handler.opened(InnChannel.this);
             });
@@ -212,6 +239,7 @@ final class InnChannel {
 
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+            lastHeard = System.nanoTime();
             // A message can arrive split into several fragments; parse it only once it is complete.
             if (partial.length() + data.length() > MAX_FRAME_CHARS) {
                 partial.setLength(0);
