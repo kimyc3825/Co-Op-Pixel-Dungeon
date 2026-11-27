@@ -78,7 +78,7 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 
 원본 브라우저판은 저장소 루트에서 `.\gradlew.bat -PwebOnly html:dist`로 빌드한다. 결과는 `html/build/dist/web`에 생성된다.
 
-기본 서버는 [여관 운영](https://co-op-pixel-dungeon.kimyc3825.chatgpt.site)입니다. 로컬 개발에서는 `NOXAC_INN_URL`로 서버 주소를 지정할 수 있습니다.
+서버는 [server/](../server/)의 Cloudflare Worker입니다. 웹 여관은 자신을 제공한 주소의 서버에 접속하고, Windows 클라이언트의 기본 서버 주소는 `inn-client/src/main/resources/inn-origin.txt`에 둡니다. 로컬 개발에서는 `NOXAC_INN_URL`로 서버 주소를 지정할 수 있습니다(`server`에서 `npx wrangler dev`를 실행하면 `http://127.0.0.1:8787`).
 
 ## 웹 배포
 

@@ -1,11 +1,27 @@
 # Co-Op-Pixel-Dungeon
 
 Shattered Pixel Dungeon을 바탕으로 만든 웹·Windows 2인 협동 던전입니다.
-[여관에서 플레이](https://co-op-pixel-dungeon.kimyc3825.chatgpt.site/play/) · [Windows 다운로드](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases) · [빌드와 조작법](docs/inn.md)
+여관에서 플레이(첫 Cloudflare 배포 뒤 주소를 적습니다) · [Windows 다운로드](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases) · [빌드와 조작법](docs/inn.md)
 
 ## 서버 연결
 
-이 저장소에서 웹과 Windows 클라이언트의 소스를 제공합니다. 두 클라이언트는 같은 Sites의 여관·채팅·매칭 API에 접속합니다.
+웹과 Windows 클라이언트, 그리고 여관·채팅·매칭·파티 중계 서버의 소스가 모두 이 저장소에 있습니다. 서버는 [server/](server/)의 Cloudflare Worker입니다.
+
+- 여관 방마다 SQLite 기반 Durable Object 하나가 접속, 이동, 채팅, NPC 알림, 원정 준비와 매칭을 맡습니다. 배치 ID로 방을 나누고, 방이 차면 같은 배치의 다음 방으로 넘깁니다.
+- 매칭된 파티마다 Durable Object 하나가 던전 데이터를 받은 순서대로 바로 상대에게 넘깁니다. 어느 쪽이 나가면 원정이 끝납니다.
+- 클라이언트는 WebSocket 두 개(`/api/v5/inn`, `/api/v5/link`)로 접속합니다. 메시지와 제한, 종료 코드는 [server/PROTOCOL.md](server/PROTOCOL.md)에 있습니다.
+- 웹 여관과 원본 던전 런타임은 같은 Worker의 정적 자산으로 제공합니다.
+
+로컬 실행과 테스트:
+
+```sh
+cd server && npm ci
+npm run typecheck && npm test          # Durable Object 테스트 (Vitest, Workers 런타임)
+node ../scripts/stage-web-client.mjs --lobby-only   # 또는 html:dist 빌드 뒤 인자 없이
+npx wrangler dev                        # http://127.0.0.1:8787/play/
+```
+
+배포는 [웹 배포](docs/inn.md#웹-배포)를 참고하세요.
 
 [여관 배경 작업과 로컬 미리보기](docs/inn.md#여관-배경-작업)
 
