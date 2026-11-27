@@ -147,6 +147,32 @@ describe('N5: per-address cap', () => {
   });
 });
 
+describe('M1: closed sockets count toward the per-address cap', () => {
+  it('one address cannot fill a shard with sockets it never lets close', async () => {
+    const layout = layoutId();
+    const zombie = { 'CF-Connecting-IP': '198.51.100.66' };
+    const kept = [];
+    for (let i = 0; i < 8; i++) kept.push(await open(`/api/v5/inn?layout=${layout}`, zombie));
+    // Refused by the server, close never acknowledged: still in getWebSockets(), no longer live.
+    await inObject(innStub(layout), (instance: any, state: DurableObjectState) => {
+      for (const ws of state.getWebSockets()) {
+        const conn = instance.conn(ws);
+        conn.member.phase = 'closed';
+        ws.serializeAttachment(conn.member);
+      }
+    });
+    const next = await open(`/api/v5/inn?layout=${layout}`, zombie);
+    next.send(hello());
+    expect((await next.next('welcome')).shard).toBe(1);
+    const shard0 = await inObject(innStub(layout), (_i: any, state: DurableObjectState) => state.getWebSockets().length);
+    expect(shard0).toBe(8);
+    const other = await open(`/api/v5/inn?layout=${layout}`, { 'CF-Connecting-IP': '192.0.2.12' });
+    other.send(hello());
+    expect((await other.next('welcome')).shard).toBe(0);
+    expect(kept).toHaveLength(8);
+  });
+});
+
 describe('N6: hard socket ceiling', () => {
   it('closed sockets whose close was never acknowledged count toward a ceiling that overflows', async () => {
     const layout = layoutId();

@@ -101,7 +101,10 @@ export class InnRoom extends DurableObject<Env> {
       return new Response('inn_full', { status: 409 });
     }
     const address = request.headers.get('X-Client-Address') ?? '';
-    if (address && live.filter(ws => this.conn(ws).member.address === address).length >= LIMITS.socketsPerAddress) {
+    // Every socket of the address counts, closed ones whose close was never acknowledged included:
+    // otherwise one address could fill the 64-socket ceiling on its own.
+    const held = this.ctx.getWebSockets().filter(ws => this.conn(ws).member.address === address).length;
+    if (address && held >= LIMITS.socketsPerAddress) {
       return new Response('too_many_connections', { status: 409, headers: { 'X-Refusal': 'address' } });
     }
     // Only about this address, so no other shard is tried.

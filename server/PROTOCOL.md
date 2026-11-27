@@ -107,8 +107,10 @@ Connect to `/api/v5/inn?layout=<layoutId>`; add `&shard=<n>` with the `shard` of
   host (`wrangler dev`, where a client-sent header would pass through), have no per-address limits.
   The key is kept in the socket attachment for the socket's lifetime (so it survives hibernation)
   and in memory; it is never written to storage.
-  * **Sockets per address**: at most **8** per room shard. A ninth is passed to the next shard like a
-    capacity refusal; only when every shard refused and at least one of them because of this cap
+  * **Sockets per address**: at most **8** per room shard, counting every socket of the address the
+    shard still holds, including ones the server closed whose close was never acknowledged (so
+    filling a shard's 64-socket ceiling takes at least eight addresses). A ninth is passed to the
+    next shard like a capacity refusal; only when every shard refused and at least one of them because of this cap
     is the socket refused with `too_many_connections` and `4029`. Households and carrier-grade NAT
     share addresses, hence the generous value.
   * **Connects per address**: bursts of **10** new connections per shard, refilled one per 2 s.
@@ -506,3 +508,7 @@ Second round:
     flood before `hello` no longer ends the run (§6). Send host snapshots at most 15/s, newest
     wins; guest frames at once (§6).
 16. A paired link checks for a silent or vanished side every 2 minutes (§7.3).
+
+Third round:
+
+17. The per-address socket cap also counts the address's closed, never-acknowledged sockets (§4).
