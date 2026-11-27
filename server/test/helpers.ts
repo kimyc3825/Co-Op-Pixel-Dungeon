@@ -90,9 +90,9 @@ export async function open(path: string, headers: Record<string, string> = {}): 
 
 export interface Player { client: Client; key: string; welcome: Frame; id: string }
 
-export async function enter(layout: string, options: Frame = {}, query = ''): Promise<Player> {
+export async function enter(layout: string, options: Frame = {}, query = '', headers: Record<string, string> = {}): Promise<Player> {
   const key = options.key ?? newKey();
-  const client = await open(`/api/v5/inn?layout=${layout}${query}`);
+  const client = await open(`/api/v5/inn?layout=${layout}${query}`, headers);
   client.send({ t: 'hello', v: 1, key, name: options.name ?? 'tester', appearance, dungeonProtocol: 11, x: 10, y: 14, ...options });
   const welcome = await client.next('welcome');
   return { client, key, welcome, id: welcome.selfId };

@@ -135,9 +135,13 @@ describe('inn presence', () => {
     expect(again.welcome.preparation).toEqual(preparation);
     await again.client.request({ t: 'use_preparation', id: preparation.id });
     expect((await again.client.next('preparation')).preparation).toBeNull();
-    // After a full disconnect nothing is kept.
+    // One roll per entry: no new roll on the same entry after using one.
+    expect(await again.client.request({ t: 'prepare' })).toMatchObject({ code: 'preparation_used' });
+    await again.client.request({ t: 'away' });
+    await again.client.request({ t: 'enter', x: 10, y: 14 });
     await again.client.request({ t: 'prepare' });
     await again.client.next('preparation');
+    // After a full disconnect nothing is kept.
     again.client.close();
     await sleep(50);
     expect((await enter(layout, { key: a.key })).welcome.preparation).toBeNull();

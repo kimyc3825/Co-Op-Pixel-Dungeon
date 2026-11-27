@@ -38,10 +38,11 @@ Use `wss://` for an `https://` origin and `ws://` only for a loopback developmen
   the runtime with protocol pongs, but they do **not** count: a socket that sends only protocol pings
   is treated as silent. A socket from which neither a message nor a text `ping` arrived for **100 s**
   is closed with `1001` reason `stale`, **without** a preceding `error` frame.
-* **Sweeps are lazy**: the server keeps no timers for idle sockets. Hello timeouts and stale sockets
-  are found when the room (or link) is next used: when any socket connects or sends a message. A
-  silent socket in a room where nobody acts can therefore stay listed longer than 100 s.
-* **Flood limit (inn)**: more than 40 frames in a burst or 20 frames/s sustained closes the inn socket
+* **Sweeps are lazy in the inn**: an inn room keeps no timers. Hello timeouts and stale sockets are
+  found when the room is next used: on every new connection, and on incoming frames at most once
+  every 5 s. A silent socket in a room where nobody acts can therefore stay listed longer than 100 s.
+  A paired party link also checks every 2 minutes (§7.3).
+* **Flood limit (inn)**: more than 30 frames in a burst or 12 frames/s sustained closes the inn socket
   with `4008` (`rate_limited`). Link limits are in §6. Per-message limits are listed with each message.
 * **Ordering**: within one socket, frames are processed and delivered in the order sent. The server
   never reorders, merges or drops a client's frames except where stated (rate limits, rejections).
@@ -94,16 +95,25 @@ Connect to `/api/v5/inn?layout=<layoutId>`; add `&shard=<n>` with the `shard` of
   newlines. Art, names and dialogue are not part of the id.
 * Rooms are separated by layout id: players with different layouts never see each other. An
   invalid id is refused with `4000` `invalid_layout`.
-* **Shards**: a room holds at most **32 sockets** (present, away and not-yet-hello alike). When a room
-  is full the server places the connection in the next shard of the same layout (up to **8**
-  shards, 256 sockets per layout). Shards are separate rooms. When all are full the socket is
-  refused with `{"t":"error","code":"inn_full","retryAfter":30}` and `4013`; wait `retryAfter`
-  seconds (with jitter) before trying again, because every attempt probes the shards.
-* **Per-address cap**: one client address (`CF-Connecting-IP`) may hold at most **8** sockets in one
-  room shard; more are refused with `too_many_connections` and `4029`. Households and carrier-grade
-  NAT share addresses, hence the generous value; the address is only kept in memory.
-* **Room join budget**: a shard accepts bursts of 40 new connections, refilled at 2 per second;
-  beyond that the socket is refused with `room_busy` and `4008`.
+* **Shards**: a room holds at most **32 sockets** (present, away and not-yet-hello alike), and at most
+  **64 sockets in total** counting sockets the server closed whose close the client never
+  acknowledged. A shard that is full by either count passes the connection to the next shard of the
+  same layout (up to **8** shards, 256 players per layout). Shards are separate rooms. When every
+  shard refused for capacity the socket is refused with
+  `{"t":"error","code":"inn_full","retryAfter":30}` and `4013`; wait `retryAfter` seconds (with
+  jitter) before trying again, because every attempt probes the shards.
+* **Per-address limits** use the client address that Cloudflare's edge puts in `CF-Connecting-IP`,
+  keyed as the IPv4 address or the IPv6 **/64**. Loopback addresses, and every request to a loopback
+  host (`wrangler dev`, where a client-sent header would pass through), have no per-address limits.
+  The key is kept in the socket attachment for the socket's lifetime (so it survives hibernation)
+  and in memory; it is never written to storage.
+  * **Sockets per address**: at most **8** per room shard. A ninth is passed to the next shard like a
+    capacity refusal; only when every shard refused and at least one of them because of this cap
+    is the socket refused with `too_many_connections` and `4029`. Households and carrier-grade NAT
+    share addresses, hence the generous value.
+  * **Connects per address**: bursts of **10** new connections per shard, refilled one per 2 s.
+    Beyond that the socket is refused with `rate_limited` and `4008`, and no other shard is tried;
+    other addresses are not affected.
 
 Coordinates are integers `0..127`. The server does **not** know the map: walls and furniture are
 checked by the clients (§5.3).
@@ -153,21 +163,26 @@ Clients predict their own steps locally and only correct on `you`.
 
 | Message | Effect | Errors |
 | --- | --- | --- |
-| `{"t":"chat","text":"…"}` | Event `chat` to everyone in the room, including the sender. `text` is trimmed; 1–160 code points; same character rule as names (so one line). | `invalid_message`, `not_in_inn`, `activity_rate_limited` (bucket of 4, one more every 3 s), `room_busy` |
-| `{"t":"drink"}` | Event `drink`. | `not_in_inn`, `activity_rate_limited`, `room_busy` |
-| `{"t":"interact","npcId":"innkeeper"}` | Event `interact` (an NPC conversation notice; the dialogue itself is local). `npcId` matches `^[a-z0-9][a-z0-9_-]{0,47}$`. Fire and forget; clients ignore failures. | `invalid_message`, `not_in_inn`, `activity_rate_limited`, `room_busy` |
+| `{"t":"chat","text":"…"}` | Event `chat` to everyone in the room, including the sender. `text` is trimmed; 1–160 code points; same character rule as names (so one line). | `invalid_message`, `not_in_inn`, `activity_rate_limited` (per socket: bucket of 4, one more every 3 s), `room_busy` |
+| `{"t":"drink"}` | Event `drink`. | `not_in_inn`, `activity_rate_limited` |
+| `{"t":"interact","npcId":"innkeeper"}` | Event `interact` (an NPC conversation notice; the dialogue itself is local). `npcId` matches `^[a-z0-9][a-z0-9_-]{0,47}$`. Fire and forget; clients ignore failures. | `invalid_message`, `not_in_inn`, `activity_rate_limited` |
 
 `drink`, `interact`, `prepare` and `use_preparation` share one per-socket bucket of 6 refilling one
-per 2 s. The three event messages also share a **room-wide** budget of 20 events refilling one per
-2 s; when it is empty they fail with `room_busy`.
+per 2 s. On top of the per-socket limits the room has budgets of its own:
+
+* **Chat**: room-wide 40 lines refilling 4 per second, and per client address 8 lines refilling one
+  per second (§4). When either is empty the line fails with `room_busy`; the rejection does not
+  spend the sender's own token, so the sender may retry as soon as the room has room.
+* **Drink and interact**: room-wide 30 refilling 2 per second, separate from chat. Over budget the
+  event is silently not broadcast (the sender still gets `ok`).
 
 ### 4.4 Profile and expedition preparation
 
 | Message | Effect |
 | --- | --- |
 | `{"t":"profile","name":"…","appearance":{…}}` | Rename / change appearance (same rules as `hello`). While the player is visible it is broadcast as `person` to everyone including the sender; while away nothing is broadcast. Errors: `invalid_profile`, `busy` (matched), `activity_rate_limited`. |
-| `{"t":"prepare"}` | If the player has no preparation, the server rolls one: `hp` ∈ {−2, 0, +2} (maximum HP change) and `food` ∈ {−1, 0, +1} (ration change), each uniformly, with a new UUID `id`. Replies `preparation` with the current one (an existing preparation is not re-rolled). Errors: `not_in_inn` (not present), `activity_rate_limited`. |
-| `{"t":"use_preparation","id":"<uuid>"}` | Consumes that preparation (solo expeditions call this when the dungeon has started). Replies `preparation` (now `null`). An unknown but well-formed id is not an error. Errors: `invalid_message` (not a UUID), `activity_rate_limited`. |
+| `{"t":"prepare"}` | If the player has no preparation, the server rolls one: `hp` ∈ {−2, 0, +2} (maximum HP change) and `food` ∈ {−1, 0, +1} (ration change), each uniformly, with a new UUID `id`. Replies `preparation` with the current one (an existing preparation is not re-rolled). One roll per entry: after `use_preparation` consumed one, `prepare` fails with `preparation_used` until the next `enter`. Errors: `not_in_inn` (not present), `preparation_used`, `activity_rate_limited`. |
+| `{"t":"use_preparation","id":"<uuid>"}` | Consumes that preparation (solo expeditions call this when the dungeon has started). Replies `preparation` with what the player holds afterwards: `null` when the id matched, otherwise the unchanged current preparation (an unknown but well-formed id is not an error). Errors: `invalid_message` (not a UUID), `activity_rate_limited`. |
 
 A preparation lives with the socket: it survives `away`/`enter`, hibernation and a takeover by a
 reconnect while the old socket is still open, but **not** a full disconnect. A match consumes both
@@ -182,8 +197,8 @@ creating the link fails, they are given back.
 | `{"t":"join","targetId":"<id>","friendlyFire":false,"theme":"sewers"}` | Join a specific recruiting player (clicking their sign). The target hosts, the sender is guest. | `invalid_message` (bad options, or `targetId` is yourself), `partner_unavailable` (not present, not recruiting, already matched, gone), `protocol_mismatch`, `not_in_inn`, `busy`, `activity_rate_limited` |
 | `{"t":"cancel"}` | Stop recruiting. Always `ok` unless rate limited. | `activity_rate_limited` |
 
-`queue`, `join`, `cancel`, `away`, `enter` and `profile` share a per-socket bucket of 8 refilling one
-per second.
+`queue`, `join`, `cancel`, `enter` and `profile` share a per-socket bucket of 8 refilling one per
+second. `away` is not limited by it (§4.6).
 
 On a match both players receive `preparation` (`null`, consumed) and then
 `{"t":"matched","match":{"id":"<uuid>","role":"host"|"guest","partnerId":"…","partnerName":"…"}}`;
@@ -192,13 +207,14 @@ are the **host's** `friendlyFire` and `theme`; the server picks the `seed`. A ma
 visible in the room but cannot queue, join or rename (`busy`) until it sends `away` or `enter`.
 If the server cannot create the link, each side that is still connected gets `preparation` (its
 preparation back), then `error` `match_failed` (no ref), and returns to present, not queued; a side
-that left in the meantime stays gone.
+that left in the meantime stays gone. The `queue` that triggered the attempt is still answered
+`ok` (it was accepted); a `join` is answered `partner_unavailable`.
 
 ### 4.6 Leaving and returning
 
 | Message | Effect |
 | --- | --- |
-| `{"t":"away"}` | Leave the room view but keep the socket (entering a dungeon, solo or party). Others get `gone`. Clears queue and match. `ok` unless rate limited. |
+| `{"t":"away"}` | Leave the room view but keep the socket (entering a dungeon, solo or party). Others get `gone`. Clears queue and match. Never refused (only the flood limit of §2 applies): always `ok`. |
 | `{"t":"enter","x":3,"y":4}` | Appear again at the given position (a fresh spawn). Clears queue and match. If the player was already visible the others first get `moved`; then everyone, including the sender, gets `person`; then the sender gets a fresh `welcome`, then `ok`. Errors: `invalid_message`, `activity_rate_limited`. |
 | close the socket (code 1000) | Leave the inn entirely. Others get `gone`. |
 
@@ -262,9 +278,11 @@ same thing.
 
 After `matched`, connect to `/api/v5/link?id=<match.id>` (a lowercase UUID). Unknown or ended links
 are refused with `link_not_found` and `4004` (also for a malformed id). A link must have both players
-connected within **45 s** of the match or it ends with `pair_timeout`. A link accepts at most 6
+connected within **45 s** of the match or it ends with `pair_timeout`. A link serves at most 6
 sockets; when full, the oldest socket that has not yet sent `hello` is closed with `link_full`
-`4013` to make room, so unauthenticated sockets cannot lock a player out.
+`4013` to make room, so unauthenticated sockets cannot lock a player out. A link also refuses new
+sockets with `link_full` while it holds more than 12 in total (counting closed sockets whose close
+was never acknowledged).
 
 | Message | Meaning |
 | --- | --- |
@@ -273,9 +291,14 @@ sockets; when full, the oldest socket that has not yet sent `hello` is closed wi
 | `{"t":"data","d":"<string>"}` | An opaque game payload: a non-empty string of at most **24 KiB** (24,576 bytes of UTF-8, which also bounds it to 24,576 UTF-16 units). The frame limit (§2) admits any such payload whatever its JSON escaping. An empty, non-string or larger `d` gets `error` `payload_too_large` and is dropped; the run continues. |
 | `{"t":"leave"}` | End the run for both. The partner gets `ended` `partner_left`; this socket is closed with `1000` reason `left` (no `error` frame). Send it before closing the socket on purpose. |
 
-Rate limit per link socket: bursts of 60 frames, **20 frames/s** sustained, and 2 MiB burst / 1 MiB/s
-of frame text. Exceeding it ends the run: the offender gets `error` `rate_limited` and close `4008`,
-the partner `ended` `rate_limited`. An invalid frame (binary, too big, bad JSON, no `t`) from a joined
+Rate limit per link socket: bursts of **300** frames, **25 frames/s** sustained, and 2 MiB burst /
+1 MiB/s of frame text. Exceeding it after `hello` ends the run: the offender gets `error`
+`rate_limited` and close `4008`, the partner `ended` `rate_limited`. A socket that floods before
+its `hello` only gets `rate_limited` / `4008` itself; the run continues.
+
+Clients should not send more than they need: the web client sends the host's frames (full-state
+snapshots) at most 15 per second, newest wins, and every guest frame (commands) at once and in
+order. The choice is by role, not by payload. A Windows client should do the same. An invalid frame (binary, too big, bad JSON, no `t`) from a joined
 player ends the run the same way: the offender gets `error` `protocol_error` and close `1003`, `1009`
 or `4000` with reason `protocol_error`; the partner `ended` `protocol_error`. Before `hello` the same
 faults only close that socket (`1003`/`1009`/`4000` with the specific reason).
@@ -312,17 +335,19 @@ Sent right after a valid `hello` (also after a reconnect):
 
 * Each `data` and `ready` is forwarded the moment it arrives, in the order the sender sent it.
   There is no "latest packet only" behaviour and no polling.
-* While a side is disconnected (up to 20 s), frames for it are queued in order (at most 512 frames
-  or 2 MiB, else the run ends with `partner_lost`) and delivered after its `link` on reconnect. The
-  queue is in memory: it is lost if the link object restarts.
+* While a side is not connected — before its first connection as well as while it reconnects
+  (up to 20 s) — frames for it are queued in order (at most 512 frames or 2 MiB, else the run ends
+  with `partner_lost`) and delivered right after its `link`. The queue is in memory: it is lost if
+  the link object restarts.
 * Frames that were already written to a connection that then died can be lost; the server has no
   acknowledgements. Game protocols must tolerate a gap at a reconnect (`InnOriginalParty` does:
   state is resent and the guest resends its pending command until acknowledged).
-* A side counts as lost when its socket closes, when it is found silent for 100 s (the lazy sweep of
-  §2, run whenever either side sends a frame), or — after the link object was restarted, for example
-  by a deploy, when no close event is delivered — when the object wakes and a paired side has no
-  socket. The other side then gets `peer {connected:false}`; after 20 s without a reconnect the run
-  ends with `partner_lost`.
+* A side counts as lost when its socket closes, when it is found silent for 100 s (checked whenever
+  either side sends a frame, and by an alarm every 2 minutes while paired, so a dead side is found
+  within about 4 minutes even when the other side sends nothing), or — after the link object was
+  restarted, for example by a deploy, when no close event is delivered — when the object wakes and a
+  paired side has no socket. The other side then gets `peer {connected:false}`; after 20 s without a
+  reconnect the run ends with `partner_lost`.
 * After `ended` the link and all its storage are deleted; reconnecting gets `4004`.
 
 ### 7.4 Starting the original-engine party (dungeonProtocol 12)
@@ -369,16 +394,17 @@ client never needs to implement it.
 | 4002 | `hello_timeout` | Reconnect. |
 | 4003 | `forbidden` (link: not a member) | End the run. |
 | 4004 | `link_not_found` | End the run (it already ended). |
-| 4008 | `rate_limited`, `room_busy` | Inn: wait 10 s, reconnect. Link: the run has ended (the partner got `ended rate_limited`). |
+| 4008 | `rate_limited` | Inn: wait 10 s, reconnect (no shard is tried meanwhile). Link: after `hello` the run has ended (the partner got `ended rate_limited`); before `hello` only this socket was refused. |
 | 4009 | `replaced` | Another connection with the same key took over; do not reconnect. |
 | 4010 | link ended (after `ended`, no `error` frame) | Return to the inn. |
 | 4013 | `inn_full` (with `retryAfter` seconds); `link_full` | Inn: retry after `retryAfter` s with jitter. Link: only a surplus socket that has not sent `hello` gets this; reconnect like after a drop. |
-| 4029 | `too_many_connections` | Inn: retry after 30 s. |
+| 4029 | `too_many_connections` | Inn: every shard already holds 8 sockets from this address; retry after 30 s. |
 
 ## 9. Reconnect behaviour
 
 * **Inn**: on any close except 4000, 4001 and 4009 reconnect with back-off (about 0.5, 1, 2, 4, 8 s,
-  then 8 s; ±25 % jitter; longer waits for 4008, 4013 and 4029 as in §8), passing `shard` and a
+  then 8 s; ±25 % jitter; the waits after 4008, 4013 and 4029 in §8 are required, and nothing (such as
+  the tab becoming visible) may shorten them), passing `shard` and a
   `hello` with the same key, the last known position, `present` according to whether the player is
   in a dungeon, and `queued` if it was recruiting. Reset the back-off only after a usable `welcome`.
   Then replace the room state with the new `welcome` (and clear a stale `match`, §5.1). The web
@@ -418,11 +444,13 @@ in the `ALLOWED_ORIGINS` variable (comma-separated, `server/wrangler.jsonc`). Ot
   read and written per inn action: **0**.
 * **Party links** keep one row (`link`: run settings, pairing time, ready flags, loss times) from
   the match until the run ends, then delete everything. Row writes per run: creation 1, pairing 1,
-  each side's first `ready` 1, each drop 1 and each return 1, plus one alarm write whenever the
-  next deadline changes (creation, pairing, drops, returns) and the final delete. Relayed `data`
-  frames cost no storage.
-* No IP addresses, accounts or chat text are stored; the address used for the per-address cap stays
-  in memory. The Worker's request logs (Workers Logs) are disabled in `wrangler.jsonc`.
+  each side's first `ready` 1, each drop 1 and each return 1, an alarm write at creation and when a
+  deadline moves earlier, and the final delete. While paired the 2-minute check alarm costs one
+  alarm invocation (a billed request) and one row write every 2 minutes: 30 requests and 30 row
+  writes per hour of play. Relayed `data` frames cost no storage.
+* No accounts or chat text are stored, and no IP address is written to storage: the per-address key
+  lives only in socket attachments and memory. The Worker's request logs (Workers Logs) are
+  disabled in `wrangler.jsonc`.
 
 ## 13. Mapping from the old HTTP API
 
@@ -448,8 +476,9 @@ For clients written against the earlier text of this document:
 1. Liveness counts only text `ping`s and messages, not protocol pings (§2).
 2. Frames may be pipelined after `hello` (§2, §6).
 3. `welcome.match` may be stale; answer it with `enter` (§5.1).
-4. New refusals: `too_many_connections` `4029`, `room_busy` (`4008` at connect, `error` for events),
-   and `inn_full` now carries `retryAfter` (§4, §8). Inn `4000` must stop reconnecting; link `4008`
+4. New refusals: `too_many_connections` `4029`, `room_busy` (an `error` for chat; the connect-time
+   `room_busy` of this round was removed again in item 11), and `inn_full` now carries
+   `retryAfter` (§4, §8). Inn `4000` must stop reconnecting; link `4008`
    means the run ended (§8, §9).
 5. A takeover by a `present:false` hello now sends `gone` (§4.1).
 6. Preparations no longer survive a full disconnect and no longer expire after 6 h (§4.4).
@@ -459,3 +488,21 @@ For clients written against the earlier text of this document:
    sockets are evicted with `link_full`; silent sides are dropped lazily and a restarted link notices
    missing sides (§6, §7.3).
 10. `dungeonProtocol` is 12 for the turn-clock engine (§4.1).
+
+Second round:
+
+11. No room-wide connection budget any more. Connects are limited per address (10 burst, one per
+    2 s, `rate_limited` `4008`, no shard fallthrough); the per-address socket cap (8 per shard)
+    now overflows to the next shard, and `4029` only comes when every shard refused. IPv6 is keyed
+    by /64; loopback has no per-address limits (§4).
+12. Each shard also refuses (with fallthrough) once it holds 64 sockets in total; a link refuses
+    beyond 12 (§4, §6).
+13. Chat has its own room budget (40, 4/s) plus 8 lines/1 per s per address; `room_busy` no longer
+    spends the sender's token. Drink and interact have a separate budget and are silently dropped
+    over it, never `room_busy` (§4.3).
+14. `away` is never refused (§4.6). After `use_preparation`, `prepare` fails with
+    `preparation_used` until the next `enter` (§4.4).
+15. Inn flood limit 30 burst / 12 frames/s (§2). Link relay limit 300 burst / 25 frames/s, and a
+    flood before `hello` no longer ends the run (§6). Send host snapshots at most 15/s, newest
+    wins; guest frames at once (§6).
+16. A paired link checks for a silent or vanished side every 2 minutes (§7.3).

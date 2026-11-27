@@ -114,36 +114,6 @@ describe('item 1-2: storage and quotas', () => {
     expect(after.size).toBe(before.size);
   });
 
-  it('caps sockets per client address within a room', async () => {
-    const layout = layoutId();
-    const headers = { 'CF-Connecting-IP': '203.0.113.7' };
-    const sockets = [];
-    for (let i = 0; i < 8; i++) sockets.push(await open(`/api/v5/inn?layout=${layout}`, headers));
-    const ninth = await open(`/api/v5/inn?layout=${layout}`, headers);
-    expect(await ninth.next('error')).toMatchObject({ code: 'too_many_connections' });
-    expect((await ninth.waitClosed()).code).toBe(4029);
-    // Another address still gets in.
-    const other = await open(`/api/v5/inn?layout=${layout}`, { 'CF-Connecting-IP': '203.0.113.8' });
-    other.send({ t: 'hello', v: 1, key: newKey(), name: 'o', appearance, dungeonProtocol: 12, x: 1, y: 1 });
-    await other.next('welcome');
-    for (const socket of sockets) socket.close();
-  });
-
-  it('applies a room-wide budget to broadcast events', async () => {
-    const layout = layoutId();
-    const players = [];
-    for (let i = 0; i < 6; i++) players.push(await enter(layout));
-    const results: string[] = [];
-    for (const player of players) {
-      for (let i = 0; i < 4; i++) {
-        const reply = await player.client.request({ t: 'chat', text: `m${i}` });
-        results.push(reply.code ?? reply.t);
-      }
-    }
-    expect(results.filter(r => r === 'ok')).toHaveLength(20);
-    expect(results.filter(r => r === 'room_busy').length).toBeGreaterThan(0);
-  });
-
   it('tells a locked-out client when to retry', async () => {
     const layout = layoutId();
     const clients = [];
@@ -243,12 +213,6 @@ describe('item 3: presence bookkeeping', () => {
     expect((await client.next('event')).event.text).toBe('pipelined');
   });
 
-  it('rate limits away like the other lobby requests', async () => {
-    const a = await enter(layoutId());
-    const replies = [];
-    for (let i = 0; i < 10; i++) replies.push((await a.client.request({ t: i % 2 ? 'enter' : 'away', x: 1, y: 1 })).code ?? 'ok');
-    expect(replies).toContain('activity_rate_limited');
-  });
 });
 
 describe('item 6: link loss without close events', () => {

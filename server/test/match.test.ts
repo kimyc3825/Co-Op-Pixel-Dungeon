@@ -207,7 +207,7 @@ describe('party link', () => {
 
   it('ends the run when a side floods the relay', async () => {
     const { hostLink, guestLink } = await linked();
-    for (let i = 0; i < 200; i++) hostLink.client.send({ t: 'data', d: String(i) });
+    for (let i = 0; i < 400; i++) hostLink.client.send({ t: 'data', d: String(i) });
     expect((await hostLink.client.waitClosed()).code).toBe(4008);
     expect(await guestLink.client.next('ended')).toEqual({ t: 'ended', reason: 'rate_limited' });
   });

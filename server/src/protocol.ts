@@ -42,12 +42,17 @@ export const LIMITS = {
   chatChars: 160,
   coordMax: 127,
   socketsPerShard: 32,
+  /** All sockets an object keeps, counting closed ones whose close was never acknowledged. */
+  socketsPerShardTotal: 64,
   /** Sockets one client address may hold in one room shard (households and carrier NAT share addresses). */
   socketsPerAddress: 8,
   shardsPerLayout: 8,
   /** Seconds a client should wait after `inn_full` before probing the shards again. */
   fullRetryAfterS: 30,
   linkSockets: 6,
+  linkSocketsTotal: 12,
+  /** While paired, the link checks for a silent or vanished side at least this often. */
+  linkCheckMs: 120_000,
   eventsKept: 30,
   eventMaxAgeMs: 15 * 60_000,
   helloTimeoutMs: 10_000,

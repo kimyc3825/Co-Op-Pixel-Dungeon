@@ -19,6 +19,8 @@ const RECONNECT_MS = [500, 1000, 2000, 4000, 8000];
 // The server keeps a run open for 20 s after a socket drops; stop retrying a little earlier.
 const LINK_RECONNECT_WINDOW_MS = 15000;
 const HEARTBEAT_MS = 650;
+// The host's packets are full snapshots, so only the newest matters: send at most 15 per second.
+const HOST_FRAME_MS = 67;
 const COMMAND_RETRY_MS = 275;
 const ENTRY_TIMEOUT_MS = 20000;
 const HOST_TIMEOUT_MS = 14000;
@@ -190,6 +192,7 @@ export class PlaySession {
     this.welcomeWaiters = [];
     this.reconnectAttempt = this.channelGeneration = this.nextMoveAt = 0;
     this.reconnectTimer = this.retryAfter = null;
+    this.holdUntil = 0;
     this.online = this.closed = this.leftInn = this.innSuspended = this.stopped = false;
     this.ignoredMatch = null;
     this.status = '';
@@ -203,7 +206,8 @@ export class PlaySession {
           this.#status('');
           this.battle.resume();
         }
-        if (!this.channel && this.key && !this.stopped) this.#openInn();
+        // Reconnect at once, unless the server asked for a wait (full, rate limited, per-address cap).
+        if (!this.channel && this.key && !this.stopped && now() >= this.holdUntil) this.#openInn();
       }
     };
     this.pageHidden = event => { if (!event.persisted) this.close(); };
@@ -443,8 +447,10 @@ export class PlaySession {
     this.channel = channel;
   }
 
-  #scheduleReconnect(message, delay = reconnectDelay(this.reconnectAttempt++)) {
+  /** `required`: the server asked for this wait, so nothing may shorten it. */
+  #scheduleReconnect(message, delay = reconnectDelay(this.reconnectAttempt++), required = false) {
     if (this.closed || this.stopped) return;
+    this.holdUntil = required ? now() + delay : 0;
     this.#status(message);
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => this.#openInn(), delay);
@@ -469,11 +475,11 @@ export class PlaySession {
       this.#status('여관 서버와 통신하지 못했습니다. 페이지를 새로 고쳐 주세요.');
     } else if (code === 4013) {
       this.#scheduleReconnect('여관이 가득 찼습니다. 자리가 나면 입장합니다.',
-        (Number.isFinite(retryAfter) ? retryAfter : 30) * 1000 * (0.75 + Math.random() / 2));
+        (Number.isFinite(retryAfter) ? retryAfter : 30) * 1000 * (0.75 + Math.random() / 2), true);
     } else if (code === 4029) {
-      this.#scheduleReconnect('같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.', 30000);
+      this.#scheduleReconnect('같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.', 30000, true);
     } else if (code === 4008) {
-      this.#scheduleReconnect('접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.', 10000);
+      this.#scheduleReconnect('접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.', 10000, true);
     } else {
       this.#scheduleReconnect('여관 서버에 다시 연결하는 중…');
     }
@@ -604,6 +610,8 @@ export class PlaySession {
     if (code === 'partner_unavailable') this.#status('이 모험가는 지금 참가할 수 없습니다.');
     else if (code === 'protocol_mismatch') this.#status('이 모험가와는 게임 버전이 달라 함께할 수 없습니다.');
     else if (code === 'activity_rate_limited') this.#status('잠시 뒤 다시 시도해 주세요.');
+    else if (code === 'room_busy') this.#status('여관이 붐빕니다. 잠시 뒤 다시 보내 주세요.');
+    else if (code === 'preparation_used') this.#status('다음 원정 준비는 여관에 다시 들어온 뒤에 할 수 있습니다.');
     else if (code === 'invalid_message') this.#status('대화는 한 줄, 160자까지 보낼 수 있습니다.');
     else if (code === 'invalid_profile') this.#status('닉네임을 1~20자로 입력하세요.');
     else if (code === 'offline' || code === 'timeout') this.#status('여관 서버에 다시 연결하는 중…');
@@ -687,7 +695,8 @@ class BattleSession {
     this.closed = this.terminal = false;
     this.nextHeartbeatAt = this.nextCommandAt = this.lastSnapshotAt = this.lastSnapshotSequence = 0;
     this.packetSequence = this.commandSequence = this.reconnectAttempt = this.lostAt = 0;
-    this.reconnectTimer = null;
+    this.reconnectTimer = this.hostTimer = this.hostPending = null;
+    this.hostSentAt = 0;
     this.pending = [];
     this.unacked = [];
     if (originalParty) {
@@ -731,6 +740,32 @@ class BattleSession {
   sendOriginal(data) {
     if (!this.original?.ready || !this.original.peerReady || this.closed || this.terminal || typeof data !== 'string' || !data ||
         encoder.encode(data).byteLength > MAX_MESSAGE_BYTES) return;
+    this.#sendData(data);
+  }
+
+  /**
+   * The guest's frames are commands: every one is sent at once, in order. The host's frames are
+   * full snapshots: at most one per HOST_FRAME_MS, and a newer one replaces one still waiting.
+   */
+  #sendData(data) {
+    if (!this.host) {
+      this.channel?.send({ t: 'data', d: data });
+      return;
+    }
+    this.hostPending = data;
+    const wait = this.hostSentAt + HOST_FRAME_MS - now();
+    if (wait <= 0) this.#flushHost();
+    else this.hostTimer ??= setTimeout(() => {
+      this.hostTimer = null;
+      this.#flushHost();
+    }, wait);
+  }
+
+  #flushHost() {
+    if (this.hostPending === null || this.closed || this.terminal) return;
+    const data = this.hostPending;
+    this.hostPending = null;
+    this.hostSentAt = now();
     this.channel?.send({ t: 'data', d: data });
   }
 
@@ -741,6 +776,7 @@ class BattleSession {
     this.closed = true;
     clearInterval(this.timer);
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.hostTimer);
     this.#settleLoading('failed', true);
     this.engine?.close(now());
     this.#leaveLink();
@@ -933,7 +969,7 @@ class BattleSession {
   #transmit(wire) {
     const message = JSON.stringify(wire);
     if (encoder.encode(message).byteLength > MAX_MESSAGE_BYTES) return;
-    this.channel?.send({ t: 'data', d: message });
+    this.#sendData(message);
   }
 
   #receive(message) {
@@ -1029,6 +1065,7 @@ class BattleSession {
     this.terminal = true;
     clearInterval(this.timer);
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.hostTimer);
     // Tell the server, so the partner's run ends too when this side gives up first.
     this.#leaveLink();
     if (this.original) {

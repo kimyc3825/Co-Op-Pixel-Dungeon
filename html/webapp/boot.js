@@ -54,6 +54,10 @@
 		if (!exiting && spd.onShortcutFocusLoss) spd.onShortcutFocusLoss();
 	}
 	window.addEventListener("blur", releaseGameShortcut);
+	// Removing the frame (or closing the tab) fires pagehide and then visibilitychange. The backend pauses and
+	// disposes the game on pagehide and its visibilitychange handler would then pause a null listener, so arm
+	// the guard below first; this listener is registered before the game script adds its own.
+	window.addEventListener("pagehide", function () { exiting = true; }, true);
 	document.addEventListener("visibilitychange", function (event) {
 		// Detaching the frame can dispatch this after the backend input has been disposed.
 		if (exiting) event.stopImmediatePropagation();

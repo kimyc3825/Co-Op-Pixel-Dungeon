@@ -3,7 +3,7 @@
 // only sees the socket endpoints, the health check and paths that matched no file.
 import type { Env } from './env';
 import { CLOSE, LAYOUT_ID, LIMITS, MATCH_ID, PATHS, WIRE_VERSION } from './protocol';
-import { refuse } from './util';
+import { addressKey, refuse } from './util';
 
 export { InnRoom } from './inn';
 export { PartyLink } from './link';
@@ -23,6 +23,15 @@ export function originAllowed(request: Request, env: Env): boolean {
   return (env.ALLOWED_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean).includes(origin);
 }
 
+/**
+ * The per-address limit key. Cloudflare's edge always sets CF-Connecting-IP; a local `wrangler dev`
+ * (loopback host) passes through whatever the client sent, so it is ignored there.
+ */
+function clientAddress(request: Request, url: URL): string {
+  if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return '';
+  return addressKey(request.headers.get('CF-Connecting-IP'));
+}
+
 /** Accepts the handshake only to report why the connection cannot be served, which browsers can read. */
 function refusal(code: number, error: string, extra: Record<string, unknown> = {}): Response {
   const [client, server] = Object.values(new WebSocketPair());
@@ -37,8 +46,8 @@ async function connectInn(request: Request, env: Env, url: URL): Promise<Respons
   const hint = Number(url.searchParams.get('shard'));
   const shards = Array.from({ length: LIMITS.shardsPerLayout }, (_, index) => index);
   if (Number.isInteger(hint) && hint > 0 && hint < LIMITS.shardsPerLayout) shards.unshift(...shards.splice(hint, 1));
-  // Cloudflare sets CF-Connecting-IP at the edge; it only feeds the per-address cap in memory.
-  const address = request.headers.get('CF-Connecting-IP') ?? '';
+  const address = clientAddress(request, url);
+  let addressCapped = false;
   for (const shard of shards) {
     const headers = new Headers(request.headers);
     headers.set('X-Inn-Shard', String(shard));
@@ -46,10 +55,15 @@ async function connectInn(request: Request, env: Env, url: URL): Promise<Respons
     headers.set('X-Client-Address', address);
     const stub = env.INN.get(env.INN.idFromName(`${layout}:${shard}`));
     const response = await stub.fetch(url.toString(), { headers });
-    if (response.status === 403) return refusal(CLOSE.tooManyConnections, 'too_many_connections');
-    if (response.status === 429) return refusal(CLOSE.rateLimited, 'room_busy');
-    if (response.status !== 409) return response;
+    // 409 is about this shard's capacity (or this address's share of it): try the next shard.
+    if (response.status === 409) {
+      addressCapped ||= response.headers.get('X-Refusal') === 'address';
+      continue;
+    }
+    if (response.status === 429) return refusal(CLOSE.rateLimited, 'rate_limited');
+    return response;
   }
+  if (addressCapped) return refusal(CLOSE.tooManyConnections, 'too_many_connections');
   return refusal(CLOSE.full, 'inn_full', { retryAfter: LIMITS.fullRetryAfterS });
 }
 

@@ -74,8 +74,9 @@ public final class EngineHarness {
 		@Override public void idle() {}
 		@Override public void move(int from, int to) {}
 		@Override public void interruptMotion() {}
-		@Override public void attack(int cell) {}
-		@Override public synchronized void attack(int cell, Callback callback) {}
+		// The attack animation ends at once, as if its last frame had been drawn.
+		@Override public void attack(int cell) { if (ch != null) ch.onAttackComplete(); }
+		@Override public synchronized void attack(int cell, Callback callback) { if (callback != null) callback.call(); }
 		@Override public void operate(int cell) {}
 		@Override public synchronized void operate(int cell, Callback callback) {}
 		@Override public void zap(int cell) {}
@@ -231,6 +232,13 @@ public final class EngineHarness {
 				return new FileHandle(new File(assets, (String) args[0]));
 			}
 			return null;
+		});
+		// Every texture is a blank 256x256 stand-in, so combat text and effects can be created without GL.
+		com.watabou.gltextures.SmartTexture blank = alloc(com.watabou.gltextures.SmartTexture.class);
+		blank.width = blank.height = 256;
+		setField(com.watabou.gltextures.TextureCache.class, null, "all", new HashMap<Object, com.watabou.gltextures.SmartTexture>() {
+			@Override public boolean containsKey(Object key) { return true; }
+			@Override public com.watabou.gltextures.SmartTexture get(Object key) { return blank; }
 		});
 		booted = true;
 	}

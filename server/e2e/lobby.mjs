@@ -121,6 +121,17 @@ try {
     const sample = p => p.frames.link.filter(f => f.t === 'data').slice(0, 1).map(f => f.d.slice(0, 40));
     log('payloads', { hostReceived: a.frames.link.filter(f => f.t === 'data').length, guestReceived:
       b.frames.link.filter(f => f.t === 'data').length, hostSample: sample(a), guestSample: sample(b) });
+    // Bursts: the host's snapshots are coalesced (newest wins, at most 15/s); guest frames all arrive in order.
+    const hostFrame = a.page.frames().find(f => f.url().includes('/play/original/runtime/'));
+    const guestFrame = b.page.frames().find(f => f.url().includes('/play/original/runtime/'));
+    await hostFrame.evaluate(() => { for (let i = 0; i < 100; i++) parent.postMessage({ type: 'noxac-original-party-send', data: `X|${i}` }, location.origin); });
+    await guestFrame.evaluate(() => { for (let i = 0; i < 50; i++) parent.postMessage({ type: 'noxac-original-party-send', data: `Y|${i}` }, location.origin); });
+    await until('burst delivered', () => b.frames.link.some(f => f.t === 'data' && f.d === 'X|99') &&
+      a.frames.link.filter(f => f.t === 'data' && f.d.startsWith('Y|')).length === 50, 10000);
+    const xs = b.frames.link.filter(f => f.t === 'data' && f.d.startsWith('X|')).map(f => f.d);
+    const ys = a.frames.link.filter(f => f.t === 'data' && f.d.startsWith('Y|')).map(f => f.d);
+    log('burst', { hostSent: 100, guestReceived: xs.length, last: xs.at(-1), guestSent: 50, hostReceivedInOrder: ys.join() === Array.from({ length: 50 }, (_, i) => `Y|${i}`).join() });
+    if (xs.length > 5 || ys.length !== 50) throw new Error('burst handling wrong');
     // Order check: host packets carry increasing sequence numbers in their last field.
     await a.page.screenshot({ path: process.env.E2E_SHOTS ? `${process.env.E2E_SHOTS}/host.png` : '/dev/null' }).catch(() => {});
     await b.page.screenshot({ path: process.env.E2E_SHOTS ? `${process.env.E2E_SHOTS}/guest.png` : '/dev/null' }).catch(() => {});

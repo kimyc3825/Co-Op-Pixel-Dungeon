@@ -13,7 +13,7 @@ import {
   isCoord, isDungeonProtocol, isRef, parseFrame,
   type Appearance, type Json, type Preparation, type Theme,
 } from './protocol';
-import { Bucket, acknowledgeClose, close, digest, randomIndex, randomUint32, refuse, send } from './util';
+import { Bucket, BucketMap, acknowledgeClose, close, digest, randomIndex, randomUint32, refuse, send } from './util';
 
 /** `closed`: the server closed or replaced the socket; every path ignores it from then on. */
 type Phase = 'new' | 'present' | 'away' | 'matched' | 'closed';
@@ -26,7 +26,10 @@ interface Member {
   openedAt: number;
   shard: number;
   layout: string;
-  /** Client address, only for the per-address cap; never written to storage. */
+  /**
+   * Client address key (IPv4, or IPv6 /64) for the per-address limits. Kept in the attachment, so it
+   * survives hibernation for the socket's lifetime; never written to storage.
+   */
   address: string;
   id?: string;
   name?: string;
@@ -40,6 +43,8 @@ interface Member {
   theme?: Theme;
   match?: MatchInfo | null;
   preparation?: Preparation | null;
+  /** Set by `use_preparation`; a new roll needs a fresh `enter` (one roll per entry). */
+  preparationUsed?: boolean;
   /** Last frame time, saved at most every 30 s so stale sockets are found after hibernation. */
   seenAt?: number;
 }
@@ -54,7 +59,7 @@ interface InnEvent {
 }
 
 class Conn {
-  readonly all = new Bucket(40, 20);
+  readonly all = new Bucket(30, 12);
   readonly move = new Bucket(6, 8);
   readonly chat = new Bucket(4, 1 / 3);
   readonly activity = new Bucket(6, 0.5);
@@ -71,9 +76,13 @@ export class InnRoom extends DurableObject<Env> {
   private events: InnEvent[] = [];
   private lastEventId = 0;
   private lastSweep = 0;
-  // Room-wide budgets, independent of how many sockets share the load.
-  private readonly roomEvents = new Bucket(20, 0.5);
-  private readonly roomJoins = new Bucket(LIMITS.socketsPerShard + 8, 2);
+  // Room-wide budgets for broadcast events. Chat has its own so emotes cannot starve it, and a
+  // per-address chat budget keeps one machine from using up the room's.
+  private readonly roomChat = new Bucket(40, 4);
+  private readonly addressChat = new BucketMap(8, 1);
+  private readonly roomEmotes = new Bucket(30, 2);
+  /** New connections per client address; churn from one address only locks out that address. */
+  private readonly addressJoins = new BucketMap(10, 0.5);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -86,13 +95,17 @@ export class InnRoom extends DurableObject<Env> {
     const now = Date.now();
     this.sweep(now, true);
     const live = this.live();
-    // The Worker tries the next shard on 409.
-    if (live.length >= LIMITS.socketsPerShard) return new Response('inn_full', { status: 409 });
+    // Capacity refusals answer 409 and the Worker tries the next shard. The total includes closed
+    // sockets whose close was never acknowledged, so they cannot pile up without bound.
+    if (live.length >= LIMITS.socketsPerShard || this.ctx.getWebSockets().length >= LIMITS.socketsPerShardTotal) {
+      return new Response('inn_full', { status: 409 });
+    }
     const address = request.headers.get('X-Client-Address') ?? '';
     if (address && live.filter(ws => this.conn(ws).member.address === address).length >= LIMITS.socketsPerAddress) {
-      return new Response('too_many_connections', { status: 403 });
+      return new Response('too_many_connections', { status: 409, headers: { 'X-Refusal': 'address' } });
     }
-    if (!this.roomJoins.take(1, now)) return new Response('room_busy', { status: 429 });
+    // Only about this address, so no other shard is tried.
+    if (address && !this.addressJoins.get(address).take(1, now)) return new Response('rate_limited', { status: 429 });
     const [client, server] = Object.values(new WebSocketPair());
     const member: Member = {
       conn: crypto.randomUUID(), phase: 'new', openedAt: now,
@@ -113,6 +126,8 @@ export class InnRoom extends DurableObject<Env> {
       this.save(ws, conn);
     }
     this.sweep(now);
+    // The sweep may just have closed this very socket (hello timeout, stale).
+    if ((conn.member.phase as Phase) === "closed") return;
     if (!conn.all.take(1, now)) return this.reject(ws, conn, CLOSE.rateLimited, 'rate_limited');
     const parsed = parseFrame(message, LIMITS.innFrameBytes);
     if ('close' in parsed) return this.reject(ws, conn, parsed.close, parsed.reason);
@@ -176,6 +191,7 @@ export class InnRoom extends DurableObject<Env> {
     const id = digest('inn-player', frame.key, 22);
     let match: MatchInfo | null = null;
     let preparation: Preparation | null = null;
+    let preparationUsed = false;
     let wasVisible = false;
     for (const other of this.live()) {
       if (other === ws) continue;
@@ -184,6 +200,7 @@ export class InnRoom extends DurableObject<Env> {
       // A reconnect takes over the older socket of the same player without a leave/join flicker.
       if (previous.member.phase === 'matched') match = previous.member.match ?? null;
       preparation ??= previous.member.preparation ?? null;
+      preparationUsed ||= previous.member.preparationUsed ?? false;
       wasVisible ||= visible(previous.member);
       previous.member.phase = 'closed';
       this.save(other, previous);
@@ -193,7 +210,7 @@ export class InnRoom extends DurableObject<Env> {
     Object.assign(member, {
       phase: present ? (match ? 'matched' : 'present') : 'away', id, name, appearance,
       protocol: frame.dungeonProtocol, x: frame.x, y: frame.y, queuedAt: 0, friendlyFire, theme,
-      match: present ? match : null, preparation,
+      match: present ? match : null, preparation, preparationUsed,
     } satisfies Partial<Member>);
     this.save(ws, conn);
     this.welcome(ws, conn);
@@ -244,8 +261,13 @@ export class InnRoom extends DurableObject<Env> {
     const text = cleanText(frame.text, LIMITS.chatChars);
     if (!text) return this.fail(ws, ref, 'invalid_message');
     if (!visible(conn.member)) return this.fail(ws, ref, 'not_in_inn');
-    if (!conn.chat.take()) return this.fail(ws, ref, 'activity_rate_limited');
-    if (!this.roomEvents.take()) return this.fail(ws, ref, 'room_busy');
+    if (!conn.chat.has()) return this.fail(ws, ref, 'activity_rate_limited');
+    const address = conn.member.address ? this.addressChat.get(conn.member.address) : null;
+    // A busy room must not also cost the sender its own token.
+    if (!this.roomChat.has() || (address && !address.has())) return this.fail(ws, ref, 'room_busy');
+    conn.chat.take();
+    this.roomChat.take();
+    address?.take();
     this.addEvent(conn.member, { kind: 'chat', text });
     this.ok(ws, ref);
   }
@@ -253,8 +275,8 @@ export class InnRoom extends DurableObject<Env> {
   private drink(ws: WebSocket, conn: Conn, ref?: number): void {
     if (!visible(conn.member)) return this.fail(ws, ref, 'not_in_inn');
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
-    if (!this.roomEvents.take()) return this.fail(ws, ref, 'room_busy');
-    this.addEvent(conn.member, { kind: 'drink' });
+    // Emotes beyond the room budget are dropped silently.
+    if (this.roomEmotes.take()) this.addEvent(conn.member, { kind: 'drink' });
     this.ok(ws, ref);
   }
 
@@ -262,8 +284,7 @@ export class InnRoom extends DurableObject<Env> {
     if (typeof frame.npcId !== 'string' || !NPC_ID.test(frame.npcId)) return this.fail(ws, ref, 'invalid_message');
     if (!visible(conn.member)) return this.fail(ws, ref, 'not_in_inn');
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
-    if (!this.roomEvents.take()) return this.fail(ws, ref, 'room_busy');
-    this.addEvent(conn.member, { kind: 'interact', npcId: frame.npcId });
+    if (this.roomEmotes.take()) this.addEvent(conn.member, { kind: 'interact', npcId: frame.npcId });
     this.ok(ws, ref);
   }
 
@@ -283,6 +304,7 @@ export class InnRoom extends DurableObject<Env> {
   private prepare(ws: WebSocket, conn: Conn, ref?: number): void {
     const member = conn.member;
     if (member.phase !== 'present') return this.fail(ws, ref, 'not_in_inn');
+    if (!member.preparation && member.preparationUsed) return this.fail(ws, ref, 'preparation_used');
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
     // Guessed from the clients: maximum HP changes by 0 or ±2 and rations by 0 or ±1.
     member.preparation ??= { id: crypto.randomUUID(), hp: [-2, 0, 2][randomIndex(3)], food: [-1, 0, 1][randomIndex(3)] };
@@ -296,6 +318,7 @@ export class InnRoom extends DurableObject<Env> {
     if (!conn.activity.take()) return this.fail(ws, ref, 'activity_rate_limited');
     if (conn.member.preparation?.id === frame.id) {
       conn.member.preparation = null;
+      conn.member.preparationUsed = true;
       this.save(ws, conn);
     }
     send(ws, { t: 'preparation', preparation: conn.member.preparation ?? null });
@@ -350,8 +373,8 @@ export class InnRoom extends DurableObject<Env> {
     this.ok(ws, ref);
   }
 
+  /** Never refused (apart from the flood limit): a player entering a dungeon must leave the room view. */
   private away(ws: WebSocket, conn: Conn, ref?: number): void {
-    if (!conn.lobby.take()) return this.fail(ws, ref, 'activity_rate_limited');
     const member = conn.member;
     if (visible(member)) {
       member.phase = 'away';
@@ -368,7 +391,9 @@ export class InnRoom extends DurableObject<Env> {
     if (!isCoord(frame.x) || !isCoord(frame.y)) return this.fail(ws, ref, 'invalid_message');
     if (!conn.lobby.take()) return this.fail(ws, ref, 'activity_rate_limited');
     const wasVisible = visible(member);
-    Object.assign(member, { phase: 'present', x: frame.x, y: frame.y, match: null, queuedAt: 0 } satisfies Partial<Member>);
+    Object.assign(member, {
+      phase: 'present', x: frame.x, y: frame.y, match: null, queuedAt: 0, preparationUsed: false,
+    } satisfies Partial<Member>);
     this.save(ws, conn);
     if (wasVisible) this.broadcast({ t: 'moved', id: member.id, x: member.x, y: member.y }, ws);
     this.broadcastPerson(member);

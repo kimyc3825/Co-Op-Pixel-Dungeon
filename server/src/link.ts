@@ -25,8 +25,9 @@ interface LinkState {
 interface Stored { config: LinkConfig; state: LinkState }
 
 class Conn {
-  // The game sends on change; 20 frames/s sustained with a burst of 60 leaves headroom for bursts of play.
-  readonly messages = new Bucket(60, 20);
+  // 25 frames/s sustained protects the request quota; the burst of 300 absorbs bursts of play and a
+  // reconnect's catch-up without ending a legitimate run.
+  readonly messages = new Bucket(300, 25);
   readonly bytes = new Bucket(2 * 1024 * 1024, 1024 * 1024);
   constructor(public attachment: Attachment) {}
 }
@@ -77,6 +78,11 @@ export class PartyLink extends DurableObject<Env> {
     this.conns.set(server, new Conn(attachment));
     if (!this.config || this.ended) {
       this.closeSocket(server, CLOSE.notFound, 'link_not_found');
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    // Closed sockets whose close was never acknowledged still count here, so they cannot pile up.
+    if (this.ctx.getWebSockets().length > LIMITS.linkSocketsTotal) {
+      this.closeSocket(server, CLOSE.full, 'link_full');
       return new Response(null, { status: 101, webSocket: client });
     }
     const live = this.live();
@@ -354,11 +360,15 @@ export class PartyLink extends DurableObject<Env> {
     if (!this.config || this.ended) return;
     const deadlines = [this.config.createdAt + LIMITS.linkLifetimeMs];
     if (!this.state.pairedAt) deadlines.push(this.config.createdAt + LIMITS.pairTimeoutMs);
+    // While paired, wake up regularly to find a side that died silently while the other only watches.
+    else deadlines.push(Date.now() + LIMITS.linkCheckMs);
     for (const role of ROLES) {
       const lostAt = this.state.lostAt[role];
       if (lostAt) deadlines.push(lostAt + LIMITS.reconnectGraceMs);
     }
     const at = Math.min(...deadlines);
-    if ((await this.ctx.storage.getAlarm()) !== at) await this.ctx.storage.setAlarm(at);
+    // An earlier pending alarm is fine (the handler re-evaluates); only write when none is due in time.
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current <= Date.now() || current > at) await this.ctx.storage.setAlarm(at);
   }
 }

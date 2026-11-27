@@ -521,6 +521,62 @@ public class TurnClockEngineTest {
 		assertEquals(pos, member.pos);
 	}
 
+	// ---- real monsters still notice, hunt and fight in both modes ----
+
+	private static com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Rat addRat(int cell) throws Exception {
+		com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Rat rat = new com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Rat();
+		rat.pos = cell;
+		rat.state = rat.WANDERING;
+		rat.spriteClass = IndicatorSprite.class;
+		alloc(TestSprite.class).link(rat);
+		level.mobs.add(rat);
+		Actor.add(rat);
+		return rat;
+	}
+
+	@Test
+	public void realMonsterFightsTheSoloHero() throws Exception {
+		newSolo(15, 15, cell(3, 3));
+		com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Rat rat = addRat(cell(3, 6));
+		frames(3, FRAME);
+		for (int i = 0; i < 40 && hero.HP == hero.HT; i++) {
+			if (hero.ready) hero.rest(false);
+			frames(3, FRAME);
+		}
+		assertSame(rat.HUNTING, rat.state);
+		assertTrue("the rat never attacked", hero.HP < hero.HT);
+		assertAlive();
+	}
+
+	@Test
+	public void realMonsterEngagesThePartyAndTheClockCountsDown() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(10, 3));
+		com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Rat rat = addRat(cell(3, 6));
+		frames(3, FRAME);
+		boolean countdown = false;
+		for (int i = 0; i < 40 && !countdown; i++) {
+			guest("W", 0, 0);
+			frames(3, FRAME);
+			countdown = TurnClock.waitingOn() == TurnClock.WAIT_HOST;
+		}
+		// An awake rat in the host's view engages the host even before it has noticed anyone.
+		assertTrue(state(), countdown);
+		assertNotEquals(rat.SLEEPING, rat.state);
+		float heroTime = time(hero);
+		assertEquals(TurnPolicy.TURN_GRACE_SECONDS, countdownSeconds(FRAME, 10), 0.05f);
+		frames(2, FRAME);
+		assertEquals(heroTime + 1f, time(hero), 1e-4f);
+		// Keep the world moving with guest waits and host auto-waits: the rat hunts and fights.
+		for (int i = 0; i < 60 && hero.HP == hero.HT && member.HP == member.HT; i++) {
+			if (TurnClock.waitingOn() == TurnClock.WAIT_GUEST || TurnClock.waitingOn() == TurnClock.WAIT_NONE) guest("W", 0, 0);
+			if (hero.ready) hero.rest(false);
+			frames(3, FRAME);
+		}
+		assertSame(rat.HUNTING, rat.state);
+		assertTrue("the rat never attacked anyone", hero.HP < hero.HT || member.HP < member.HT);
+		assertAlive();
+	}
+
 	// ---- snapshot cadence ----
 
 	@Test

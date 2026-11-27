@@ -10,13 +10,55 @@ export class Bucket {
     this.at = now;
   }
 
-  take(cost = 1, now = Date.now()): boolean {
+  /** True if `cost` tokens are available now; spends nothing. */
+  has(cost = 1, now = Date.now()): boolean {
     this.tokens = Math.min(this.capacity, this.tokens + (now - this.at) * this.perSecond / 1000);
     this.at = now;
-    if (this.tokens < cost) return false;
+    return this.tokens >= cost;
+  }
+
+  take(cost = 1, now = Date.now()): boolean {
+    if (!this.has(cost, now)) return false;
     this.tokens -= cost;
     return true;
   }
+}
+
+/** Buckets per key (a client address), bounded in size; memory only. */
+export class BucketMap {
+  private readonly buckets = new Map<string, Bucket>();
+  constructor(private readonly capacity: number, private readonly perSecond: number, private readonly maxKeys = 1024) {}
+
+  get(key: string): Bucket {
+    let bucket = this.buckets.get(key);
+    if (!bucket) {
+      if (this.buckets.size >= this.maxKeys) this.buckets.delete(this.buckets.keys().next().value!);
+      bucket = new Bucket(this.capacity, this.perSecond);
+      this.buckets.set(key, bucket);
+    }
+    return bucket;
+  }
+}
+
+/**
+ * The key for per-address limits: an IPv4 address as is, an IPv6 address cut to its /64 (one
+ * subscriber usually holds a whole /64). Loopback and missing addresses give '' (no limit).
+ */
+export function addressKey(value: string | null): string {
+  const address = (value ?? '').trim().toLowerCase();
+  if (!address) return '';
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(address);
+  if (mapped) return addressKey(mapped[1]);
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(address)) return address.startsWith('127.') ? '' : address;
+  if (!address.includes(':') || !/^[0-9a-f:]+$/.test(address)) return '';
+  const [head, tail = ''] = address.split('::');
+  const left = head ? head.split(':') : [];
+  const right = address.includes('::') ? (tail ? tail.split(':') : []) : [];
+  const groups = address.includes('::') ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right] : left;
+  if (groups.length !== 8) return '';
+  const full = groups.map(group => (parseInt(group, 16) || 0).toString(16));
+  if (full.every((group, index) => index === 7 ? group === '1' : group === '0')) return '';
+  return `${full.slice(0, 4).join(':')}::/64`;
 }
 
 const encoder = new TextEncoder();
