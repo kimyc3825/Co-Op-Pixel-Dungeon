@@ -59,6 +59,18 @@ public class WebJS {
 			+ " window.spd.autotest = toggle; window.spd.autotestStatus = status;")
 	public static native void registerAutoTest(Toggle toggle, StateProvider status);
 
+	@JSFunctor
+	public interface DebugCommand extends JSObject {
+		String run(String command, String argument);
+	}
+
+	//INDEV test tooling, see DebugTools
+	@JSBody(params = "command", script = "window.spd = window.spd || {}; window.spd.debug = command;")
+	public static native void registerDebugTools(DebugCommand command);
+
+	@JSBody(params = "result", script = "window.spd = window.spd || {}; window.spd.debugResult = result;")
+	public static native void debugResult(String result);
+
 	@JSBody(params = "cb", script = "window.spd = window.spd || {}; window.spd.onFullscreenExit = cb;")
 	public static native void onFullscreenExit(Callback cb);
 

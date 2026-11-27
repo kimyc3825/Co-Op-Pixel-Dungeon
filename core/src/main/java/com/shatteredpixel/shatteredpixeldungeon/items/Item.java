@@ -202,6 +202,12 @@ public class Item implements Bundlable {
 		return true;
 	}
 
+	/** The item of the latest item action if the hero still carries it, otherwise null. */
+	public static Item carriedActionItem(Hero hero) {
+		Item item = curItem;
+		return item != null && hero != null && hero.belongings.contains(item) ? item : null;
+	}
+
 	//in party play an item window can stay open while the world moves on, e.g. after a grace countdown
 	// ran out or while the partner takes its turn. Item actions then wait until it is the hero's turn again.
 	private static boolean uiMayAct(Hero hero) {

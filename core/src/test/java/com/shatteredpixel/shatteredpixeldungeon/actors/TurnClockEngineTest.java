@@ -521,6 +521,99 @@ public class TurnClockEngineTest {
 		assertEquals(pos, member.pos);
 	}
 
+	// ---- the host's open targeting survives the partner's turn ----
+
+	static final class Aim extends CellSelector.Listener {
+		int cancels;
+		Integer chosen;
+		@Override public void onSelect(Integer cell) { if (cell == null) cancels++; else chosen = cell; }
+		@Override public String prompt() { return "aim"; }
+	}
+
+	private static CellSelector selector() throws Exception {
+		Field cs = GameScene.class.getDeclaredField("cellSelector");
+		cs.setAccessible(true);
+		return (CellSelector) cs.get(null);
+	}
+
+	@Test
+	public void hostTargetingSurvivesThePartnersTurn() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		Dummy monster = addDummy(cell(3, 8));
+		monster.hunt(hero);
+		frames(3, FRAME);
+		Aim aim = new Aim();
+		GameScene.selectCell(aim);
+		assertEquals("aim", GameScene.cellSelectionPrompt());
+
+		// While the actor thread runs the partner's step, the interface is not live but the prompt stays.
+		member.sprite.isMoving = true;
+		guest("M", 1, 0);
+		TurnClock.update(FRAME);
+		Actor.notifyActorThread(actorThread);
+		Thread.sleep(50);
+		assertFalse(Actor.parked());
+		assertFalse(hero.ready);
+		assertSame(aim, selector().listener);
+		synchronized (member.sprite) {
+			member.sprite.isMoving = false;
+			member.sprite.notifyAll();
+		}
+		settle();
+		int acts = heroActs;
+		frames(4, FRAME);
+
+		assertEquals(state(), TurnClock.WAIT_HOST, TurnClock.waitingOn());
+		assertTrue(hero.ready);
+		assertSame("the partner's turn cancelled the host's targeting", aim, selector().listener);
+		assertEquals(0, aim.cancels);
+		assertEquals("aim", GameScene.cellSelectionPrompt());
+		assertTrue(selector().enabled);
+
+		// The hero's own new turn still resets the interface, as in the original game.
+		hero.rest(false);
+		frames(3, FRAME);
+		if (TurnClock.waitingOn() != TurnClock.WAIT_HOST) {
+			guest("M", -1, 0);
+			frames(4, FRAME);
+		}
+		assertTrue(hero.ready);
+		assertEquals(1, aim.cancels);
+		assertEquals(null, GameScene.cellSelectionPrompt());
+		assertAlive();
+	}
+
+	@Test
+	public void hostTargetingSurvivesBeingSkipped() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		Aim aim = new Aim();
+		GameScene.selectCell(aim);
+		for (int i = 0; i < 3; i++) {
+			guest("M", i % 2 == 0 ? 1 : -1, 0);
+			frames(4, FRAME);
+		}
+		assertEquals(3, ack());
+		assertTrue(hero.ready);
+		assertSame(aim, selector().listener);
+		assertEquals(0, aim.cancels);
+	}
+
+	@Test
+	public void hostTargetingEndsWhenItsItemIsGone() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		Rock rock = new Rock();
+		hero.belongings.backpack.items.add(rock);
+		assertTrue(rock.executeFromUi(hero, Item.AC_THROW));
+		assertEquals(Messages.get(Item.class, "prompt"), GameScene.cellSelectionPrompt());
+		hero.belongings.backpack.items.remove(rock);
+		guest("M", 1, 0);
+		frames(4, FRAME);
+		assertTrue(hero.ready);
+		assertEquals(null, GameScene.cellSelectionPrompt());
+	}
+
 	// ---- real monsters still notice, hunt and fight in both modes ----
 
 	private static com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Rat addRat(int cell) throws Exception {

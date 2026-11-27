@@ -1715,6 +1715,7 @@ public class GameScene extends PixelScene {
 			cellSelector.listener.onSelect(null);
 		}
 		cellSelector.listener = listener;
+		selectionItem = listener == defaultCellListener ? null : Item.carriedActionItem(Dungeon.hero);
 		cellSelector.enabled = Dungeon.hero.ready;
 		if (scene != null) {
 			scene.prompt(listener.prompt());
@@ -1802,16 +1803,40 @@ public class GameScene extends PixelScene {
 	}
 	
 	public static void ready() {
-		selectCell( defaultCellListener );
-		QuickSlotButton.cancel();
-		InventoryPane.cancelTargeting();
-		if (scene != null && scene.toolbar != null) scene.toolbar.examining = false;
+		if (TurnClock.refreshingHero() && targetingStillValid()) {
+			//party play: the hero's turn was refreshed because the partner acted while the player was aiming.
+			// Keep the same listener and prompt; the selector is live again once the hero is ready.
+			cellSelector.enabled = Dungeon.hero.ready;
+		} else {
+			selectCell( defaultCellListener );
+			QuickSlotButton.cancel();
+			InventoryPane.cancelTargeting();
+			if (scene != null && scene.toolbar != null) scene.toolbar.examining = false;
+		}
 		if (tagDisappeared) {
 			tagDisappeared = false;
 			updateTags = true;
 		}
 	}
 	
+	//the carried item an open cell selection was started for, if any
+	private static Item selectionItem;
+
+	/** An open cell selection that is still meaningful after the world moved on without the hero. */
+	private static boolean targetingStillValid() {
+		Hero hero = Dungeon.hero;
+		return cellSelector != null && cellSelector.listener != null && cellSelector.listener != defaultCellListener
+				&& hero != null && hero.isAlive() && hero.paralysed == 0
+				&& (selectionItem == null || hero.belongings.contains(selectionItem))
+				&& (QuickSlotButton.lastTarget == null || QuickSlotButton.lastTarget.isAlive());
+	}
+
+	/** The prompt of an open cell selection, or null while the default listener is active. */
+	public static String cellSelectionPrompt() {
+		CellSelector.Listener listener = cellSelector == null ? null : cellSelector.listener;
+		return listener == null || listener == defaultCellListener ? null : listener.prompt();
+	}
+
 	public static void checkKeyHold(){
 		cellSelector.processKeyHold();
 	}

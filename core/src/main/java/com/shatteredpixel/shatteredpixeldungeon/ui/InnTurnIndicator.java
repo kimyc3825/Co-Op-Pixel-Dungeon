@@ -14,6 +14,8 @@ public final class InnTurnIndicator extends Component {
 	private ColorBlock back;
 	private RenderedTextBlock text;
 	private String shown = "";
+	// Text of the indicator on screen, for test tooling.
+	private static volatile String visibleText;
 
 	@Override
 	protected void createChildren() {
@@ -32,10 +34,23 @@ public final class InnTurnIndicator extends Component {
 			layout();
 		}
 		visible = true;
+		visibleText = label;
 	}
 
 	public void hide() {
 		visible = false;
+		visibleText = null;
+	}
+
+	/** The text the indicator currently shows, or null when hidden. */
+	public static String visibleText() {
+		return visibleText;
+	}
+
+	@Override
+	public void destroy() {
+		visibleText = null;
+		super.destroy();
 	}
 
 	private static String seconds(float seconds) {

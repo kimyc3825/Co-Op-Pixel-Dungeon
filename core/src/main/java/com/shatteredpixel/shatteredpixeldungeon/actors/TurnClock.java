@@ -53,6 +53,8 @@ public final class TurnClock {
 	// The member's time when the hero was suspended for the member's command during a freeze.
 	private static volatile float suspendedAtMemberTime = Float.NaN;
 	private static volatile boolean partyActive;
+	// The hero takes a Hero.act() only to refresh its view after the partner acted: keep its open targeting.
+	private static volatile boolean refreshingHero;
 
 	private TurnClock() {}
 
@@ -64,6 +66,7 @@ public final class TurnClock {
 			countdown = false;
 			heroSuspended = false;
 			partyActive = false;
+			refreshingHero = false;
 		}
 	}
 
@@ -82,6 +85,11 @@ public final class TurnClock {
 		if (!party.acceptsCommands()) return null;
 		InnPartyMember member = party.activeMember(Dungeon.level);
 		return member != null && Actor.findById(member.id()) == member ? member : null;
+	}
+
+	/** True while the hero's current act() only refreshes its turn after the partner acted. */
+	public static boolean refreshingHero() {
+		return refreshingHero;
 	}
 
 	/** True while the party turn clock schedules the hero and a party member. */
@@ -213,6 +221,7 @@ public final class TurnClock {
 			// The world moved on while the hero sat out: it takes a fresh turn through Hero.act(), which observes,
 			// refreshes the visible enemies and the attack indicator, and readies the interface.
 			heroSuspended = false;
+			refreshingHero = true;
 			((Hero) actor).ready = false;
 		}
 	}
@@ -241,6 +250,7 @@ public final class TurnClock {
 
 	/** A player finished its act(): time it spent counts as input. */
 	static void acted(Actor actor) {
+		if (actor instanceof Hero) refreshingHero = false;
 		float time = Actor.timeOf(actor);
 		synchronized (LOCK) {
 			TurnPolicy.spent(state(actor), time);
@@ -297,6 +307,7 @@ public final class TurnClock {
 			// observes, refreshes visible enemies and the attack indicator, readies the interface, and is then
 			// decided on again (a running grace keeps running).
 			heroSuspended = false;
+			refreshingHero = true;
 			return new Decided(null, true);
 		}
 		switch (decision) {

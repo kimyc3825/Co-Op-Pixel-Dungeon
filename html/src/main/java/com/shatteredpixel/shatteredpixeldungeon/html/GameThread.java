@@ -88,6 +88,12 @@ public class GameThread implements ApplicationListener {
 				return AutoTest.status();
 			}
 		});
+		if (WebBuildConfig.VERSION.endsWith("-INDEV")) WebJS.registerDebugTools(new WebJS.DebugCommand() {
+			@Override
+			public String run(String command, String argument) {
+				return DebugTools.command(GameThread.this, command, argument);
+			}
+		});
 		WebJS.registerState(new WebJS.StateProvider() {
 			@Override
 			public String state() {

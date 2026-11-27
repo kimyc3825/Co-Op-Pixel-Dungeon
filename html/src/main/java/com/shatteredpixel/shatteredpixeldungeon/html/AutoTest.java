@@ -79,7 +79,8 @@ public class AutoTest {
 			com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty.Snapshot state = party.latest();
 			return "guest scene=" + Game.scene().getClass().getSimpleName() + (state == null ? " no snapshot"
 					: " rev=" + state.revision + " depth=" + state.depth + " ack=" + state.ack + " turn=" + state.turn
-					+ " grace=" + state.grace + " player=" + state.player + " actors=" + state.actors.split(";")[1]);
+					+ " grace=" + state.grace + " player=" + state.player + " actors=" + state.actors.split(";")[1])
+					+ " indicator=[" + com.shatteredpixel.shatteredpixeldungeon.ui.InnTurnIndicator.visibleText() + "]";
 		}
 		if (hero == null) return "no hero, scene=" + Game.scene().getClass().getSimpleName();
 		return "runs=" + runs + " deepest=" + deepest + " enabled=" + enabled + " depth=" + Dungeon.depth + " hp=" + hero.HP + "/" + hero.HT + " lvl=" + hero.lvl
@@ -91,6 +92,18 @@ public class AutoTest {
 				+ " scene=" + Game.scene().getClass().getSimpleName() + (stuck > 0 ? "\n" + around(hero.pos, 9) : "");
 	}
 
+	//hostile mobs as id:pos:hp:time:state
+	private static String enemies(){
+		StringBuilder sb = new StringBuilder("[");
+		for (Mob m : Dungeon.level.mobs.toArray(new Mob[0])) {
+			if (m.alignment != Char.Alignment.ENEMY || !m.isAlive()) continue;
+			if (sb.length() > 1) sb.append(',');
+			sb.append(m.id()).append(':').append(m.pos).append(':').append(m.HP).append(':')
+					.append(Actor.now() + m.cooldown()).append(':').append(m.state.getClass().getSimpleName());
+		}
+		return sb.append(']').toString();
+	}
+
 	//party host: the turn clock and the guest's member
 	private static String partyStatus( Hero hero ){
 		com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember member =
@@ -98,7 +111,10 @@ public class AutoTest {
 		return " heroTime=" + (Actor.now() + hero.cooldown())
 				+ (member == null ? " member=none" : " memberPos=" + member.pos + " memberTime=" + (Actor.now() + member.cooldown()))
 				+ " wait=" + com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock.waitingOn()
-				+ " grace=" + com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock.graceRemaining();
+				+ " grace=" + com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock.graceRemaining()
+				+ " indicator=[" + com.shatteredpixel.shatteredpixeldungeon.ui.InnTurnIndicator.visibleText() + "]"
+				+ " prompt=[" + GameScene.cellSelectionPrompt() + "]"
+				+ " enemies=" + enemies();
 	}
 
 	//terrain codes around a cell, '*' = hero, lowercase hex = impassable, '.' = passable; for debugging the driver
