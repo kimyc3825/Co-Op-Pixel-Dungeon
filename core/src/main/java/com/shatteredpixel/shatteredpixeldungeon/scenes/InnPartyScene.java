@@ -5,9 +5,9 @@ import com.badlogic.gdx.Input;
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
-import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
+import com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Terrain;
@@ -23,6 +23,7 @@ import com.shatteredpixel.shatteredpixeldungeon.tiles.FogOfWar;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.RaisedTerrainTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.ui.IconButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
+import com.shatteredpixel.shatteredpixeldungeon.ui.InnTurnIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RedButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Window;
@@ -65,7 +66,7 @@ public final class InnPartyScene extends PixelScene {
         return true;
     };
     private InnOriginalParty party;
-    private Group world, figures, loot, fatigue;
+    private Group world, figures, loot, markers;
     private DungeonTerrainTilemap ground;
     private RaisedTerrainTilemap raised;
     private DungeonWallsTilemap walls;
@@ -76,7 +77,10 @@ public final class InnPartyScene extends PixelScene {
     private RenderedTextBlock status;
     private IconButton menuButton;
     private RedButton attackButton;
-    private RedButton timeButton;
+    private RedButton waitButton;
+    private InnTurnIndicator turnIndicator;
+    // Countdown of the latest snapshot, counted down locally between snapshots.
+    private float graceShown;
     private Integer attackTarget;
     private boolean spaceHeld;
     private int revision;
@@ -116,21 +120,20 @@ public final class InnPartyScene extends PixelScene {
         attackButton.setRect(uiCamera.width - 54, uiCamera.height - 22, 48, 16);
         attackButton.visible = attackButton.active = false;
         add(attackButton);
-        timeButton = new RedButton("1× (Space)", 7) {
+        waitButton = new RedButton("대기 (Space)", 7) {
             @Override
             protected void onClick() {
-                toggleTime();
-            }
-
-            @Override
-            protected boolean tracksLongClick() {
-                return false;
+                waitTurn();
             }
         };
-        timeButton.camera = uiCamera;
-        timeButton.setRect(uiCamera.width - 110, uiCamera.height - 22, 52, 16);
-        timeButton.visible = timeButton.active = false;
-        add(timeButton);
+        waitButton.camera = uiCamera;
+        waitButton.setRect(uiCamera.width - 110, uiCamera.height - 22, 52, 16);
+        waitButton.visible = waitButton.active = false;
+        add(waitButton);
+        turnIndicator = new InnTurnIndicator();
+        turnIndicator.camera = uiCamera;
+        turnIndicator.setRect(0, 26, uiCamera.width, InnTurnIndicator.HEIGHT);
+        add(turnIndicator);
         KeyEvent.addKeyListener(keys);
         KeyEvent.captureKey(Input.Keys.SPACE, space);
         ScrollEvent.addScrollListener(scrolling);
@@ -152,20 +155,20 @@ public final class InnPartyScene extends PixelScene {
         }
         super.update();
         if (water != null) {
-            waterOffset -= 5 * InnAtb.gameElapsed(Game.elapsed);
+            waterOffset -= 5 * Game.elapsed;
             water.offsetTo(0, waterOffset);
             waterOffset = water.offsetY();
         }
         party.updateGuest(Game.elapsed);
+        updateTurnIndicator(state);
         repeatIn -= Game.elapsed;
         if (repeatIn <= 0 && !party.awaitingAction() && !showingMenu()) moveHeld();
     }
 
     private void apply(InnOriginalParty.Snapshot state) {
         revision = state.revision;
-        InnAtb.setSlowTime(state.slowTime);
-        updateTimeButton();
-        timeButton.visible = timeButton.active = state.result.equals("play");
+        graceShown = state.grace / 10f;
+        waitButton.visible = waitButton.active = state.result.equals("play");
         player = state.player;
         if (state.floor != floor) {
             floor = state.floor;
@@ -212,10 +215,9 @@ public final class InnPartyScene extends PixelScene {
         }
         attackButton.visible = attackButton.active = attackTarget != null;
         if (self != null) {
-            String energy = (state.energy / 10) + "." + (state.energy % 10);
             status.text(state.depth + "층 · HP " + self.actor.HP + "/" + self.actor.HT
-                    + " · ATB " + energy + "/10" + (self.actor.HP <= 0 ? " · 쓰러짐" : "")
-                    + "\n방향키 이동 · 클릭/Q 평타 · Esc 메뉴");
+                    + (self.actor.HP <= 0 ? " · 쓰러짐" : "")
+                    + "\n방향키 이동 · 클릭/Q 평타 · Space 대기 · Esc 메뉴");
         }
     }
 
@@ -265,8 +267,8 @@ public final class InnPartyScene extends PixelScene {
         world.add(walls);
         fog = new FogOfWar(state.width, state.height);
         world.add(fog);
-        fatigue = new Group();
-        world.add(fatigue);
+        markers = new Group();
+        world.add(markers);
         world.add(new PointerArea(ground) {
             @Override
             protected void onClick(PointerEvent event) {
@@ -278,14 +280,16 @@ public final class InnPartyScene extends PixelScene {
         erase(status);
         erase(menuButton);
         erase(attackButton);
-        erase(timeButton);
+        erase(waitButton);
+        erase(turnIndicator);
         add(world);
         add(status);
+        add(turnIndicator);
         add(menuButton);
         add(attackButton);
-        add(timeButton);
+        add(waitButton);
         attackButton.givePointerPriority();
-        timeButton.givePointerPriority();
+        waitButton.givePointerPriority();
         menuButton.givePointerPriority();
         for (var component : members.toArray(new Gizmo[0])) {
             if (component instanceof Window) {
@@ -297,17 +301,13 @@ public final class InnPartyScene extends PixelScene {
 
     private void applyActors(InnOriginalParty.Snapshot state) {
         Set<Integer> present = new HashSet<>();
-        Set<Integer> tiredActors = new HashSet<>();
         Set<Integer> alertedActors = new HashSet<>();
         String[] rows = state.actors.split(";");
         for (String row : rows) {
-            Set<Integer> ids;
-            if (row.startsWith(InnOriginalParty.FATIGUE_RECORD)) ids = tiredActors;
-            else if (row.startsWith(InnOriginalParty.DETECTION_RECORD)) ids = alertedActors;
-            else continue;
+            if (!row.startsWith(InnOriginalParty.DETECTION_RECORD)) continue;
             for (String id : row.substring(1).split(",")) {
                 try {
-                    ids.add(Integer.parseInt(id));
+                    alertedActors.add(Integer.parseInt(id));
                 } catch (NumberFormatException ignored) {
                     // Skip invalid status records.
                 }
@@ -315,8 +315,7 @@ public final class InnPartyScene extends PixelScene {
         }
         for (String row : rows) {
             String[] columns = row.split(",", -1);
-            if (columns.length != 6 || row.startsWith(InnOriginalParty.FATIGUE_RECORD)
-                    || row.startsWith(InnOriginalParty.DETECTION_RECORD)) continue;
+            if (columns.length != 6 || row.startsWith(InnOriginalParty.DETECTION_RECORD)) continue;
             try {
                 int id = Integer.parseInt(columns[0]);
                 int cell = Integer.parseInt(columns[1]);
@@ -352,8 +351,7 @@ public final class InnPartyScene extends PixelScene {
                     }
                 }
                 view.sprite.alpha(hp == 0 ? 0.4f : 1f);
-                view.sprite.showInnMonsterSweat(hp > 0 && tiredActors.contains(id), fatigue);
-                if (hp > 0 && alertedActors.contains(id)) view.sprite.showAlert(fatigue);
+                if (hp > 0 && alertedActors.contains(id)) view.sprite.showAlert(markers);
                 else view.sprite.hideAlert();
             } catch (NumberFormatException ignored) {
                 // Skip invalid actor records.
@@ -450,22 +448,27 @@ public final class InnPartyScene extends PixelScene {
         boolean firstPress = event.pressed && !spaceHeld;
         spaceHeld = event.pressed;
         if (KeyBindings.bindingKey) return false;
-        if (firstPress && !showingMenu()) toggleTime();
+        if (firstPress && !showingMenu()) waitTurn();
         return true;
     }
 
-    private void toggleTime() {
+    /** Asks the host to let this player wait one turn. */
+    private void waitTurn() {
         if (party == null || showingMenu()) return;
-        party.toggleTime();
-        updateTimeButton();
+        ActorView self = actors.get(player);
+        if (self == null || !self.actor.isAlive()) return;
+        party.command("W", 0, 0);
     }
 
-    private void updateTimeButton() {
-        String speed = InnAtb.slowTime() ? "0.5×" : "1×";
-        boolean pending = party.awaitingTimeChange();
-        String label = speed + (pending ? " …" : " (Space)");
-        if (!label.equals(timeButton.text())) timeButton.text(label);
-        timeButton.textColor(pending || InnAtb.slowTime() ? 0xFFCE78 : 0xFFFFFF);
+    private void updateTurnIndicator(InnOriginalParty.Snapshot state) {
+        if (state == null || turnIndicator == null) return;
+        if (state.turn == TurnClock.WAIT_NONE || !state.result.equals("play")) {
+            turnIndicator.hide();
+            return;
+        }
+        graceShown = Math.max(0f, graceShown - Game.elapsed);
+        // The host's party member is this screen's player.
+        turnIndicator.show(state.turn == TurnClock.WAIT_GUEST, graceShown);
     }
 
     private void attackSelected() {
@@ -491,8 +494,9 @@ public final class InnPartyScene extends PixelScene {
         ActorView self = actors.get(player);
         InnOriginalParty.Snapshot state = party.latest();
         Level level = Dungeon.level;
-        // With less than one point of energy the host may hold the step, so wait for its answer instead.
-        if (self == null || state == null || !self.actor.isAlive() || self.sprite.isMoving || state.energy < 10) return;
+        // While the world waits for the host player the step is queued, so wait for the host's answer instead.
+        if (self == null || state == null || !self.actor.isAlive() || self.sprite.isMoving
+                || state.turn == TurnClock.WAIT_HOST) return;
         int from = self.actor.pos;
         int cell = from + dx + dy * level.width();
         if (!level.insideMap(cell) || !level.adjacent(from, cell) || !level.passable[cell] || level.pit[cell]) return;

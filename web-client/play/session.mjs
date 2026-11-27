@@ -1,27 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Inn and party networking over the WebSocket protocol in server/PROTOCOL.md.
 import { isPotion, PRISON, SEWERS } from './rules.mjs';
 import { loadBattleRuntime } from './runtime-loader.mjs';
 import { normalizeAppearance } from './avatar-catalog.mjs';
 import { loadInnLayout, localInnState, walkable } from './inn-layout.mjs';
 
-const INN = '/api/v2/inn/';
-const LINK = '/api/v4/link/';
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
-const INN_POLL_MS = 700;
+const WIRE_VERSION = 1;
+const INN_PATH = '/api/v5/inn';
+const LINK_PATH = '/api/v5/link';
+const ORIGINAL_PROTOCOL = 11;
+const LEGACY_PROTOCOL = 9;
 export const INN_MOVE_MS = 150;
-const MAX_INN_STEPS = 2;
-const RELAY_POLL_MS = 165;
-const DIRECT_POLL_MS = 2500;
-const SIGNAL_RETRY_MS = 450;
+const PING_MS = 25000;
+const REQUEST_TIMEOUT_MS = 8000;
+const RECONNECT_MS = [500, 1000, 2000, 4000, 8000];
+// The server keeps a run open for 20 s after a socket drops; stop retrying a little earlier.
+const LINK_RECONNECT_WINDOW_MS = 15000;
 const HEARTBEAT_MS = 650;
-const DIRECT_TIMEOUT_MS = 3500;
 const COMMAND_RETRY_MS = 275;
-const ENTRY_TIMEOUT_MS = 16000;
+const ENTRY_TIMEOUT_MS = 20000;
 const HOST_TIMEOUT_MS = 14000;
 const ORIGINAL_ENTRY_TIMEOUT_MS = 150000;
 const MAX_COMMANDS = 16;
 const MAX_MESSAGE_BYTES = 24 * 1024;
-const MAX_CHANNEL_BUFFER = 128 * 1024;
+const MAX_HISTORY = 60;
 const encoder = new TextEncoder();
 
 const now = () => Math.floor(performance.timeOrigin + performance.now());
@@ -30,32 +32,95 @@ const newKey = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint
 const newSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
 
 class ApiError extends Error {
-  constructor(status, code) {
+  constructor(code) {
     super(code);
-    this.status = status;
     this.code = code;
   }
 }
 
-async function request(path, key, method, body, keepalive = false) {
-  const headers = { Authorization: `Bearer ${key}` };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const response = await fetch(path, {
-    method, headers, body: body === undefined ? undefined : JSON.stringify(body), keepalive,
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-    throw new ApiError(response.status, error?.error ?? 'request_failed');
+function socketUrl(path, params) {
+  const url = new URL(path, globalThis.location?.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  for (const [name, value] of Object.entries(params)) url.searchParams.set(name, String(value));
+  return url.href;
+}
+
+/** One WebSocket with request/response correlation (`ref`) and keep-alive pings. */
+class Channel {
+  constructor(url, { onOpen, onFrame, onClose }) {
+    this.refs = new Map();
+    this.nextRef = 0;
+    this.ws = new WebSocket(url);
+    this.ws.addEventListener('open', () => {
+      // The server answers the literal `ping` without waking its Durable Object.
+      this.pinger = setInterval(() => this.sendText('ping'), PING_MS);
+      onOpen();
+    });
+    this.ws.addEventListener('message', event => {
+      if (typeof event.data !== 'string' || event.data === 'pong') return;
+      let frame;
+      try { frame = JSON.parse(event.data); } catch { return; }
+      if (!frame || typeof frame.t !== 'string') return;
+      const pending = frame.ref != null && (frame.t === 'ok' || frame.t === 'error') ? this.refs.get(frame.ref) : null;
+      if (pending) {
+        this.refs.delete(frame.ref);
+        clearTimeout(pending.timer);
+        if (frame.t === 'ok') pending.resolve(frame);
+        else pending.reject(new ApiError(frame.code));
+        return;
+      }
+      onFrame(frame);
+    });
+    this.ws.addEventListener('close', event => {
+      clearInterval(this.pinger);
+      for (const pending of this.refs.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new ApiError('offline'));
+      }
+      this.refs.clear();
+      onClose(event.code, event.reason);
+    });
   }
-  return response.status === 204 ? null : response.json();
+
+  get open() { return this.ws.readyState === WebSocket.OPEN; }
+
+  sendText(text) {
+    if (!this.open) return false;
+    try {
+      this.ws.send(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  send(frame) { return this.sendText(JSON.stringify(frame)); }
+
+  request(frame) {
+    const ref = ++this.nextRef;
+    return new Promise((resolve, reject) => {
+      if (!this.send({ ...frame, ref })) {
+        reject(new ApiError('offline'));
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.refs.delete(ref);
+        reject(new ApiError('timeout'));
+      }, REQUEST_TIMEOUT_MS);
+      this.refs.set(ref, { resolve, reject, timer });
+    });
+  }
+
+  close(code = 1000, reason = '') {
+    try { this.ws.close(code, reason); } catch { /* closing */ }
+  }
 }
 
 const active = status => status === 'active' || status === 'won';
-const linkEnded = error => error.status === 404 || error.status === 410 || error.code === 'link_inactive';
 const validName = value => value.length > 0 && [...value].length <= 20 && !/[\p{C}\p{Zl}\p{Zp}]/u.test(value);
 const attackResults = new Set(['hit', 'out_of_reach', 'blocked', 'target_gone', 'miss', 'ally_blocked']);
 const mapCell = (map, x, y) => Number.isSafeInteger(x) && Number.isSafeInteger(y) && typeof map[y]?.[x] === 'string';
+const reconnectDelay = attempt => RECONNECT_MS[Math.min(attempt, RECONNECT_MS.length - 1)] * (0.75 + Math.random() / 2);
 
 function normalizeAction(type, dx, dy, target) {
   if (type === 'move' && Number.isInteger(dx) && Number.isInteger(dy) && Math.max(Math.abs(dx), Math.abs(dy)) === 1) {
@@ -102,24 +167,24 @@ function validKnowledge(knowledge) {
 
 export class PlaySession {
   constructor({ onInn = () => {}, onBattle = () => {}, onStatus = () => {}, onLoading = () => {},
-    onOriginalParty = null, relayOnly = false, iceServers = ICE_SERVERS, runtimeLoader = loadBattleRuntime } = {}) {
+    onOriginalParty = null, runtimeLoader = loadBattleRuntime } = {}) {
     this.onInn = onInn;
     this.onBattle = onBattle;
     this.onStatus = onStatus;
     this.onLoading = onLoading;
     this.onOriginalParty = onOriginalParty;
     this.runtimeLoader = runtimeLoader;
-    this.relayOnly = relayOnly;
-    this.iceServers = iceServers;
-    this.inn = this.frame = this.battle = this.key = null;
-    this.innSync = this.innTimer = this.innMoves = this.innMoveRecovery = null;
+    this.inn = this.frame = this.battle = this.key = this.channel = this.layout = this.position = null;
     this.name = '';
     this.appearance = normalizeAppearance();
     this.theme = SEWERS;
     this.friendlyFire = false;
     this.history = [];
-    this.after = this.generation = this.positionRevision = this.retryAt = this.nextMoveAt = this.nextMoveSendAt = 0;
-    this.online = this.closed = this.leftInn = this.renamePending = this.innSuspended = false;
+    this.shard = null;
+    this.welcomeWaiters = [];
+    this.reconnectAttempt = this.channelGeneration = this.nextMoveAt = 0;
+    this.reconnectTimer = null;
+    this.online = this.closed = this.leftInn = this.innSuspended = this.stopped = false;
     this.ignoredMatch = null;
     this.status = '';
     this.visibilityChanged = () => {
@@ -127,11 +192,12 @@ export class PlaySession {
         if (this.battle?.host && !this.battle.localPlayer && active(this.frame?.state?.status)) {
           this.#status('파티장 탭을 열어 두어야 원정 연결을 유지할 수 있습니다.');
         }
-      } else if (this.battle) {
-        this.#status('');
-        this.battle.resume();
       } else {
-        void this.#refreshInn();
+        if (this.battle) {
+          this.#status('');
+          this.battle.resume();
+        }
+        if (!this.channel && this.key && !this.stopped) this.#openInn();
       }
     };
     this.pageHidden = event => { if (!event.persisted) this.close(); };
@@ -146,14 +212,17 @@ export class PlaySession {
     }
     this.name = value;
     this.appearance = normalizeAppearance(appearance);
-    this.renamePending = true;
     if (!this.key) {
       this.key = newKey();
-      this.innTimer = setInterval(() => void this.#refreshInn(), INN_POLL_MS);
       globalThis.document?.addEventListener('visibilitychange', this.visibilityChanged);
       globalThis.addEventListener?.('pagehide', this.pageHidden);
     }
-    return this.#refreshInn('enter');
+    // A connected player renames in place; otherwise the next hello carries the profile.
+    if (this.online && this.channel?.open) return this.#innAction({ t: 'profile', name: this.name, appearance: this.appearance });
+    this.stopped = false;
+    const welcomed = this.#nextWelcome();
+    if (!this.channel) this.#openInn();
+    return welcomed;
   }
 
   rename(name, appearance) { return this.join(name, appearance); }
@@ -171,10 +240,11 @@ export class PlaySession {
     return true;
   }
 
-  get innMovePending() { return this.innMoves !== null; }
+  /** True while the last predicted step is still inside its walk cadence. */
+  get innMovePending() { return now() < this.nextMoveAt; }
 
   moveInn(dx, dy) {
-    if (!this.online || this.closed || this.battle || this.innSuspended ||
+    if (!this.online || this.closed || this.battle || this.innSuspended || !this.channel?.open ||
         !Number.isInteger(dx) || !Number.isInteger(dy) || Math.max(Math.abs(dx), Math.abs(dy)) !== 1) return 'blocked';
     const self = this.inn?.people.find(person => person.id === this.inn.selfId);
     if (!self) return 'blocked';
@@ -183,83 +253,37 @@ export class PlaySession {
     const map = this.inn.map;
     if (!walkable(map, x, y) || (dx && dy && !walkable(map, x, self.y) && !walkable(map, self.x, y))) return 'blocked';
     const time = now();
-    if (this.innMoveRecovery || time < this.nextMoveAt || this.innMoves?.steps.length >= MAX_INN_STEPS) return 'waiting';
-    // Predict on the walk cadence and send ordered, adjacent positions to the inn.
-    const moves = this.innMoves ??= { key: this.key, id: self.id, confirmed: { x: self.x, y: self.y }, steps: [] };
-    moves.steps.push({ x, y });
+    if (time < this.nextMoveAt) return 'waiting';
+    // Predict locally; the server applies steps in order and answers a rejected one with `you`.
     this.nextMoveAt = time + INN_MOVE_MS;
-    this.#showInnPosition(moves.id, { x, y });
-    this.#sendInnMove(moves);
+    this.#showPerson({ ...self, x, y });
+    this.channel.send({ t: 'move', x, y });
     return 'accepted';
   }
 
-  #showInnPosition(id, { x, y }) {
-    const self = this.inn?.people.find(person => person.id === id);
-    if (!self || self.x === x && self.y === y) return;
-    const updated = { ...self, x, y };
-    this.inn = { ...this.inn, people: this.inn.people.map(person => person === self ? updated : person) };
-    this.onInn(this.inn, updated);
-  }
-
-  #sendInnMove(moves) {
-    if (moves !== this.innMoves || moves.sending || moves.timer != null) return;
-    const time = now();
-    if (time < this.nextMoveSendAt) {
-      moves.timer = setTimeout(() => {
-        moves.timer = null;
-        this.#sendInnMove(moves);
-      }, this.nextMoveSendAt - time);
-      return;
-    }
-    const step = moves.steps[0];
-    moves.sending = true;
-    this.nextMoveSendAt = time + INN_MOVE_MS;
-    void request(INN + 'move', moves.key, 'POST', step).then(() => {
-      if (moves !== this.innMoves) return;
-      moves.steps.shift();
-      moves.confirmed = step;
-      this.positionRevision++;
-      moves.sending = false;
-      if (moves.steps.length) this.#sendInnMove(moves);
-      else this.innMoves = null;
-    }, error => {
-      if (moves !== this.innMoves) return;
-      this.#stopInnMoves();
-      this.#innActionError(error);
-      const recovery = this.#refreshInn('sync');
-      this.innMoveRecovery = recovery;
-      void recovery.finally(() => { if (this.innMoveRecovery === recovery) this.innMoveRecovery = null; });
-    });
-  }
-
-  #stopInnMoves() {
-    const moves = this.innMoves;
-    this.innMoves = this.innMoveRecovery = null;
-    if (!moves) return;
-    clearTimeout(moves.timer);
-    this.positionRevision++;
-    this.#showInnPosition(moves.id, moves.confirmed);
-  }
-
-  chat(message) { return this.#innAction('chat', 'POST', { message }); }
-  drink() { return this.#innAction('drink', 'POST'); }
+  chat(message) { return this.#innAction({ t: 'chat', text: message }); }
+  drink() { return this.#innAction({ t: 'drink' }); }
   talkToNpc(npcId) {
+    // A dropped notification must not interrupt a locally displayed conversation.
     if (this.inn?.layoutId && this.online && !this.battle && !this.closed && !this.innSuspended) {
-      // A dropped notification must not interrupt a locally displayed conversation.
-      void request(INN + 'interact', this.key, 'POST', { npcId }).catch(() => {});
+      this.channel?.send({ t: 'interact', npcId });
     }
   }
-  prepare() { return this.#innAction('preparation', 'POST'); }
+  prepare() { return this.#innAction({ t: 'prepare' }); }
   async usePreparation(id) {
     try {
-      await request(INN + 'preparation', this.key, 'DELETE', { id });
+      if (!this.channel?.open) throw new ApiError('offline');
+      await this.channel.request({ t: 'use_preparation', id });
     } catch {
       // Keep a failed consumption from carrying over into another expedition.
       this.key = newKey();
     }
   }
-  match(targetId) { return this.#innAction('match', 'PUT', targetId ? { queued: true, targetId } : { queued: true }); }
-  cancelMatch() { return this.#innAction('match', 'PUT', { queued: false }); }
+  match(targetId) {
+    const options = { friendlyFire: this.friendlyFire, theme: this.theme };
+    return this.#innAction(targetId ? { t: 'join', targetId, ...options } : { t: 'queue', ...options });
+  }
+  cancelMatch() { return this.#innAction({ t: 'cancel' }); }
 
   practice() {
     return this.#startLocalBattle('practice');
@@ -285,22 +309,20 @@ export class PlaySession {
   originalPartyReady() { this.battle?.originalReady(); }
   sendOriginalParty(data) { this.battle?.sendOriginal(data); }
 
+  /** Hides this player from the inn while a solo expedition runs; the socket stays open. */
   async suspendInn() {
     if (this.closed || this.battle || this.innSuspended || this.inn?.match) return false;
     this.innSuspended = true;
-    this.generation++;
-    this.#stopInnMoves();
-    // Wait for an in-flight join before deleting its membership and queue.
-    await this.innSync;
-    if (this.closed) return false;
     if (!this.key) return true;
-    try {
-      await request(INN + 'session', this.key, 'DELETE');
-    } catch {
-      this.innSuspended = false;
-      void this.#refreshInn('sync');
-      return false;
+    if (this.channel?.open && this.online) {
+      try {
+        await this.channel.request({ t: 'away' });
+      } catch {
+        this.innSuspended = false;
+        return false;
+      }
     }
+    if (this.closed) return false;
     this.leftInn = true;
     this.online = false;
     this.inn = null;
@@ -312,10 +334,8 @@ export class PlaySession {
     if (this.closed || !this.innSuspended) return false;
     this.innSuspended = false;
     if (!this.key) return true;
-    this.leftInn = false;
     this.ignoredMatch = null;
-    this.retryAt = this.nextMoveAt = this.nextMoveSendAt = 0;
-    return this.#refreshInn('enter');
+    return this.#enterInn();
   }
 
   async returnToInn() {
@@ -323,127 +343,248 @@ export class PlaySession {
     const battle = this.battle;
     battle.close();
     this.battle = this.frame = null;
-    this.generation++;
     this.onBattle(null);
-    if (this.leftInn) {
-      if (battle.matchId) this.key = newKey();
-      this.leftInn = false;
-      this.nextMoveAt = this.nextMoveSendAt = this.retryAt = this.after = 0;
-      this.history = [];
-    } else if (battle.matchId) {
-      await this.cancelMatch();
-    }
-    return this.#refreshInn('sync');
+    if (battle.matchId) this.ignoredMatch = battle.matchId;
+    return this.#enterInn();
   }
 
   close() {
     if (this.closed) return;
     this.closed = true;
-    this.#stopInnMoves();
-    clearInterval(this.innTimer);
+    clearTimeout(this.reconnectTimer);
     globalThis.document?.removeEventListener('visibilitychange', this.visibilityChanged);
     globalThis.removeEventListener?.('pagehide', this.pageHidden);
     this.battle?.close();
-    if (this.key && !this.leftInn) this.#leaveInn();
+    this.channel?.close(1000, 'bye');
+    this.#settleWelcome(false);
   }
 
-  async #refreshInn(force) {
-    if (this.closed || this.battle || this.innSuspended || !this.key || now() < this.retryAt) return false;
-    if (this.innSync) {
-      if (!force) return this.innSync;
-      await this.innSync;
-      return this.#refreshInn(force);
+  // ---- inn socket ----
+
+  #present() { return !this.leftInn && !this.innSuspended; }
+
+  #spawn() {
+    const spawns = this.layout?.spawns ?? [];
+    return spawns.length ? spawns[newSeed() % spawns.length] : { x: 1, y: 1 };
+  }
+
+  /** Shows the player in the inn again at a fresh spawn point. */
+  async #enterInn() {
+    this.leftInn = false;
+    this.nextMoveAt = 0;
+    this.position = null;
+    if (this.stopped) return false;
+    const welcomed = this.#nextWelcome();
+    if (this.channel?.open) {
+      this.position = this.#spawn();
+      this.channel.request({ t: 'enter', ...this.position }).catch(error => {
+        if (error.code !== 'offline') this.#innActionError(error);
+      });
+    } else if (!this.channel) {
+      this.#openInn();
     }
-    const key = this.key;
-    const generation = this.generation;
-    const positionRevision = this.positionRevision;
-    const enter = force === 'enter' || !this.inn || this.renamePending;
-    const name = this.name;
-    const appearance = this.appearance;
-    const wasOnline = this.online;
-    this.innSync = loadInnLayout().then(async layout => {
-      const params = { after: this.after };
-      if (enter) {
-        const spawn = layout.spawns[newSeed() % layout.spawns.length];
-        Object.assign(params, { name, appearance, dungeonProtocol: this.onOriginalParty ? 11 : 9,
-          layout: { id: layout.id, x: spawn.x, y: spawn.y } });
-      }
-      return request(INN + (enter ? 'session' : 'sync'), key, enter ? 'PUT' : 'POST', params)
-        .then(fresh => localInnState(fresh, layout));
-    }).then(fresh => {
-      if (this.closed || this.battle || generation !== this.generation) return false;
-      if (enter && name === this.name && appearance === this.appearance) this.renamePending = false;
-      // The roster read can have started before movement reached the server.
-      if ((this.innMoves || positionRevision !== this.positionRevision) && fresh.selfId === this.inn?.selfId) {
-        const self = this.inn.people.find(person => person.id === fresh.selfId);
-        if (self) fresh.people = fresh.people.map(person => person.id === self.id ? { ...person, x: self.x, y: self.y } : person);
-      }
-      this.history = [...this.history, ...fresh.events.filter(event => event.id > this.after)].slice(-60);
-      this.after = fresh.after;
-      this.inn = { ...fresh, events: this.history };
-      this.online = true;
-      if (enter || !wasOnline) this.#status('');
-      this.onInn(this.inn);
-      if (fresh.match && fresh.match.id !== this.ignoredMatch) this.#beginBattle({ matchId: fresh.match.id, matchRole: fresh.match.role });
-      return true;
-    }).catch(error => {
-      if (!this.closed && !this.battle && generation === this.generation) this.#innSyncError(error);
-      return false;
-    }).finally(() => { this.innSync = null; });
-    return this.innSync;
+    return welcomed;
   }
 
-  #innSyncError(error) {
-    this.online = false;
-    if (error.status === 404) {
-      this.#stopInnMoves();
-      this.inn = null;
-      this.history = [];
-      this.after = 0;
-      this.#status('여관에 다시 입장하는 중…');
-    } else if (error.code === 'rate_limited') {
-      this.retryAt = now() + 60000;
-      this.#status('접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.');
-    } else if (error.code === 'inn_full') {
-      this.retryAt = now() + 5000;
-      this.#status('여관이 가득 찼습니다. 자리가 나면 입장합니다.');
-    } else {
-      this.#status('여관 서버에 다시 연결하는 중…');
-    }
+  #nextWelcome() {
+    return new Promise(resolve => {
+      const finish = value => {
+        clearTimeout(timer);
+        this.welcomeWaiters = this.welcomeWaiters.filter(waiter => waiter !== finish);
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(false), REQUEST_TIMEOUT_MS + 4000);
+      this.welcomeWaiters.push(finish);
+    });
   }
 
-  async #innAction(path, method, body) {
-    if (!this.online || this.battle || this.closed || this.innSuspended) return false;
-    const key = this.key;
+  #settleWelcome(value) {
+    for (const waiter of [...this.welcomeWaiters]) waiter(value);
+  }
+
+  async #openInn() {
+    if (this.closed || this.stopped || this.channel || !this.key) return;
+    clearTimeout(this.reconnectTimer);
+    const generation = ++this.channelGeneration;
+    let layout;
     try {
-      await request(INN + path, key, method, body);
-      if (this.key === key && !this.closed && !this.battle && !this.innSuspended) {
-        this.#status('');
-        await this.#refreshInn('sync');
+      layout = await loadInnLayout();
+    } catch {
+      if (generation === this.channelGeneration) this.#scheduleReconnect('여관 서버에 다시 연결하는 중…');
+      return;
+    }
+    if (this.closed || this.channel || generation !== this.channelGeneration) return;
+    this.layout = layout;
+    const params = { layout: layout.id };
+    if (Number.isInteger(this.shard)) params.shard = this.shard;
+    const channel = new Channel(socketUrl(INN_PATH, params), {
+      onOpen: () => {
+        this.position ??= this.#spawn();
+        const queued = Boolean(this.inn?.queued);
+        channel.send({ t: 'hello', v: WIRE_VERSION, key: this.key, name: this.name, appearance: this.appearance,
+          dungeonProtocol: this.onOriginalParty ? ORIGINAL_PROTOCOL : LEGACY_PROTOCOL, ...this.position,
+          present: this.#present(), queued, friendlyFire: this.friendlyFire, theme: this.theme });
+      },
+      onFrame: frame => { if (this.channel === channel) this.#innFrame(frame); },
+      onClose: code => { if (this.channel === channel) this.#innClosed(code); },
+    });
+    this.channel = channel;
+  }
+
+  #scheduleReconnect(message, delay = reconnectDelay(this.reconnectAttempt++)) {
+    if (this.closed || this.stopped) return;
+    this.#status(message);
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => this.#openInn(), delay);
+  }
+
+  #innClosed(code) {
+    this.channel = null;
+    this.online = false;
+    this.#settleWelcome(false);
+    if (this.closed) return;
+    if (code === 4001) {
+      this.stopped = true;
+      this.#status('새 버전이 나왔습니다. 페이지를 새로 고쳐 주세요.');
+    } else if (code === 4009) {
+      this.stopped = true;
+      this.#status('다른 창에서 여관에 접속했습니다.');
+    } else if (code === 4013) {
+      this.#scheduleReconnect('여관이 가득 찼습니다. 자리가 나면 입장합니다.', 5000);
+    } else if (code === 4008) {
+      this.#scheduleReconnect('접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.', 10000);
+    } else {
+      this.#scheduleReconnect('여관 서버에 다시 연결하는 중…');
+    }
+    if (!this.battle && this.inn) this.onInn(this.inn);
+  }
+
+  #innFrame(frame) {
+    if (frame.t === 'welcome') {
+      this.#welcome(frame);
+      return;
+    }
+    if (frame.t === 'error') {
+      if (frame.code === 'match_failed' && !this.battle) this.#status('동료와 연결하지 못했습니다. 다시 시도해 주세요.');
+      return;
+    }
+    // Inn updates are not shown during an expedition; the next welcome carries a fresh roster.
+    if (!this.inn || this.battle || !this.online) return;
+    switch (frame.t) {
+      case 'person': return this.#upsertPerson(frame.person);
+      case 'gone': return this.#setInn({ ...this.inn, people: this.inn.people.filter(person => person.id !== frame.id) });
+      case 'moved': {
+        const person = this.inn.people.find(candidate => candidate.id === frame.id);
+        if (person && frame.id !== this.inn.selfId && walkable(this.inn.map, frame.x, frame.y)) {
+          this.#showPerson({ ...person, x: frame.x, y: frame.y });
+        }
+        return;
       }
+      case 'you': {
+        const self = this.inn.people.find(candidate => candidate.id === this.inn.selfId);
+        if (self && walkable(this.inn.map, frame.x, frame.y)) this.#showPerson({ ...self, x: frame.x, y: frame.y });
+        return;
+      }
+      case 'event':
+        this.#addEvents([frame.event]);
+        return this.#setInn({ ...this.inn, now: frame.now, events: this.history, after: this.history.at(-1)?.id ?? 0 });
+      case 'preparation': return this.#setInn({ ...this.inn, preparation: frame.preparation ?? null });
+      case 'matched':
+        this.#setInn({ ...this.inn, match: frame.match, queued: false });
+        if (frame.match && frame.match.id !== this.ignoredMatch) {
+          this.#beginBattle({ matchId: frame.match.id, matchRole: frame.match.role });
+        }
+    }
+  }
+
+  #welcome(frame) {
+    this.shard = frame.shard;
+    this.reconnectAttempt = 0;
+    if (!frame.present || !this.layout || this.battle) {
+      // Reconnected while away (in a dungeon or a solo expedition), or entering a party run.
+      this.online = false;
+      this.#status('');
+      return;
+    }
+    let fresh;
+    try {
+      fresh = localInnState({ ...frame, events: [] }, this.layout);
+    } catch {
+      this.channel?.close(1000, 'invalid_state');
+      return;
+    }
+    this.history = [];
+    this.#addEvents(frame.events ?? []);
+    const self = fresh.people.find(person => person.id === fresh.selfId);
+    this.position = { x: self.x, y: self.y };
+    this.online = true;
+    this.#status('');
+    this.inn = { ...fresh, events: this.history, queued: Boolean(frame.queued) };
+    this.onInn(this.inn);
+    this.#settleWelcome(true);
+    if (frame.match && frame.match.id !== this.ignoredMatch && !this.battle) {
+      this.#beginBattle({ matchId: frame.match.id, matchRole: frame.match.role });
+    }
+  }
+
+  #addEvents(events) {
+    const known = new Set(this.history.map(event => event.id));
+    const fresh = events.filter(event => Number.isSafeInteger(event?.id) && !known.has(event.id));
+    this.history = [...this.history, ...fresh].sort((a, b) => a.id - b.id).slice(-MAX_HISTORY);
+  }
+
+  #upsertPerson(person) {
+    if (!person || typeof person.id !== 'string') return;
+    const self = person.id === this.inn.selfId;
+    const previous = this.inn.people.find(candidate => candidate.id === person.id);
+    // Keep the locally predicted position of this player.
+    const updated = self && previous ? { ...person, x: previous.x, y: previous.y } : person;
+    if (!self && !walkable(this.inn.map, updated.x, updated.y)) return;
+    const people = previous
+      ? this.inn.people.map(candidate => candidate.id === person.id ? updated : candidate)
+      : [...this.inn.people, updated];
+    this.#setInn({ ...this.inn, people, queued: self ? Boolean(person.queued) : this.inn.queued });
+  }
+
+  #showPerson(updated) {
+    if (updated.id === this.inn?.selfId) this.position = { x: updated.x, y: updated.y };
+    this.inn = { ...this.inn, people: this.inn.people.map(person => person.id === updated.id ? updated : person) };
+    this.onInn(this.inn, updated);
+  }
+
+  #setInn(inn) {
+    this.inn = inn;
+    this.onInn(inn);
+  }
+
+  async #innAction(frame) {
+    if (!this.online || this.battle || this.closed || this.innSuspended || !this.channel?.open) return false;
+    try {
+      await this.channel.request(frame);
+      if (!this.closed && !this.battle && !this.innSuspended) this.#status('');
       return true;
     } catch (error) {
-      if (this.key === key && !this.closed && !this.battle && !this.innSuspended) this.#innActionError(error);
+      if (!this.closed && !this.battle && !this.innSuspended) this.#innActionError(error);
       return false;
     }
   }
 
   #innActionError(error) {
-    if (!(error instanceof ApiError)) this.#innSyncError(error);
-    else if (error.code === 'partner_unavailable') this.#status('이 모험가는 지금 참가할 수 없습니다.');
-    else if (error.code === 'activity_rate_limited') this.#status('잠시 뒤 다시 시도해 주세요.');
-    else if (error.code === 'invalid_message') this.#status('대화는 한 줄, 160자까지 보낼 수 있습니다.');
-    else if (error.code === 'session_ended') this.#innSyncError(error);
-    else if (error.code !== 'move_rejected') this.#status('여관 요청을 처리하지 못했습니다.');
+    const code = error?.code;
+    if (code === 'partner_unavailable') this.#status('이 모험가는 지금 참가할 수 없습니다.');
+    else if (code === 'protocol_mismatch') this.#status('이 모험가와는 게임 버전이 달라 함께할 수 없습니다.');
+    else if (code === 'activity_rate_limited') this.#status('잠시 뒤 다시 시도해 주세요.');
+    else if (code === 'invalid_message') this.#status('대화는 한 줄, 160자까지 보낼 수 있습니다.');
+    else if (code === 'invalid_profile') this.#status('닉네임을 1~20자로 입력하세요.');
+    else if (code === 'offline' || code === 'timeout') this.#status('여관 서버에 다시 연결하는 중…');
+    else if (code !== 'move_rejected') this.#status('여관 요청을 처리하지 못했습니다.');
   }
 
   #beginBattle({ matchId = null, matchRole = null, localPlayer = null, localMode = null }) {
     this.ignoredMatch = matchId;
     this.leftInn = false;
-    this.generation++;
-    this.#stopInnMoves();
     const battle = new BattleSession({ key: this.key, matchId, matchRole, localPlayer, localMode,
-      theme: this.theme, friendlyFire: this.friendlyFire, relayOnly: this.relayOnly, iceServers: this.iceServers,
+      theme: this.theme, friendlyFire: this.friendlyFire,
       runtimeLoader: this.runtimeLoader, onLoading: this.onLoading, listener: frame => this.#battleFrame(battle, frame),
       originalParty: matchId && this.onOriginalParty ? event => this.#originalPartyEvent(battle, event) : null });
     this.battle = battle;
@@ -459,9 +600,6 @@ export class PlaySession {
       return;
     }
     if (!this.leftInn && !frame.state.waitingForPartner && frame.state.status === 'active') {
-      this.leftInn = true;
-      this.online = false;
-      this.inn = null;
       this.#leaveInn();
       this.#status('');
     }
@@ -471,12 +609,7 @@ export class PlaySession {
 
   #originalPartyEvent(battle, event) {
     if (this.closed || battle !== this.battle) return;
-    if (event.type === 'paired' && !this.leftInn) {
-      this.leftInn = true;
-      this.online = false;
-      this.inn = null;
-      this.#leaveInn();
-    }
+    if (event.type === 'paired' && !this.leftInn) this.#leaveInn();
     const handled = this.onOriginalParty(event);
     if (event.type === 'ended' && !handled) void this.leaveOriginalParty(event.notice);
   }
@@ -486,7 +619,13 @@ export class PlaySession {
     if (notice && !this.closed && !this.battle) this.#status(notice);
   }
 
-  #leaveInn() { void request(INN + 'session', this.key, 'DELETE', undefined, true).catch(() => {}); }
+  /** Hides this player from the inn for the expedition; the socket stays open for the return. */
+  #leaveInn() {
+    this.leftInn = true;
+    this.online = false;
+    this.inn = null;
+    this.channel?.send({ t: 'away' });
+  }
 
   #status(message) {
     if (message === this.status) return;
@@ -496,7 +635,7 @@ export class PlaySession {
 }
 
 class BattleSession {
-  constructor({ key, matchId, matchRole, localPlayer, localMode, theme, friendlyFire, relayOnly, iceServers,
+  constructor({ key, matchId, matchRole, localPlayer, localMode, theme, friendlyFire,
     runtimeLoader, onLoading, listener, originalParty }) {
     this.key = key;
     this.matchId = matchId;
@@ -505,37 +644,30 @@ class BattleSession {
     this.localMode = localMode;
     this.theme = theme;
     this.friendlyFire = friendlyFire;
-    this.relayOnly = relayOnly;
-    this.iceServers = iceServers;
     this.runtimeLoader = runtimeLoader;
     this.onLoading = onLoading;
     this.listener = listener;
     this.originalParty = originalParty;
     this.startedAt = now();
-    this.frame = this.link = this.engine = this.peer = this.channel = this.runtime = null;
+    this.frame = this.link = this.engine = this.runtime = this.channel = null;
     this.loadAbort = new AbortController();
     this.loadingVersion = null;
     this.loadingFinished = false;
-    this.localSignal = this.relayPending = null;
     this.host = Boolean(localPlayer) || matchRole === 'host';
-    this.closed = this.terminal = this.wasDirect = this.remoteApplied = false;
-    this.syncInFlight = this.signalInFlight = this.relayInFlight = false;
-    this.nextLinkSyncAt = this.nextSignalAt = this.nextRelayAt = this.nextHeartbeatAt = 0;
-    this.nextPingAt = this.nextCommandAt = this.directSince = this.lastDirectAt = 0;
-    this.lastSnapshotAt = this.lastSnapshotSequence = this.relayReceived = 0;
-    this.packetSequence = this.commandSequence = 0;
+    this.closed = this.terminal = false;
+    this.nextHeartbeatAt = this.nextCommandAt = this.lastSnapshotAt = this.lastSnapshotSequence = 0;
+    this.packetSequence = this.commandSequence = this.reconnectAttempt = this.lostAt = 0;
+    this.reconnectTimer = null;
     this.pending = [];
     this.unacked = [];
     if (originalParty) {
-      this.original = {
-        seed: this.host ? String(newSeed()) : null, friendlyFire, launched: false, ready: false, peerReady: false,
-        deadline: this.startedAt + ENTRY_TIMEOUT_MS, peerAt: this.startedAt, nextSendAt: 0, lastByType: new Map(),
-      };
+      this.original = { launched: false, ready: false, peerReady: false, paired: false,
+        deadline: this.startedAt + ENTRY_TIMEOUT_MS };
     }
   }
 
   start() {
-    this.timer = setInterval(() => this.#tick(), 25);
+    this.timer = setInterval(() => this.#tick(), this.original ? 250 : 25);
     if (this.originalParty) this.onLoading({ phase: 'loading', mode: 'party' });
     else void this.runtimeLoader({ simulate: this.host, signal: this.loadAbort.signal, onLoading: update => {
       if (this.loadingFinished) return;
@@ -550,13 +682,7 @@ class BattleSession {
       this.#tick();
     }).catch(() => this.#finish('던전 데이터를 불러오지 못했습니다. 다시 시도해 주세요.'));
     if (this.localPlayer) return;
-    void this.#linkRequest('enter', { matchId: this.matchId }).then(link => {
-      if (this.closed || this.terminal) {
-        this.#leaveLink();
-        return;
-      }
-      this.#acceptLink(link);
-    }, () => this.#finish('파티 던전에 입장하지 못했습니다. 여관에서 다시 시도해 주세요.'));
+    this.#connect();
   }
 
   action(action) {
@@ -569,35 +695,132 @@ class BattleSession {
     if (!this.original?.launched || this.closed || this.terminal) return;
     this.original.ready = true;
     this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
-    this.original.nextSendAt = 0;
-    this.#tick();
+    this.channel?.send({ t: 'ready' });
   }
 
   sendOriginal(data) {
     if (!this.original?.ready || !this.original.peerReady || this.closed || this.terminal || typeof data !== 'string' || !data ||
         encoder.encode(data).byteLength > MAX_MESSAGE_BYTES) return;
-    this.original.nextSendAt = now() + 100;
-    this.#sendOriginal('payload', { data });
-    this.#flushRelay(now());
+    this.channel?.send({ t: 'data', d: data });
   }
 
-  resume() {
-    this.nextLinkSyncAt = 0;
-    this.#tick();
-  }
+  resume() { this.#tick(); }
 
   close() {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
+    clearTimeout(this.reconnectTimer);
     this.#settleLoading('failed', true);
     this.engine?.close(now());
-    if (this.original) {
-      if (this.#direct()) this.#sendOriginal('leave');
-    } else if (this.#direct()) this.#sendDirect(JSON.stringify({ type: 'leave', sequence: 0 }));
-    this.#closePeer();
-    if (this.link) this.#leaveLink();
+    this.#leaveLink();
   }
+
+  // ---- link socket ----
+
+  #connect() {
+    if (this.closed || this.terminal || this.channel) return;
+    const channel = new Channel(socketUrl(LINK_PATH, { id: this.matchId }), {
+      onOpen: () => channel.send({ t: 'hello', v: WIRE_VERSION, key: this.key }),
+      onFrame: frame => { if (this.channel === channel) this.#linkFrame(frame); },
+      onClose: code => { if (this.channel === channel) this.#linkClosed(code); },
+    });
+    this.channel = channel;
+  }
+
+  #linkClosed(code) {
+    this.channel = null;
+    if (this.closed || this.terminal) return;
+    if (code === 4004 || code === 4010) {
+      this.#finish('파티 연결이 종료되었습니다.');
+    } else if (code === 4009) {
+      this.#finish('다른 창에서 원정에 접속했습니다.');
+    } else if (code === 4000 || code === 4001 || code === 4003) {
+      this.#finish('파티 연결 정보를 확인할 수 없습니다.');
+    } else {
+      this.lostAt ||= now();
+      if (now() - this.lostAt >= LINK_RECONNECT_WINDOW_MS) {
+        this.#finish('파티 연결이 끊겼습니다.');
+        return;
+      }
+      this.reconnectTimer = setTimeout(() => this.#connect(), reconnectDelay(this.reconnectAttempt++));
+    }
+  }
+
+  #linkFrame(frame) {
+    if (this.closed || this.terminal) return;
+    switch (frame.t) {
+      case 'link': return this.#acceptLink(frame);
+      case 'paired':
+        if (this.link) {
+          this.link = { ...this.link, paired: true };
+          this.#paired();
+        }
+        return;
+      case 'peer':
+        if (frame.ready) this.#peerReady();
+        return;
+      case 'data': return this.#receive(frame.d);
+      case 'ended': return this.#finish(({
+        partner_left: '동료가 원정을 종료했습니다.',
+        partner_lost: '동료와의 연결이 끊겼습니다.',
+        pair_timeout: '동료와 던전 연결을 열지 못했습니다. 여관에서 다시 시도해 주세요.',
+      })[frame.reason] ?? '파티 연결이 종료되었습니다.');
+    }
+  }
+
+  #acceptLink(link) {
+    if (link.id !== this.matchId || link.role !== this.matchRole || (link.role !== 'host' && link.role !== 'guest') ||
+        typeof link.selfId !== 'string' || typeof link.partnerId !== 'string' ||
+        typeof link.selfName !== 'string' || typeof link.partnerName !== 'string' ||
+        !Number.isSafeInteger(link.seed) || link.seed < 0 || link.seed > 0xFFFFFFFF || typeof link.friendlyFire !== 'boolean') {
+      this.#finish('파티 연결 정보를 확인할 수 없습니다.');
+      return;
+    }
+    this.lostAt = this.reconnectAttempt = 0;
+    this.link = link;
+    // After a reconnect the server has forgotten nothing; repeat our own readiness for safety.
+    if (this.original?.ready) this.channel?.send({ t: 'ready' });
+    if (link.paired) this.#paired();
+    if (link.partnerReady) this.#peerReady();
+  }
+
+  #paired() {
+    if (this.original) {
+      if (this.original.paired) return;
+      this.original.paired = true;
+      this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
+      this.originalParty({ type: 'paired' });
+      // The guest loads first; the host starts its world once the guest reports ready.
+      if (!this.host) this.#launchOriginal();
+    } else {
+      this.#createEngine();
+    }
+  }
+
+  #peerReady() {
+    if (!this.original) return;
+    this.original.peerReady = true;
+    if (this.host && this.original.paired) this.#launchOriginal();
+  }
+
+  #launchOriginal() {
+    if (this.original.launched) return;
+    this.original.launched = true;
+    this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
+    this.onLoading({ phase: 'ready', mode: 'party' });
+    this.originalParty({ type: 'start', link: this.link, seed: String(this.link.seed), friendlyFire: this.link.friendlyFire });
+  }
+
+  #leaveLink() {
+    const channel = this.channel;
+    this.channel = null;
+    if (!channel) return;
+    channel.send({ t: 'leave' });
+    channel.close(1000, 'leave');
+  }
+
+  // ---- dungeon ----
 
   #tick() {
     if (this.closed || this.terminal) return;
@@ -614,132 +837,15 @@ class BattleSession {
       if (this.engine) this.#advanceHost(time, false);
       return;
     }
-    if (!this.link) return;
-    if (this.#direct()) {
-      if (!this.directSince) this.directSince = time;
-      if (time - Math.max(this.directSince, this.lastDirectAt) >= DIRECT_TIMEOUT_MS) this.#closePeer();
+    if (!this.link?.paired || this.original) return;
+    if (this.host) {
+      if (this.engine) this.#advanceHost(time, time >= this.nextHeartbeatAt);
     } else {
-      this.directSince = 0;
-    }
-    const direct = this.#direct();
-    const switched = direct !== this.wasDirect;
-    if (switched) {
-      this.wasDirect = direct;
-      this.nextLinkSyncAt = this.nextCommandAt = this.nextPingAt = 0;
-      this.relayPending = null;
-      if (this.frame) this.#publish(this.frame.state, this.frame.wallTime());
-    }
-    if (!this.syncInFlight && time >= this.nextLinkSyncAt) this.#sync(time, direct);
-    if (!this.link.paired) return;
-    this.#publishSignal(time);
-    if (this.original) {
-      this.#tickOriginal(time);
-    } else if (this.host) {
-      if (this.engine) this.#advanceHost(time, switched || time >= this.nextHeartbeatAt);
-    } else {
-      if (direct && time >= this.nextPingAt) {
-        this.#sendDirect(JSON.stringify({ type: 'ping', sequence: 0 }));
-        this.nextPingAt = time + HEARTBEAT_MS;
-      }
       if (this.frame && time - this.lastSnapshotAt >= HOST_TIMEOUT_MS) {
         this.#finish('파티장과의 연결이 끊겼습니다.');
         return;
       }
       this.#sendGuestCommands(time);
-    }
-    this.#flushRelay(time);
-  }
-
-  #tickOriginal(time) {
-    const original = this.original;
-    if (this.#direct() && original.ready && original.peerReady && time - original.peerAt >= HOST_TIMEOUT_MS) {
-      this.#finish('동료와의 연결이 끊겼습니다.');
-      return;
-    }
-    if (time < original.nextSendAt) return;
-    original.nextSendAt = time + HEARTBEAT_MS;
-    if (this.host && !original.peerReady) {
-      this.#sendOriginal('hello', { seed: original.seed, friendlyFire: original.friendlyFire });
-    } else if (!this.host && original.ready && !original.peerReady) {
-      this.#sendOriginal('ready');
-    } else if (this.#direct()) {
-      this.#sendOriginal('ping');
-    }
-  }
-
-  #sendOriginal(type, fields) {
-    this.#transmit({ kind: 'original', type, seq: ++this.packetSequence, ...fields });
-  }
-
-  #launchOriginal() {
-    if (this.original.launched) return;
-    this.original.launched = true;
-    this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
-    this.onLoading({ phase: 'ready', mode: 'party' });
-    this.originalParty({ type: 'start', link: this.link, seed: this.original.seed, friendlyFire: this.original.friendlyFire });
-  }
-
-  #receiveOriginal(wire) {
-    const original = this.original;
-    if (wire.kind !== 'original' || !Number.isSafeInteger(wire.seq) || wire.seq <= 0 ||
-        wire.seq <= (original.lastByType.get(wire.type) ?? 0)) return;
-    if (wire.type === 'hello' && !this.host && typeof wire.seed === 'string' && /^(0|[1-9][0-9]{0,9})$/.test(wire.seed) &&
-        Number(wire.seed) <= 0xFFFFFFFF && typeof wire.friendlyFire === 'boolean') {
-      if (original.seed !== null && original.seed !== wire.seed) return;
-      original.seed = wire.seed;
-      original.friendlyFire = wire.friendlyFire;
-      this.#launchOriginal();
-    } else if (wire.type === 'ready' && this.host) {
-      original.peerReady = true;
-      this.#launchOriginal();
-    } else if (wire.type === 'payload' && original.ready && typeof wire.data === 'string' && wire.data) {
-      original.peerReady = true;
-      this.originalParty({ type: 'payload', data: wire.data });
-    } else if (wire.type === 'leave') {
-      this.#finish('동료가 원정을 종료했습니다.');
-      return;
-    } else if (wire.type !== 'ping') return;
-    original.lastByType.set(wire.type, wire.seq);
-    original.peerAt = now();
-  }
-
-  #sync(time, direct) {
-    this.syncInFlight = true;
-    this.nextLinkSyncAt = time + (direct ? DIRECT_POLL_MS : RELAY_POLL_MS);
-    void this.#linkRequest('sync', { id: this.matchId }).then(link => {
-      if (!this.closed && !this.terminal) this.#acceptLink(link);
-    }, error => {
-      if (this.closed || this.terminal) return;
-      if (linkEnded(error) && !this.#direct()) this.#finish('파티 연결이 종료되었습니다.');
-      else this.nextLinkSyncAt = Math.max(this.nextLinkSyncAt, now() + 350);
-    }).finally(() => { this.syncInFlight = false; });
-  }
-
-  #acceptLink(link) {
-    if (!link || link.id !== this.matchId || link.role !== this.matchRole || (link.role !== 'host' && link.role !== 'guest') ||
-        typeof link.selfId !== 'string' || typeof link.partnerId !== 'string') {
-      this.#finish('파티 연결 정보를 확인할 수 없습니다.');
-      return;
-    }
-    if (link.closed) {
-      this.#finish('동료가 원정을 종료했습니다.');
-      return;
-    }
-    const wasPaired = this.link?.paired;
-    this.link = link;
-    if (!link.paired) return;
-    if (!wasPaired) {
-      if (this.original) {
-        this.original.deadline = now() + ORIGINAL_ENTRY_TIMEOUT_MS;
-        this.originalParty({ type: 'paired' });
-      }
-      else this.#createEngine();
-      this.#openPeer();
-    }
-    if (this.peer && link.signal) this.#applySignal(link.signal);
-    if (link.message && link.messageSeq > this.relayReceived) {
-      this.relayReceived = link.messageSeq;
-      this.#receive(link.message);
     }
   }
 
@@ -752,10 +858,10 @@ class BattleSession {
         practice && this.friendlyFire, practice);
     } else if (this.host && this.link?.paired) {
       const { id, selfId, selfName, selfAppearance, selfPreparation,
-        partnerId, partnerName, partnerAppearance, partnerPreparation } = this.link;
+        partnerId, partnerName, partnerAppearance, partnerPreparation, seed, theme, friendlyFire } = this.link;
       this.engine = new HostBattle(id, { id: selfId, name: selfName, appearance: selfAppearance, preparation: selfPreparation },
         { id: partnerId, name: partnerName, appearance: partnerAppearance, preparation: partnerPreparation },
-        now(), newSeed(), this.theme, this.friendlyFire);
+        now(), seed, theme === PRISON ? PRISON : SEWERS, friendlyFire);
     }
   }
 
@@ -791,19 +897,24 @@ class BattleSession {
     this.nextCommandAt = time + COMMAND_RETRY_MS;
   }
 
+  #transmit(wire) {
+    const message = JSON.stringify(wire);
+    if (encoder.encode(message).byteLength > MAX_MESSAGE_BYTES) return;
+    this.channel?.send({ t: 'data', d: message });
+  }
+
   #receive(message) {
-    if (this.closed || this.terminal || !this.link?.paired || typeof message !== 'string' ||
+    if (this.closed || this.terminal || !this.link?.paired || typeof message !== 'string' || !message ||
         message.length > MAX_MESSAGE_BYTES || encoder.encode(message).byteLength > MAX_MESSAGE_BYTES) return;
+    if (this.original) {
+      // Original-engine payloads are opaque InnOriginalParty packets.
+      if (this.original.ready) this.originalParty({ type: 'payload', data: message });
+      return;
+    }
     let wire;
     try { wire = JSON.parse(message); } catch { return; }
     if (!wire) return;
-    if (this.original) {
-      this.#receiveOriginal(wire);
-      return;
-    }
-    if (wire.type === 'leave') {
-      this.#finish('동료가 원정을 종료했습니다.');
-    } else if (this.engine && wire.type === 'input' && Number.isSafeInteger(wire.sequence) &&
+    if (this.engine && wire.type === 'input' && Number.isSafeInteger(wire.sequence) &&
         Array.isArray(wire.commands) && wire.commands.length > 0 && wire.commands.length <= MAX_COMMANDS) {
       const time = now();
       for (const command of wire.commands) {
@@ -817,7 +928,6 @@ class BattleSession {
       this.lastSnapshotSequence = wire.sequence;
       this.lastSnapshotAt = now();
       this.unacked = this.unacked.filter(command => command.sequence > wire.state.commandAck);
-      if (this.relayPending?.seq <= wire.state.commandAck) this.relayPending = null;
       const hostTime = Math.max(wire.state.wallNow, this.frame?.wallTime() ?? 0);
       const state = wire.state.revision === this.frame?.state.revision
         ? this.frame.state : this.#withPartyAppearances(wire.state);
@@ -867,114 +977,6 @@ class BattleSession {
         Math.max(Math.abs(projectile.nextX - projectile.x), Math.abs(projectile.nextY - projectile.y)) === 1);
   }
 
-  #openPeer() {
-    if (this.relayOnly || typeof RTCPeerConnection !== 'function') return;
-    try {
-      const peer = new RTCPeerConnection({ iceServers: this.iceServers });
-      this.peer = peer;
-      this.channel = peer.createDataChannel('noxac-atb', { ordered: true, negotiated: true, id: 0 });
-      this.channel.addEventListener('message', event => {
-        if (this.peer !== peer || this.closed || this.terminal) return;
-        this.lastDirectAt = now();
-        this.#receive(event.data);
-      });
-      this.channel.addEventListener('open', () => this.#tick());
-      peer.addEventListener('connectionstatechange', () => {
-        if (this.peer === peer && (peer.connectionState === 'failed' || peer.connectionState === 'closed')) this.#closePeer();
-      });
-      if (this.host) void this.#prepareSignal(peer, 'offer').catch(() => { if (this.peer === peer) this.#closePeer(); });
-    } catch {
-      this.#closePeer();
-    }
-  }
-
-  #applySignal(signal) {
-    if (this.remoteApplied || signal.type !== (this.host ? 'answer' : 'offer') || typeof signal.sdp !== 'string') return;
-    this.remoteApplied = true;
-    const peer = this.peer;
-    void peer.setRemoteDescription({ type: signal.type, sdp: signal.sdp }).then(() => {
-      if (!this.host && this.peer === peer) return this.#prepareSignal(peer, 'answer');
-    }).catch(() => { if (this.peer === peer) this.#closePeer(); });
-  }
-
-  async #prepareSignal(peer, type) {
-    const description = type === 'offer' ? await peer.createOffer() : await peer.createAnswer();
-    if (this.peer !== peer) return;
-    await peer.setLocalDescription(description);
-    if (peer.iceGatheringState !== 'complete') await new Promise(resolve => {
-      const done = () => {
-        clearTimeout(deadline);
-        peer.removeEventListener('icegatheringstatechange', gathered);
-        resolve();
-      };
-      const gathered = () => { if (peer.iceGatheringState === 'complete') done(); };
-      const deadline = setTimeout(done, 8000);
-      peer.addEventListener('icegatheringstatechange', gathered);
-      gathered();
-    });
-    if (this.peer === peer && peer.localDescription?.sdp) this.localSignal = { type, sdp: peer.localDescription.sdp };
-  }
-
-  #publishSignal(time) {
-    if (!this.localSignal || this.signalInFlight || time < this.nextSignalAt) return;
-    const signal = this.localSignal;
-    this.signalInFlight = true;
-    this.nextSignalAt = time + SIGNAL_RETRY_MS;
-    void this.#linkRequest('signal', { id: this.matchId, ...signal }).then(() => {
-      if (this.localSignal === signal) this.localSignal = null;
-    }, error => {
-      if (linkEnded(error) || error.status === 400 || error.status === 403) this.#closePeer();
-    }).finally(() => { this.signalInFlight = false; });
-  }
-
-  #closePeer() {
-    const channel = this.channel;
-    const peer = this.peer;
-    this.channel = this.peer = this.localSignal = null;
-    channel?.close();
-    peer?.close();
-  }
-
-  #direct() { return this.channel?.readyState === 'open' && this.peer?.connectionState === 'connected'; }
-
-  #sendDirect(message, bytes = encoder.encode(message).byteLength) {
-    if (!this.#direct() || this.channel.bufferedAmount + bytes > MAX_CHANNEL_BUFFER) return false;
-    try {
-      this.channel.send(message);
-      return true;
-    } catch {
-      this.#closePeer();
-      return false;
-    }
-  }
-
-  #transmit(wire) {
-    const message = JSON.stringify(wire);
-    const bytes = encoder.encode(message).byteLength;
-    if (bytes > MAX_MESSAGE_BYTES) return;
-    this.relayPending = this.#sendDirect(message, bytes) ? null : { seq: wire.seq ?? wire.sequence, message };
-  }
-
-  #flushRelay(time) {
-    if (!this.relayPending || this.relayInFlight || time < this.nextRelayAt) return;
-    const packet = this.relayPending;
-    this.relayPending = null;
-    this.relayInFlight = true;
-    if (this.original) this.nextRelayAt = time + RELAY_POLL_MS;
-    void this.#linkRequest('relay', { id: this.matchId, ...packet }).catch(error => {
-      if (this.closed || this.terminal || this.#direct()) return;
-      if (linkEnded(error)) this.#finish('파티 연결이 종료되었습니다.');
-      else if (!this.relayPending) {
-        this.relayPending = packet;
-        this.nextRelayAt = now() + 250;
-      }
-    }).finally(() => { this.relayInFlight = false; });
-  }
-
-  #linkRequest(path, body, keepalive = false) { return request(LINK + path, this.key, 'POST', body, keepalive); }
-
-  #leaveLink() { void this.#linkRequest('leave', { id: this.matchId }, true).catch(() => {}); }
-
   #publish(state, hostTime, notice = '') {
     if (this.closed) return;
     const receivedAt = now();
@@ -982,7 +984,7 @@ class BattleSession {
     this.frame = {
       state, notice,
       assetVersion: this.runtime?.version ?? null,
-      connection: this.localPlayer ? 'local' : this.#direct() ? 'direct' : 'relay',
+      connection: this.localPlayer ? 'local' : 'relay',
       wallTime,
       serverTime: () => state ? state.now + (state.pausedUntil > 0 ? 0 : Math.max(0, wallTime() - state.wallNow)) : 0,
     };
@@ -993,10 +995,12 @@ class BattleSession {
     if (this.closed || this.terminal) return;
     this.terminal = true;
     clearInterval(this.timer);
+    clearTimeout(this.reconnectTimer);
+    // Tell the server, so the partner's run ends too when this side gives up first.
+    this.#leaveLink();
     if (this.original) {
       if (!this.original.launched) this.#settleLoading('failed');
       this.originalParty({ type: 'ended', notice });
-      this.#closePeer();
       return;
     }
     this.#settleLoading('failed');
@@ -1006,6 +1010,5 @@ class BattleSession {
     this.#publish(active(state?.status)
       ? { ...state, now: time, wallNow: wallTime, status: 'closed', queued: null, inCombat: false, pausedUntil: 0, projectiles: [] }
       : state, wallTime, notice);
-    this.#closePeer();
   }
 }

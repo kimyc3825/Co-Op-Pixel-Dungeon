@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs;
 
-import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Hunger;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
@@ -78,7 +77,6 @@ public class InnPracticeTarget extends NPC {
             if (!(character instanceof Hero)) return false;
             Hero hero = (Hero) character;
             hero.HP = hero.HT;
-            InnAtb.reset();
             Hunger hunger = hero.buff(Hunger.class);
             if (hunger != null) hunger.satisfy(Hunger.STARVING);
             GLog.p(Messages.get(InnPracticeTarget.class, "recovered"));

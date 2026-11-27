@@ -3,6 +3,7 @@ package com.shatteredpixel.shatteredpixeldungeon;
 
 import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
+import com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember;
 import com.shatteredpixel.shatteredpixeldungeon.items.Heap;
@@ -15,13 +16,25 @@ import com.watabou.utils.PathFinder;
 import java.util.Arrays;
 import java.util.function.Consumer;
 
-/** Original-engine party link. The host runs actors and the guest sends intents. */
+/**
+ * Original-engine party link. The host runs actors and the guest sends intents.
+ *
+ * Guest command: {@code C|floor|seq|kind|first|second}, kind M (step dx,dy), A (attack actor id),
+ * T (step toward or attack a cell), W (wait one turn, both values 0).
+ * Host snapshot: {@code S|revision|floor|depth|branch|width|height|ack|turn|player|tiles|actors|loot|result
+ * |texture|grace}, where turn says whose input the world is waiting for with a countdown
+ * ({@link TurnClock#WAIT_NONE}, {@link TurnClock#WAIT_HOST}, {@link TurnClock#WAIT_GUEST}) and grace is the
+ * remaining countdown in tenths of a second.
+ */
 public final class InnOriginalParty {
     private static final String DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     private static final int MAX_CELLS = 16000;
     private static final int MAX_PACKET = 20000;
     private static final float UPDATE_INTERVAL = 0.12f;
-    public static final String FATIGUE_RECORD = "!";
+    private static final int COMMAND_FIELDS = 6;
+    private static final int SNAPSHOT_FIELDS = 16;
+    /** Upper bound of the grace field, in tenths of a second. */
+    public static final int MAX_GRACE_TENTHS = Math.round(com.shatteredpixel.shatteredpixeldungeon.actors.TurnPolicy.TURN_GRACE_SECONDS * 10);
     public static final String DETECTION_RECORD = "^";
 
     private static volatile InnOriginalParty current;
@@ -40,13 +53,10 @@ public final class InnOriginalParty {
     private boolean[] visible;
     private boolean[] explored;
     private int[] rememberedTerrain;
-    private int ack;
-    private int guestTimeAck;
-    private volatile int inboundTimeSequence;
+    private volatile int ack;
     private int revision;
     private float sendIn;
     private int nextSequence;
-    private int guestTimeSequence;
     private Command pending;
 
     private InnOriginalParty(boolean host, InnAdventure.Profile peer, long seed,
@@ -79,15 +89,14 @@ public final class InnOriginalParty {
         if (link == null || payload == null || payload.length() > MAX_PACKET || link.closed) return;
         String[] fields = payload.split("\\|", -1);
         try {
-            if (link.host && fields.length == 7 && fields[0].equals("C")) {
+            if (link.host && fields.length == COMMAND_FIELDS && fields[0].equals("C")) {
                 int floor = Integer.parseInt(fields[1]);
                 int seq = Integer.parseInt(fields[2]);
                 String kind = fields[3];
                 int first = Integer.parseInt(fields[4]);
                 int second = Integer.parseInt(fields[5]);
-                int timeSequence = Integer.parseInt(fields[6]);
-                link.acceptCommand(floor, seq, kind, first, second, timeSequence);
-            } else if (!link.host && fields.length == 17 && fields[0].equals("S")) {
+                link.acceptCommand(floor, seq, kind, first, second);
+            } else if (!link.host && fields.length == SNAPSHOT_FIELDS && fields[0].equals("S")) {
                 Snapshot state = Snapshot.parse(fields);
                 Snapshot previous = link.incoming;
                 if (state != null && (previous == null || state.revision > previous.revision)) link.incoming = state;
@@ -97,14 +106,20 @@ public final class InnOriginalParty {
         }
     }
 
-    private synchronized void acceptCommand(int floor, int seq, String kind, int first, int second, int timeSequence) {
-        // A floor transition does not discard a new time toggle from the same expedition.
-        if (floor > 0 && floor <= this.floor && timeSequence > inboundTimeSequence) {
-            inboundTimeSequence = timeSequence;
-        }
-        if (floor == this.floor && seq > 0 && (kind.equals("M") || kind.equals("A") || kind.equals("T"))
-                && (inbound == null || seq > inbound.seq)) {
+    private synchronized void acceptCommand(int floor, int seq, String kind, int first, int second) {
+        if (floor != this.floor || seq <= 0 || !validCommand(kind, first, second)) return;
+        if (inbound == null || inbound.floor != floor || seq > inbound.seq) {
             inbound = new Command(floor, seq, kind, first, second);
+        }
+    }
+
+    static boolean validCommand(String kind, int first, int second) {
+        switch (kind) {
+            case "M": return Math.abs(first) <= 1 && Math.abs(second) <= 1 && (first != 0 || second != 0);
+            case "A": return first > 0 && second == 0;
+            case "T": return first >= 0 && first < MAX_CELLS && second == 0;
+            case "W": return first == 0 && second == 0;
+            default: return false;
         }
     }
 
@@ -155,7 +170,7 @@ public final class InnOriginalParty {
 
     public boolean isClosed() { return closed; }
 
-    InnPartyMember activeMember(Level currentLevel) {
+    public InnPartyMember activeMember(Level currentLevel) {
         return host && level == currentLevel && member != null && member.isAlive() ? member : null;
     }
 
@@ -164,52 +179,46 @@ public final class InnOriginalParty {
         if (link != null && link.host) link.finished = true;
     }
 
-    /** All authoritative input is consumed by the original actor scheduler. */
-    public void act(InnPartyMember player) {
+    /** False once the run is over or the link closed; the member then spends its turns. */
+    public boolean acceptsCommands() {
+        return !closed && !finished;
+    }
+
+    /** True while the guest has sent a command the member has not consumed yet. */
+    public boolean hasPendingCommand() {
         Command command = inbound;
-        if (closed || finished || command == null || command.floor != floor || command.seq <= ack) {
-            player.waitForInput();
-            return;
-        }
+        return acceptsCommands() && command != null && command.floor == floor && command.seq > ack;
+    }
+
+    /**
+     * Consumes the guest's pending command on the actor thread. Returns false if there was none; a rejected
+     * command is still acknowledged so the guest stops resending it.
+     */
+    public boolean act(InnPartyMember player) {
+        Command command = inbound;
+        if (!acceptsCommands() || command == null || command.floor != floor || command.seq <= ack) return false;
+        ack = command.seq;
+        // Answer the guest on the next frame so its following step is not held for a full interval.
+        sendIn = 0;
         if (command.kind.equals("T") && (!level.insideMap(command.first)
                 || (!explored[command.first] && !level.adjacent(player.pos, command.first)))) {
-            ack = command.seq;
-            player.waitForInput();
-            return;
+            return true;
         }
-        if (player.execute(command.kind, command.first, command.second, friendlyFire)) {
-            ack = command.seq;
-            // Answer the guest on the next frame so its following step is not held for a full interval.
-            sendIn = 0;
-        } else {
-            player.waitForInput();
-        }
+        player.execute(command.kind, command.first, command.second, friendlyFire);
+        return true;
     }
 
-    public void applyGuestTime() {
-        int requested = inboundTimeSequence;
-        if (requested <= guestTimeAck || finished || closed) return;
-        if (((requested - guestTimeAck) & 1) != 0) InnAtb.toggleSlowTime();
-        guestTimeAck = requested;
-        sendIn = 0;
-    }
-
-    public void updateHost(float elapsed, float gameElapsed) {
+    /** Host, render thread: sends a snapshot while the actor thread is idle. */
+    public void updateHost(float elapsed) {
         if (member == null || level != Dungeon.level) return;
-        member.regenerate(gameElapsed);
         sendIn -= elapsed;
-        if (sendIn > 0 || closed || level.length() > MAX_CELLS || Actor.processing()) return;
+        if (sendIn > 0 || closed || level.length() > MAX_CELLS || !Actor.parked()) return;
         sendIn = UPDATE_INTERVAL;
         String packet = snapshot();
         if (packet.length() <= MAX_PACKET) send.accept(packet);
     }
 
     public Snapshot latest() { return incoming; }
-
-    public boolean awaitingTimeChange() {
-        Snapshot state = incoming;
-        return state != null && guestTimeSequence > state.timeAck;
-    }
 
     public boolean[] explored() { return explored; }
 
@@ -222,32 +231,20 @@ public final class InnOriginalParty {
         return pending.seq;
     }
 
-    public void toggleTime() {
-        Snapshot state = incoming;
-        if (host) {
-            InnAtb.toggleSlowTime();
-            sendIn = 0;
-        } else if (state != null && !closed && state.result.equals("play")) {
-            guestTimeSequence++;
-            sendGuest(state);
-        }
-    }
-
     private void sendGuest(Snapshot state) {
-        String command = pending == null || pending.floor != state.floor
-                ? "C|" + state.floor + "|0|N|0|0" : pending.encode();
-        // Relay holds the latest packet, so movement and time toggles travel together.
-        send.accept(command + "|" + guestTimeSequence);
+        if (pending == null || pending.floor != state.floor) return;
+        send.accept(pending.encode());
         sendIn = UPDATE_INTERVAL;
     }
 
+    /** Guest: resends the pending command until the host acknowledges it. */
     public void updateGuest(float elapsed) {
         Snapshot state = incoming;
         if (state == null || closed) return;
         if (pending != null && (pending.floor != state.floor || pending.seq <= state.ack)) {
             pending = null;
         }
-        if (pending == null && guestTimeSequence <= state.timeAck) return;
+        if (pending == null) return;
         sendIn -= elapsed;
         if (sendIn <= 0) {
             sendGuest(state);
@@ -276,26 +273,18 @@ public final class InnOriginalParty {
         }
 
         StringBuilder actors = new StringBuilder();
-        StringBuilder fatigue = new StringBuilder();
         StringBuilder detections = new StringBuilder();
         appendActor(actors, Dungeon.hero, Dungeon.hero.heroClass.name(), 1, Dungeon.hero.pos);
         appendActor(actors, member, peer.heroClass().name(), 1, member.isAlive() ? member.pos : level.entrance());
-        if (Dungeon.hero.isAlive() && Dungeon.hero.innExhausted()) appendActorId(fatigue, Dungeon.hero);
-        if (member.innExhausted()) appendActorId(fatigue, member);
         for (Mob mob : level.mobs.toArray(new Mob[0])) {
             if (mob != member && mob.isAlive() && visible[mob.pos] && mob.sprite != null) {
                 appendActor(actors, mob, mob.sprite.getClass().getName(),
                         mob.alignment == Char.Alignment.ENEMY ? 2 : 0, mob.pos);
-                if (mob.alignment == Char.Alignment.ENEMY && mob.innExhausted()) {
-                    appendActorId(fatigue, mob);
-                }
                 if (mob.alignment == Char.Alignment.ENEMY && mob.sprite.isShowingAlert()) {
                     appendActorId(detections, mob);
                 }
             }
         }
-        // Older clients skip this optional record and still render the normal actor records.
-        if (fatigue.length() > 0) actors.append(';').append(FATIGUE_RECORD).append(fatigue);
         if (detections.length() > 0) actors.append(';').append(DETECTION_RECORD).append(detections);
         StringBuilder loot = new StringBuilder();
         for (Heap heap : level.heaps.valueList()) {
@@ -305,10 +294,13 @@ public final class InnOriginalParty {
         }
 
         String result = finished || !Dungeon.hero.isAlive() ? "end" : "play";
+        int turn = TurnClock.waitingOn();
+        int grace = turn == TurnClock.WAIT_NONE ? 0
+                : Math.max(0, Math.min(MAX_GRACE_TENTHS, (int) Math.ceil(TurnClock.graceRemaining() * 10 - 0.001f)));
         return "S|" + ++revision + "|" + floor + "|" + Dungeon.depth + "|" + Dungeon.branch + "|"
-                + level.width() + "|" + level.height() + "|" + ack + "|" + Math.round(member.energy() * 10)
+                + level.width() + "|" + level.height() + "|" + ack + "|" + turn
                 + "|" + member.id() + "|" + encodeTiles(tiles) + "|" + actors + "|" + loot
-                + "|" + result + "|" + level.tilesTex() + "|" + (InnAtb.slowTime() ? 1 : 0) + "|" + guestTimeAck;
+                + "|" + result + "|" + level.tilesTex() + "|" + grace;
     }
 
     private static int heapImage(Heap heap) {
@@ -378,9 +370,11 @@ public final class InnOriginalParty {
     }
 
     public static final class Snapshot {
-        public final int revision, floor, depth, branch, width, height, ack, energy, player;
-        public final int timeAck;
-        public final boolean slowTime;
+        public final int revision, floor, depth, branch, width, height, ack, player;
+        /** Whose input the world waits for with a countdown, see {@link TurnClock#waitingOn()}. */
+        public final int turn;
+        /** Remaining countdown in tenths of a second, 0 when {@link #turn} is none. */
+        public final int grace;
         public final int[] tiles;
         public final String actors, loot, result, texture;
 
@@ -392,22 +386,26 @@ public final class InnOriginalParty {
             this.width = width;
             this.height = height;
             ack = Integer.parseInt(fields[7]);
-            energy = Integer.parseInt(fields[8]);
+            turn = Integer.parseInt(fields[8]);
             player = Integer.parseInt(fields[9]);
             this.tiles = tiles;
             actors = fields[11];
             loot = fields[12];
             result = fields[13];
             texture = fields[14];
-            slowTime = fields[15].equals("1");
-            timeAck = Integer.parseInt(fields[16]);
+            grace = Integer.parseInt(fields[15]);
         }
 
         private static Snapshot parse(String[] fields) {
+            if (fields.length != SNAPSHOT_FIELDS) return null;
             int width = Integer.parseInt(fields[5]);
             int height = Integer.parseInt(fields[6]);
-            if (width < 3 || width > 256 || height < 3 || height > 256 || width * height > MAX_CELLS
-                    || !(fields[15].equals("0") || fields[15].equals("1"))) return null;
+            int turn = Integer.parseInt(fields[8]);
+            int grace = Integer.parseInt(fields[15]);
+            if (width < 3 || width > 256 || height < 3 || height > 256 || width * height > MAX_CELLS) return null;
+            if (turn < TurnClock.WAIT_NONE || turn > TurnClock.WAIT_GUEST || grace < 0 || grace > MAX_GRACE_TENTHS
+                    || turn == TurnClock.WAIT_NONE && grace != 0) return null;
+            if (!fields[13].equals("play") && !fields[13].equals("end")) return null;
             if (!fields[14].startsWith("environment/tiles_") || !fields[14].endsWith(".png")
                     || fields[14].contains("..") || fields[14].substring(12).contains("/")) return null;
             int[] tiles = decodeTiles(fields[10], width * height);

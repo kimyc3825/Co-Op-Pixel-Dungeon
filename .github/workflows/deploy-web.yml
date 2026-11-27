@@ -1,4 +1,10 @@
-name: Deploy web client to Sites
+name: Deploy to Cloudflare
+
+# Builds the TeaVM dungeon, stages it with the web lobby as Workers static assets, tests the server
+# and deploys server/ (Worker + Durable Objects + assets) with Wrangler.
+# Repository secrets: CLOUDFLARE_API_TOKEN (Workers Scripts: Edit), CLOUDFLARE_ACCOUNT_ID.
+# Optional repository variable: COOP_PUBLIC_ORIGIN (e.g. https://co-op-pixel-dungeon.<account>.workers.dev)
+# enables the post-deploy smoke check.
 
 on:
   push:
@@ -9,17 +15,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: sites-web-production
+  group: cloudflare-production
   cancel-in-progress: false
 
 jobs:
   deploy:
     if: github.repository == 'kimyc3825/Co-Op-Pixel-Dungeon' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       COOP_CLIENT_REVISION: ${{ github.sha }}
-      SITE_ORIGIN: https://co-op-pixel-dungeon.kimyc3825.chatgpt.site
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -32,21 +37,62 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24'
-      - name: Build dungeon and stage lobby
-        id: build
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install, typecheck and test the server
+        working-directory: server
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+      # The previous deploy's versioned folders are kept for one more release, so pages opened
+      # before this deploy can still load their files.
+      - name: Restore the previous site
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: previous-site
+          key: cloudflare-site-${{ github.sha }}
+          restore-keys: cloudflare-site-
+      - name: Build the dungeon and stage the site
         run: |
           ./gradlew -PwebOnly html:dist
-          signature="$(node scripts/stage-web-client.mjs)"
-          printf 'signature=%s\n' "$signature" >> "$GITHUB_OUTPUT"
-      - name: Publish and verify the web client
+          if [[ -d previous-site/play ]]; then export COOP_PREVIOUS_SITE="$PWD/previous-site"; fi
+          node scripts/stage-web-client.mjs
+      - name: Deploy with Wrangler
+        id: deploy
+        working-directory: server
         env:
-          COOP_CLIENT_SIGNATURE: ${{ steps.build.outputs.signature }}
-          ORIGINAL_PUBLISH_TOKEN: ${{ secrets.ORIGINAL_PUBLISH_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           main_ref="$(git ls-remote --exit-code origin refs/heads/main)"
           read -r main_revision _ <<< "$main_ref"
           if [[ "$main_revision" != "$COOP_CLIENT_REVISION" ]]; then
             echo "Skipping revision $COOP_CLIENT_REVISION because main has advanced to $main_revision."
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          node scripts/publish-web-client.mjs "$SITE_ORIGIN"
+          npx wrangler deploy
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+      - name: Keep this site for the next deploy
+        if: steps.deploy.outputs.deployed == 'true'
+        run: |
+          rm -rf previous-site
+          cp -r server/public previous-site
+      - name: Save this site
+        if: steps.deploy.outputs.deployed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: previous-site
+          key: cloudflare-site-${{ github.sha }}
+      - name: Smoke check
+        if: steps.deploy.outputs.deployed == 'true' && vars.COOP_PUBLIC_ORIGIN != ''
+        env:
+          ORIGIN: ${{ vars.COOP_PUBLIC_ORIGIN }}
+        run: |
+          curl --fail --silent --show-error "$ORIGIN/api/v5/health"
+          curl --fail --silent --show-error "$ORIGIN/play/original/manifest.json" > /dev/null
+          page="$(curl --fail --silent --show-error "$ORIGIN/play/")"
+          base="$(grep -o '<base href="/play/client/[^"]*"' <<< "$page" | cut -d'"' -f2)"
+          [[ "$base" == /play/client/"$COOP_CLIENT_REVISION"-* ]] || { echo "Unexpected lobby base: $base"; exit 1; }
+          curl --fail --silent --show-error "$ORIGIN${base}main.mjs" > /dev/null

@@ -21,7 +21,6 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.scenes;
 
-import com.badlogic.gdx.Input;
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Badges;
 import com.shatteredpixel.shatteredpixeldungeon.Challenges;
@@ -30,13 +29,13 @@ import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.GamesInProgress;
 import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
 import com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty;
-import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.Rankings;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.ShatteredPixelDungeon;
 import com.shatteredpixel.shatteredpixeldungeon.Statistics;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
+import com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
 import com.shatteredpixel.shatteredpixeldungeon.actors.blobs.Blob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.AscensionChallenge;
@@ -104,8 +103,8 @@ import com.shatteredpixel.shatteredpixeldungeon.ui.BossHealthBar;
 import com.shatteredpixel.shatteredpixeldungeon.ui.CharHealthIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.GameLog;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
-import com.shatteredpixel.shatteredpixeldungeon.ui.InnAtbMeter;
 import com.shatteredpixel.shatteredpixeldungeon.ui.InnHeroVitals;
+import com.shatteredpixel.shatteredpixeldungeon.ui.InnTurnIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.InventoryPane;
 import com.shatteredpixel.shatteredpixeldungeon.ui.LootIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.MenuPane;
@@ -220,13 +219,11 @@ public class GameScene extends PixelScene {
 	private static boolean invVisible = true;
 
 	private Toolbar toolbar;
-	private final Signal.Listener<KeyEvent> atbKeys = this::handleAtbKey;
-	private final Signal.Listener<KeyEvent> atbSpace = this::handleAtbSpace;
-	private boolean atbSpaceHeld;
+	private final Signal.Listener<KeyEvent> expeditionKeys = this::handleExpeditionKey;
+	private InnTurnIndicator turnIndicator;
 	private Toast prompt;
 
 	private AttackIndicator attack;
-	private volatile boolean refreshAtbAttack;
 	private LootIndicator loot;
 	private ActionIndicator action;
 	private ResumeIndicator resume;
@@ -337,7 +334,7 @@ public class GameScene extends PixelScene {
 		hero.place( Dungeon.hero.pos );
 		hero.updateArmor();
 		mobs.add( hero );
-		if (InnAdventure.atb()) healthIndicators.add(new InnHeroVitals(Dungeon.hero));
+		if (InnAdventure.expedition()) healthIndicators.add(new InnHeroVitals(Dungeon.hero));
 		
 		for (Mob mob : Dungeon.level.mobs) {
 			addMobSprite( mob );
@@ -525,13 +522,12 @@ public class GameScene extends PixelScene {
 		}
 		add(boss);
 
-		if (InnAdventure.atb()) {
-			Dungeon.hero.innEncounter().advance(Dungeon.level, 0);
-			InnAtbMeter meter = new InnAtbMeter();
-			meter.camera = uiCamera;
-			meter.setRect((uiCamera.width - InnAtbMeter.WIDTH) / 2f, Math.max(screentop + 26, boss.bottom() + 2),
-					InnAtbMeter.WIDTH, InnAtbMeter.HEIGHT);
-			add(meter);
+		InnOriginalParty partyLink = InnOriginalParty.current();
+		if (partyLink != null && partyLink.host) {
+			turnIndicator = new InnTurnIndicator();
+			turnIndicator.camera = uiCamera;
+			turnIndicator.setRect(0, Math.max(screentop + 26, boss.bottom() + 2), uiCamera.width, InnTurnIndicator.HEIGHT);
+			add(turnIndicator);
 		}
 
 		resume = new ResumeIndicator();
@@ -573,10 +569,7 @@ public class GameScene extends PixelScene {
 		} else {
 			toolbar.setRect( insets.left, uiCamera.height - toolbar.height() - insets.bottom, uiCamera.width - insets.right, toolbar.height() );
 		}
-		if (InnAdventure.atb()) {
-			KeyEvent.addKeyListener(atbKeys);
-			KeyEvent.captureKey(Input.Keys.SPACE, atbSpace);
-		}
+		if (InnAdventure.expedition()) KeyEvent.addKeyListener(expeditionKeys);
 
 		if (insets.bottom > 0){
 			SkinnedBlock bar = new SkinnedBlock(uiCamera.width, insets.bottom, TextureCache.createSolid(0x88000000));
@@ -787,7 +780,7 @@ public class GameScene extends PixelScene {
 				GameLog.wipe();
 				GLog.p(Messages.get(GameScene.class, "tutorial_move_desktop"));
 			}
-			if (!InnAdventure.atb()) {
+			if (!InnAdventure.expedition()) {
 				toolbar.visible = toolbar.active = false;
 				status.visible = status.active = false;
 				if (inventory != null) inventory.visible = inventory.active = false;
@@ -828,8 +821,7 @@ public class GameScene extends PixelScene {
 	}
 	
 	public void destroy() {
-		KeyEvent.removeKeyListener(atbKeys);
-		KeyEvent.releaseCapturedKey(atbSpace);
+		KeyEvent.removeKeyListener(expeditionKeys);
 		
 		//tell the actor thread to finish, then wait for it to complete any actions it may be doing.
 		if (!waitForActorThread( 4500, true )){
@@ -871,14 +863,8 @@ public class GameScene extends PixelScene {
 	
 	@Override
 	public synchronized void onPause() {
-		atbSpaceHeld = false;
 		try {
-			if (InnAdventure.atb()) {
-				Actor.updateAtb(0, true);
-				if (Actor.processing()) waitForActorThread(500, false);
-			} else if (!Dungeon.hero.ready) {
-				waitForActorThread(500, false);
-			}
+			if (!Dungeon.hero.ready && !Actor.parked()) waitForActorThread(500, false);
 			Dungeon.saveAll();
 			Badges.saveGlobal();
 			Journal.saveGlobal();
@@ -924,30 +910,27 @@ public class GameScene extends PixelScene {
 
 		super.update();
 
-		if (InnAdventure.atb()) {
-			// Clamp delayed frames rather than fast-forwarding the world.
-			float elapsed = Math.min(0.1f, Game.elapsed);
-			InnOriginalParty party = InnOriginalParty.current();
-			if (party != null && party.host) {
-				if (party.isClosed()) {
-					InnAdventure.retreat();
-					Game.instance.finish();
-					return;
-				}
-				party.applyGuestTime();
+		InnOriginalParty party = InnOriginalParty.current();
+		if (party != null && party.host) {
+			if (party.isClosed()) {
+				InnAdventure.retreat();
+				Game.instance.finish();
+				return;
 			}
-			float gameElapsed = InnAtb.gameElapsed(elapsed);
-			if (interfaceBlockingHero()) Dungeon.hero.requestInnTravelStop();
-			InnAtb.advance(gameElapsed);
-			if (Dungeon.hero.innAtbActive()) Dungeon.hero.innEncounter().advance(Dungeon.level, gameElapsed);
-			Actor.updateAtb(gameElapsed, false);
-			if (party != null && party.host) party.updateHost(elapsed, gameElapsed);
+			// Game time only advances through actions; this polls input and the grace countdown.
+			TurnClock.update(Game.elapsed);
+			party.updateHost(Game.elapsed);
+			if (turnIndicator != null) {
+				int waiting = TurnClock.waitingOn();
+				if (waiting == TurnClock.WAIT_NONE) turnIndicator.hide();
+				else turnIndicator.show(waiting == TurnClock.WAIT_HOST, TurnClock.graceRemaining());
+			}
 		}
 
 		if (notifyDelay > 0) notifyDelay -= Game.elapsed;
 
 		if (!Emitter.freezeEmitters) {
-			waterOfs -= 5 * InnAtb.gameElapsed(Game.elapsed);
+			waterOfs -= 5 * Game.elapsed;
 			water.offsetTo( 0, waterOfs );
 			waterOfs = water.offsetY(); //re-assign to account for auto adjust
 		}
@@ -980,11 +963,6 @@ public class GameScene extends PixelScene {
 
 		if (Dungeon.hero.ready && Dungeon.hero.paralysed == 0) {
 			log.newLine();
-		}
-
-		if (refreshAtbAttack) {
-			refreshAtbAttack = false;
-			AttackIndicator.updateState();
 		}
 
 		if (updateTags){
@@ -1270,9 +1248,6 @@ public class GameScene extends PixelScene {
 		scene.emoicons.add( icon );
 	}
 
-	public static void add( EmoIcon.Sweat fatigue ) {
-		scene.emoicons.add( fatigue );
-	}
 	
 	public static void add( CharHealthIndicator indicator ){
 		if (scene != null) scene.healthIndicators.add(indicator);
@@ -1392,7 +1367,7 @@ public class GameScene extends PixelScene {
 	public static void endIntro(){
 		if (scene != null){
 			SPDSettings.intro(false);
-			if (InnAdventure.atb()) return;
+			if (InnAdventure.expedition()) return;
 			scene.add(new Tweener(scene, 2f){
 				@Override
 				protected void updateValues(float progress) {
@@ -1546,37 +1521,15 @@ public class GameScene extends PixelScene {
 		return false;
 	}
 
-	private boolean handleAtbSpace(KeyEvent event) {
-		boolean firstPress = event.pressed && !atbSpaceHeld;
-		atbSpaceHeld = event.pressed;
-		if (KeyBindings.bindingKey) return false;
-		if (firstPress) toggleAtbTime();
-		return true;
-	}
-
-	private boolean handleAtbKey(KeyEvent event) {
-		if (!InnAdventure.atb() || Dungeon.hero == null) return false;
+	private boolean handleExpeditionKey(KeyEvent event) {
+		if (!InnAdventure.expedition() || Dungeon.hero == null) return false;
 		if (interfaceBlockingHero()) return false;
-		if (event.code == Input.Keys.Z) {
-			if (event.pressed) {
-				cellSelector.resetKeyHold();
-				Dungeon.hero.requestInnTravelStop();
-			}
-			return true;
-		}
 		GameAction action = KeyBindings.getActionForKey(event);
 		if (action == SPDAction.BAG_1) {
 			if (!event.pressed) toggleBackpack();
 			return true;
 		}
 		return false;
-	}
-
-	public static void toggleAtbTime() {
-		if (!InnAdventure.atb() || Dungeon.hero == null || !Dungeon.hero.isAlive() || interfaceBlockingHero()) return;
-		InnOriginalParty party = InnOriginalParty.current();
-		if (party == null) InnAtb.toggleSlowTime();
-		else party.toggleTime();
 	}
 
 	private void toggleBackpack() {
@@ -1639,13 +1592,8 @@ public class GameScene extends PixelScene {
 		}
 	}
 	
-	public static void refreshAtbAttackIndicator() {
-		if (scene != null) scene.refreshAtbAttack = true;
-	}
-
 	public static void afterObserve() {
 		if (scene != null) {
-			if (InnAdventure.atb()) refreshAtbAttackIndicator();
 			for (Mob mob : Dungeon.level.mobs.toArray(new Mob[0])) {
 				if (mob.sprite != null) {
 					if (mob instanceof Mimic && mob.state == mob.PASSIVE && ((Mimic) mob).stealthy() && Dungeon.level.visited[mob.pos]){
@@ -1760,10 +1708,6 @@ public class GameScene extends PixelScene {
 		cellSelector.select( cell, PointerEvent.LEFT );
 	}
 	
-	static boolean isDefaultCellListener(CellSelector.Listener listener) {
-		return listener == defaultCellListener;
-	}
-
 	public static void selectCell( CellSelector.Listener listener ) {
 		if (cellSelector.listener != null && cellSelector.listener != defaultCellListener){
 			cellSelector.listener.onSelect(null);

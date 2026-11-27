@@ -77,6 +77,8 @@ public final class TurnClock {
 	public static InnPartyMember activeMember() {
 		InnOriginalParty party = InnOriginalParty.current();
 		if (party == null || Dungeon.level == null) return null;
+		// A member that can no longer take commands is an ordinary ally that spends its turns.
+		if (!party.acceptsCommands()) return null;
 		InnPartyMember member = party.activeMember(Dungeon.level);
 		return member != null && Actor.findById(member.id()) == member ? member : null;
 	}
@@ -227,10 +229,23 @@ public final class TurnClock {
 
 	/** A player is about to act with a ready action. */
 	static void acting(Actor actor) {
-		synchronized (LOCK) {
-			TurnPolicy.acting(state(actor));
+		boolean input;
+		if (actor instanceof Hero) {
+			Hero hero = (Hero) actor;
+			boolean waiting;
+			synchronized (LOCK) {
+				waiting = heroState.waiting;
+			}
+			// A new turn starts with ready unset; only an action the player chose counts as input.
+			input = hero.paralysed == 0 && (hero.curAction != null || hero.resting || waiting && !hero.ready);
+		} else {
+			InnOriginalParty party = InnOriginalParty.current();
+			input = ((InnPartyMember) actor).paralysed == 0 && party != null && party.hasPendingCommand();
+			memberFovPos = -1;
 		}
-		if (actor instanceof InnPartyMember) memberFovPos = -1;
+		synchronized (LOCK) {
+			TurnPolicy.acting(state(actor), input);
+		}
 	}
 
 	/** Result of a decision for an idle player: the actor the scheduler holds (or null) and doNext. */

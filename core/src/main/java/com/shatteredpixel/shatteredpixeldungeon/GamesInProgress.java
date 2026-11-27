@@ -55,16 +55,16 @@ public class GamesInProgress {
 	}
 	
 	public static String gameFolder( int slot ){
-		if (isAtbSlot(slot)) return Messages.format("inn-atb-game%d", slot - MAX_SLOTS);
+		if (isExpeditionSlot(slot)) return Messages.format("inn-atb-game%d", slot - MAX_SLOTS);
 		return Messages.format(GAME_FOLDER, slot);
 	}
 
-	static boolean isAtbSlot(int slot) {
+	static boolean isExpeditionSlot(int slot) {
 		return slot > MAX_SLOTS && slot <= 2 * MAX_SLOTS;
 	}
 
 	public static int firstSlot() {
-		return InnAdventure.atb() ? MAX_SLOTS + 1 : 1;
+		return InnAdventure.expedition() ? MAX_SLOTS + 1 : 1;
 	}
 	
 	public static String gameFile( int slot ){

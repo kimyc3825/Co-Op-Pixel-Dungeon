@@ -27,6 +27,7 @@ import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.Statistics;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
+import com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Blindness;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Buff;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Degrade;
@@ -187,16 +188,23 @@ public class Item implements Bundlable {
 		}
 	}
 
+	/** Executes an item action chosen in the interface; returns false if it was refused. */
 	public final boolean executeFromUi(Hero hero) {
-		if (hero.innExhausted()) return false;
+		if (!uiMayAct(hero)) return false;
 		execute(hero);
 		return true;
 	}
 
 	public final boolean executeFromUi(Hero hero, String action) {
-		if (hero.innExhausted()) return false;
+		if (!uiMayAct(hero)) return false;
 		execute(hero, action);
 		return true;
+	}
+
+	//in party play an item window can stay open while the world moves on, e.g. after a grace countdown
+	// ran out. Item actions then wait until it is the hero's turn again and the actor thread is idle.
+	private static boolean uiMayAct(Hero hero) {
+		return !TurnClock.partyActive() || hero.ready && Actor.parked();
 	}
 	
 	protected void onThrow( int cell ) {

@@ -21,8 +21,6 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.sprites;
 
-import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
-
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
@@ -119,7 +117,6 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 	protected Flare aura;
 	
 	protected EmoIcon emo;
-	private EmoIcon.Sweat innMonsterSweat;
 	protected CharHealthIndicator health;
 
 	private Tweener jumpTweener;
@@ -171,24 +168,10 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 
 	@Override
 	public void destroy() {
-		if (innMonsterSweat != null) {
-			innMonsterSweat.killAndErase();
-			innMonsterSweat.destroy();
-			innMonsterSweat = null;
-		}
 		super.destroy();
 		if (ch != null && ch.sprite == this){
 			ch.sprite = null;
 		}
-	}
-
-	public void showInnMonsterSweat(boolean tired, Group effects) {
-		if (tired && innMonsterSweat == null) {
-			innMonsterSweat = new EmoIcon.Sweat(this, false);
-			if (effects == null) GameScene.add(innMonsterSweat);
-			else effects.add(innMonsterSweat);
-		}
-		if (innMonsterSweat != null) innMonsterSweat.active = innMonsterSweat.visible = tired;
 	}
 
 	//used for just updating a sprite based on a given character, not linking them or placing in the game
@@ -239,12 +222,7 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 
 		play( run );
 		
-		PosTweener nextMotion = new PosTweener( this, worldToCamera( to ), moveInterval ) {
-			@Override
-			protected float tweenElapsed() {
-				return InnAtb.gameElapsed(super.tweenElapsed());
-			}
-		};
+		PosTweener nextMotion = new PosTweener( this, worldToCamera( to ), moveInterval );
 		nextMotion.listener = this;
 		synchronized (this) {
 			motion = nextMotion;
@@ -674,11 +652,6 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 	}
 
 	@Override
-	protected float animationElapsed() {
-		return ch == null ? super.animationElapsed() : InnAtb.gameElapsed(super.animationElapsed());
-	}
-	
-	@Override
 	public void resetColor() {
 		super.resetColor();
 		if (invisible != null){
@@ -795,7 +768,6 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 	
 	@Override
 	public void kill() {
-		showInnMonsterSweat(false, null);
 		super.kill();
 		
 		hideEmo();
@@ -927,11 +899,6 @@ public class CharSprite extends MovieClip implements Tweener.Listener, MovieClip
 			end = pos;
 
 			this.height = height;
-		}
-
-		@Override
-		protected float tweenElapsed() {
-			return InnAtb.gameElapsed(super.tweenElapsed());
 		}
 
 		@Override

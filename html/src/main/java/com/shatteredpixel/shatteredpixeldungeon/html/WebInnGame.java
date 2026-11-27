@@ -33,7 +33,7 @@ final class WebInnGame extends ShatteredPixelDungeon {
 
     @Override
     public String runExitLabel() {
-        return InnAdventure.atb() ? "여관으로 철수" : "저장하고 여관으로";
+        return InnAdventure.expedition() ? "여관으로 철수" : "저장하고 여관으로";
     }
 
     @Override

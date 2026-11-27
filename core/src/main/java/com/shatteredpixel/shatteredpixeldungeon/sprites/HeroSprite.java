@@ -23,11 +23,9 @@ package com.shatteredpixel.shatteredpixeldungeon.sprites;
 
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
-import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.HeroDisguise;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroClass;
-import com.shatteredpixel.shatteredpixeldungeon.effects.EmoIcon;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.watabou.gltextures.SmartTexture;
 import com.watabou.gltextures.TextureCache;
@@ -50,9 +48,6 @@ public class HeroSprite extends CharSprite {
 	
 	private Animation fly;
 	private Animation read;
-	private EmoIcon.Sweat sweat;
-	private float itemRejectionLeft;
-	private float rejectedItemCost;
 
 	public HeroSprite() {
 		super();
@@ -157,36 +152,11 @@ public class HeroSprite extends CharSprite {
 		 */
 	}
 
-	public void showInnAtbItemRejection(float cost) {
-		Game.runOnRenderThread(() -> {
-			rejectedItemCost = cost;
-			itemRejectionLeft = 0.75f;
-		});
-	}
-
 	@Override
 	public void update() {
-		Hero hero = (Hero) ch;
-		sleeping = hero.isAlive() && hero.resting;
+		sleeping = ch.isAlive() && ((Hero)ch).resting;
+		
 		super.update();
-
-		itemRejectionLeft = Math.max(0f, itemRejectionLeft - Game.elapsed);
-		boolean tired = visible && hero.isAlive() && (hero.waitingForInnAtbEnergy()
-				|| hero.innAtbActive() && itemRejectionLeft > 0f && !InnAtb.canSpend(rejectedItemCost));
-		if (tired && sweat == null) {
-			sweat = new EmoIcon.Sweat(this);
-		}
-		if (sweat != null) sweat.active = sweat.visible = tired;
-	}
-
-	@Override
-	public void destroy() {
-		if (sweat != null) {
-			sweat.killAndErase();
-			sweat.destroy();
-			sweat = null;
-		}
-		super.destroy();
 	}
 	
 	public void sprint( float speed ) {

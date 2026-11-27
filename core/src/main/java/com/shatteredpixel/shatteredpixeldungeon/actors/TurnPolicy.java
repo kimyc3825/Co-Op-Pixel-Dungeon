@@ -160,14 +160,13 @@ public final class TurnPolicy {
 	}
 
 	/**
-	 * Called when {@code p} is about to act with a ready action. Returns true if this counts as input
-	 * (the player had been idle), which cancels its grace and AFK state.
+	 * Called when {@code p} is about to act with a ready action. {@code input} says whether the action came
+	 * from the player (rather than an automatic action such as paralysis); input cancels the grace countdown
+	 * and the AFK shortening.
 	 */
-	public static boolean acting(Player p) {
-		if (!p.waiting) return false;
+	public static void acting(Player p, boolean input) {
 		p.waiting = false;
-		p.grace.input();
-		return true;
+		if (input) p.grace.input();
 	}
 
 	/** Among players tied at the earliest time, the one with a ready action goes first. */

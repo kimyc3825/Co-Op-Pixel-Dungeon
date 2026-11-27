@@ -631,17 +631,16 @@ public class Dungeon {
 	private static final String CHAPTERS	= "chapters";
 	private static final String QUESTS		= "quests";
 	private static final String BADGES		= "badges";
-	private static final Object ATB_CHECKPOINT_LOCK = new Object();
+	private static final Object EXPEDITION_CHECKPOINT_LOCK = new Object();
 	
 	public static void saveGame( int save ) {
-		saveGame(save, InnAdventure.atbRunForSlot(save));
+		saveGame(save, InnAdventure.expeditionRunForSlot(save));
 	}
 
-	private static void saveGame(int save, InnAdventure.AtbRun run) {
-		if (GamesInProgress.isAtbSlot(save) && !InnAdventure.ownsAtbRun(run)) return;
+	private static void saveGame(int save, InnAdventure.ExpeditionRun run) {
+		if (GamesInProgress.isExpeditionSlot(save) && !InnAdventure.ownsExpeditionRun(run)) return;
 		try {
 			Bundle bundle = new Bundle();
-			if (GamesInProgress.isAtbSlot(save)) InnAtb.store(bundle);
 
 			bundle.put( INIT_VER, initialVersion );
 			bundle.put( VERSION, version = Game.versionCode );
@@ -715,33 +714,33 @@ public class Dungeon {
 	}
 	
 	public static void saveLevel( int save ) throws IOException {
-		saveLevel(save, InnAdventure.atbRunForSlot(save));
+		saveLevel(save, InnAdventure.expeditionRunForSlot(save));
 	}
 
-	private static void saveLevel(int save, InnAdventure.AtbRun run) throws IOException {
-		if (GamesInProgress.isAtbSlot(save) && !InnAdventure.ownsAtbRun(run)) return;
+	private static void saveLevel(int save, InnAdventure.ExpeditionRun run) throws IOException {
+		if (GamesInProgress.isExpeditionSlot(save) && !InnAdventure.ownsExpeditionRun(run)) return;
 		Bundle bundle = new Bundle();
 		bundle.put( LEVEL, level );
 		
 		writeCheckpoint(save, run, GamesInProgress.depthFile(save, depth, branch), bundle);
 	}
 
-	private static void writeCheckpoint(int save, InnAdventure.AtbRun run, String file, Bundle bundle) throws IOException {
-		if (!GamesInProgress.isAtbSlot(save)) {
+	private static void writeCheckpoint(int save, InnAdventure.ExpeditionRun run, String file, Bundle bundle) throws IOException {
+		if (!GamesInProgress.isExpeditionSlot(save)) {
 			FileUtils.bundleToFile(file, bundle);
 			return;
 		}
-		synchronized (ATB_CHECKPOINT_LOCK) {
+		synchronized (EXPEDITION_CHECKPOINT_LOCK) {
 			// Recheck ownership in case a retreat happened while the bundle was prepared.
-			if (InnAdventure.ownsAtbRun(run)) FileUtils.bundleToFile(file, bundle);
+			if (InnAdventure.ownsExpeditionRun(run)) FileUtils.bundleToFile(file, bundle);
 		}
 	}
 	
 	public static void saveAll() throws IOException {
 		int save = GamesInProgress.curSlot;
-		boolean atbSlot = GamesInProgress.isAtbSlot(save);
-		InnAdventure.AtbRun run = InnAdventure.atbRunForSlot(save);
-		if (atbSlot && run == null) return;
+		boolean expeditionSlot = GamesInProgress.isExpeditionSlot(save);
+		InnAdventure.ExpeditionRun run = InnAdventure.expeditionRunForSlot(save);
+		if (expeditionSlot && run == null) return;
 		if (hero != null && (hero.isAlive() || WndResurrect.instance != null)) {
 			
 			Actor.fixTime();
@@ -749,9 +748,9 @@ public class Dungeon {
 			saveGame(save, run);
 			saveLevel(save, run);
 
-			if (atbSlot) {
-				synchronized (ATB_CHECKPOINT_LOCK) {
-					if (InnAdventure.ownsAtbRun(run)) GamesInProgress.set(save);
+			if (expeditionSlot) {
+				synchronized (EXPEDITION_CHECKPOINT_LOCK) {
+					if (InnAdventure.ownsExpeditionRun(run)) GamesInProgress.set(save);
 				}
 			} else {
 				GamesInProgress.set(save);
@@ -767,7 +766,6 @@ public class Dungeon {
 	public static void loadGame( int save, boolean fullLoad ) throws IOException {
 		
 		Bundle bundle = FileUtils.bundleFromFile( GamesInProgress.gameFile( save ) );
-		if (fullLoad && GamesInProgress.isAtbSlot(save)) InnAtb.restore(bundle);
 
 		initialVersion = bundle.getInt( INIT_VER );
 		version = bundle.getInt( VERSION );
@@ -885,8 +883,8 @@ public class Dungeon {
 	}
 	
 	public static void deleteGame( int save, boolean deleteLevels ) {
-		if (GamesInProgress.isAtbSlot(save)) {
-			synchronized (ATB_CHECKPOINT_LOCK) {
+		if (GamesInProgress.isExpeditionSlot(save)) {
+			synchronized (EXPEDITION_CHECKPOINT_LOCK) {
 				String file = GamesInProgress.gameFile(save);
 				FileUtils.deleteFile(file + ".spdtmp");
 				FileUtils.deleteFile(file);

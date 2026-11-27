@@ -1,64 +1,184 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Stages the web lobby and the TeaVM "original" runtime as Workers static assets in server/public.
+//
+//   ./gradlew -PwebOnly html:dist && node scripts/stage-web-client.mjs
+//   node scripts/stage-web-client.mjs --lobby-only      (lobby without the dungeon runtime, for local work)
+//
+// Layout (every versioned path is immutable; only the three entry files change between deploys):
+//   /play/index.html                                  lobby page, <base href> points at the client folder
+//   /play/client/<revision>-<signature>/...           lobby modules and art (web-client/play)
+//   /play/client/.../runtime-manifest.json            legacy mini-battle runtime (runtime-loader.mjs)
+//   /play/client/.../runtime/<version>/...
+//   /play/original/manifest.json                      { version, entry } read by original-download.mjs
+//   /play/original/catalogue/<version>.json           { version, files: [[path, size]] }
+//   /play/original/runtime/<version>/...              html/build/dist/web (original-cache.js caches these)
+//
+// Set COOP_PREVIOUS_SITE to the server/public of the previous deploy to keep its versioned folders,
+// so pages opened before a deploy can still load their files afterwards.
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { cp, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const revision = process.env.COOP_CLIENT_REVISION;
+// Workers static assets limits (Workers Free plan): 20,000 files per version, 25 MiB per file.
+const MAX_ASSET_FILES = 20_000;
+const MAX_ASSET_BYTES = 25 * 1024 * 1024;
+const VERSION = /^[a-f0-9]{64}$/;
+
+const lobbyOnly = process.argv.includes('--lobby-only');
+const project = fileURLToPath(new URL('../', import.meta.url));
+const source = join(project, 'web-client/play');
+const dungeon = process.env.COOP_WEB_DIST ?? join(project, 'html/build/dist/web');
+const site = process.env.COOP_SITE_DIR ?? join(project, 'server/public');
+const play = join(site, 'play');
+
+let revision = process.env.COOP_CLIENT_REVISION;
+if (!revision) {
+  try {
+    revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim();
+  } catch { /* checked below */ }
+}
 if (!/^[a-f0-9]{40}$/.test(revision ?? '')) throw new Error('Set COOP_CLIENT_REVISION to the client Git commit.');
 
-const project = new URL('../', import.meta.url);
-const source = fileURLToPath(new URL('../web-client/play/', import.meta.url));
-const dungeon = new URL('html/build/dist/web/', project);
-const output = fileURLToPath(new URL('html/build/dist/web/play/', project));
+const validPath = path => typeof path === 'string' && path.length <= 320 &&
+  path.split('/').every(segment => /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,119}$/.test(segment));
+
+async function sha256File(path) {
+  return createHash('sha256').update(await readFile(path)).digest('hex');
+}
+
+async function listFiles(root, prefix = '', skip = () => false) {
+  const files = [];
+  const entries = await readdir(join(root, prefix), { withFileTypes: true });
+  entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  for (const entry of entries) {
+    const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (skip(name)) continue;
+    if (entry.isDirectory()) files.push(...await listFiles(root, name, skip));
+    else if (entry.isFile()) files.push(name);
+    else throw new Error(`Unsupported file: ${join(root, name)}`);
+  }
+  return files;
+}
+
+await rm(site, { recursive: true, force: true });
+await mkdir(play, { recursive: true });
+
+// ---- original runtime ----
+let original = null;
+if (!lobbyOnly) {
+  await readFile(join(dungeon, 'index.html'));
+  // An older staging layout put the lobby inside the dist; it is not part of the runtime.
+  const names = await listFiles(dungeon, '', name => name === 'play');
+  const files = [];
+  for (const name of names) {
+    if (!validPath(name)) throw new Error(`Unsupported runtime path: ${name}`);
+    const path = join(dungeon, name);
+    files.push([name, await sha256File(path), (await lstat(path)).size]);
+  }
+  // Same version formula as the former publisher, so cached runtimes keep their names.
+  const version = createHash('sha256').update(JSON.stringify({ entry: 'index.html', files })).digest('hex');
+  const runtime = join(play, 'original/runtime', version);
+  for (const [name] of files) {
+    await mkdir(join(runtime, name, '..'), { recursive: true });
+    await cp(join(dungeon, name), join(runtime, name));
+  }
+  await mkdir(join(play, 'original/catalogue'), { recursive: true });
+  await writeFile(join(play, 'original/catalogue', `${version}.json`),
+    JSON.stringify({ version, files: files.map(([name, , size]) => [name, size]) }));
+  await writeFile(join(play, 'original/manifest.json'),
+    JSON.stringify({ version, entry: `/play/original/runtime/${version}/index.html` }));
+  original = { version, files: files.length, bytes: files.reduce((total, [, , size]) => total + size, 0) };
+}
+
+// ---- lobby ----
+const staging = join(site, '.lobby');
+await cp(source, staging, { recursive: true });
 const runtimeFiles = [
   'avatar-catalog.mjs', 'battle.mjs', 'layout.mjs', 'rules.mjs',
   'assets/items.png', 'assets/rat.png', 'assets/tiles_prison.png', 'assets/tiles_sewers.png', 'assets/training.png',
 ].sort();
-
-await readFile(new URL('index.html', dungeon));
-await rm(output, { recursive: true, force: true });
-await cp(source, output, { recursive: true });
-
 const runtimeHash = createHash('sha256');
 for (const file of runtimeFiles) {
-  const bytes = await readFile(join(output, file));
+  const bytes = await readFile(join(staging, file));
   runtimeHash.update(`${file.length}:${file}:${bytes.length}:`).update(bytes);
 }
 const runtimeVersion = runtimeHash.digest('hex');
-const runtime = join(output, 'runtime', runtimeVersion);
 for (const file of runtimeFiles) {
-  const directory = file.startsWith('assets/') ? join(runtime, 'assets') : runtime;
-  await mkdir(directory, { recursive: true });
-  await cp(join(output, file), join(runtime, file));
+  const target = join(staging, 'runtime', runtimeVersion, file);
+  await mkdir(join(target, '..'), { recursive: true });
+  await cp(join(staging, file), target);
 }
-
 const assetHash = createHash('sha256');
-async function hashAssets(directory, prefix = '') {
-  const entries = await readdir(directory, { withFileTypes: true });
-  entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-  for (const entry of entries) {
-    const name = prefix + entry.name;
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      await hashAssets(path, name + '/');
-    } else if (entry.isFile()) {
-      const bytes = await readFile(path);
-      assetHash.update(`${name.length}:${name}:${bytes.length}:`).update(bytes);
-    } else {
-      throw new Error(`Unexpected web client asset: ${name}`);
-    }
-  }
+for (const name of await listFiles(staging)) {
+  const bytes = await readFile(join(staging, name));
+  assetHash.update(`${name.length}:${name}:${bytes.length}:`).update(bytes);
 }
-await hashAssets(output);
 const signature = assetHash.digest('hex');
-const base = `/play/client/${revision}-${signature}/`;
-const page = join(output, 'index.html');
-const html = await readFile(page, 'utf8');
-if (!html.includes('<head>')) throw new Error('Missing web client document head.');
-await writeFile(page, html.replace('<head>', `<head>\n  <base href="${base}">`));
-await writeFile(join(output, 'runtime-manifest.json'), JSON.stringify({
+const clientName = `${revision}-${signature}`;
+const base = `/play/client/${clientName}/`;
+await writeFile(join(staging, 'runtime-manifest.json'), JSON.stringify({
   version: runtimeVersion,
   entry: `${base}runtime/${runtimeVersion}/battle.mjs`,
 }));
-console.log(signature);
+const html = await readFile(join(staging, 'index.html'), 'utf8');
+if (!html.includes('<head>')) throw new Error('Missing web client document head.');
+const page = html.replace('<head>', `<head>\n  <base href="${base}">`);
+await writeFile(join(staging, 'index.html'), page);
+await mkdir(join(play, 'client'), { recursive: true });
+await cp(staging, join(play, 'client', clientName), { recursive: true });
+await rm(staging, { recursive: true });
+await writeFile(join(play, 'index.html'), page);
+
+// ---- previous deploy ----
+const carried = [];
+const previous = process.env.COOP_PREVIOUS_SITE;
+if (previous) {
+  try {
+    const oldPage = await readFile(join(previous, 'play/index.html'), 'utf8');
+    const oldClient = /<base href="\/play\/client\/([a-f0-9]{40}-[a-f0-9]{64})\/">/.exec(oldPage)?.[1];
+    if (oldClient && oldClient !== clientName) {
+      await cp(join(previous, 'play/client', oldClient), join(play, 'client', oldClient), { recursive: true });
+      carried.push(`client/${oldClient}`);
+    }
+    const oldManifest = JSON.parse(await readFile(join(previous, 'play/original/manifest.json'), 'utf8'));
+    if (original && VERSION.test(oldManifest?.version ?? '') && oldManifest.version !== original.version) {
+      await cp(join(previous, 'play/original/runtime', oldManifest.version),
+        join(play, 'original/runtime', oldManifest.version), { recursive: true });
+      await cp(join(previous, 'play/original/catalogue', `${oldManifest.version}.json`),
+        join(play, 'original/catalogue', `${oldManifest.version}.json`));
+      carried.push(`original/${oldManifest.version}`);
+    }
+  } catch (error) {
+    console.warn(`Previous deploy not carried over: ${error.message}`);
+  }
+}
+
+// ---- routing and headers (applied by Workers static assets without invoking the Worker) ----
+await writeFile(join(site, '_redirects'), '/ /play/ 302\n');
+await writeFile(join(site, '_headers'), `# Generated by scripts/stage-web-client.mjs
+/play/client/*
+  Cache-Control: public, max-age=31536000, immutable
+/play/original/runtime/*
+  Cache-Control: public, max-age=31536000, immutable
+/play/original/catalogue/*
+  Cache-Control: public, max-age=31536000, immutable
+# The cache worker lives with the lobby but controls the runtime folder.
+/play/client/:client/original-cache.js
+  Service-Worker-Allowed: /play/original/
+/*
+  X-Content-Type-Options: nosniff
+`);
+
+// ---- limits ----
+const all = await listFiles(site);
+if (all.length > MAX_ASSET_FILES) throw new Error(`${all.length} asset files exceed the ${MAX_ASSET_FILES}-file limit.`);
+let largest = ['', 0];
+for (const name of all) {
+  const { size } = await stat(join(site, name));
+  if (size > MAX_ASSET_BYTES) throw new Error(`${name} (${size} bytes) exceeds the 25 MiB asset limit.`);
+  if (size > largest[1]) largest = [name, size];
+}
+console.log(JSON.stringify({ site, client: base, runtime: runtimeVersion, original, carried, files: all.length,
+  largest: { path: largest[0], bytes: largest[1] } }, null, 2));

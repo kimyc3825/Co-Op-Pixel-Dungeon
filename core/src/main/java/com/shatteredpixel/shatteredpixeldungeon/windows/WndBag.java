@@ -367,7 +367,7 @@ public class WndBag extends WndTabbed {
 	@Override
 	public boolean onSignal(KeyEvent event) {
 		GameAction action = KeyBindings.getActionForKey(event);
-		if (action == SPDAction.BAG_1 && atbBackpackOpen()) {
+		if (action == SPDAction.BAG_1 && expeditionBackpackOpen()) {
 			if (!event.pressed) onBackPressed();
 			return true;
 		}
@@ -379,8 +379,8 @@ public class WndBag extends WndTabbed {
 		}
 	}
 
-	private boolean atbBackpackOpen() {
-		return InnAdventure.atb() && selector == null && lastBag instanceof Belongings.Backpack;
+	private boolean expeditionBackpackOpen() {
+		return InnAdventure.expedition() && selector == null && lastBag instanceof Belongings.Backpack;
 	}
 	
 	@Override
@@ -446,7 +446,7 @@ public class WndBag extends WndTabbed {
 			switch (index){
 				case 1: default:
 					// The backpack window handles the toggle when this tab is already selected.
-					return atbBackpackOpen() ? null : SPDAction.BAG_1;
+					return expeditionBackpackOpen() ? null : SPDAction.BAG_1;
 				case 2:
 					return SPDAction.BAG_2;
 				case 3:

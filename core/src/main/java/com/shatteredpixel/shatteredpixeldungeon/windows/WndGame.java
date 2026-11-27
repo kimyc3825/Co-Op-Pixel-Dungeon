@@ -106,7 +106,7 @@ public class WndGame extends Window {
 		addButton(curBtn = new RedButton(exitLabel != null ? exitLabel : Messages.get(this, "menu")) {
 			@Override
 			protected void onClick() {
-				if (guest || InnAdventure.atb()) {
+				if (guest || InnAdventure.expedition()) {
 					Game.instance.finish();
 					return;
 				}

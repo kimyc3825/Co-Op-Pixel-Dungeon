@@ -21,17 +21,10 @@
 
 package com.shatteredpixel.shatteredpixeldungeon.effects;
 
-import com.badlogic.gdx.graphics.Pixmap;
-import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.CharSprite;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
-import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
-import com.watabou.gltextures.SmartTexture;
-import com.watabou.gltextures.TextureCache;
-import com.watabou.noosa.Camera;
-import com.watabou.noosa.ColorBlock;
 import com.watabou.noosa.Game;
 import com.watabou.noosa.Group;
 import com.watabou.noosa.Image;
@@ -88,99 +81,6 @@ public class EmoIcon extends Image {
 		return new PointF(width()/2f, height()/2f);
 	};
 	
-	public static final class Sweat extends Group {
-
-		private static final float CYCLE = 0.8f;
-		private static SmartTexture dropTexture;
-
-		private final CharSprite owner;
-		private final Image[] drops = new Image[3];
-		private final ColorBlock labelBack;
-		private final RenderedTextBlock label;
-		private float elapsed;
-
-		public Sweat(CharSprite owner) {
-			this(owner, true);
-			GameScene.add(this);
-		}
-
-		public Sweat(CharSprite owner, boolean showLabel) {
-			this.owner = owner;
-			SmartTexture texture = drop();
-			for (int i = 0; i < drops.length; i++) {
-				Image drop = new Image(texture);
-				drop.scale.set(i == 0 ? 1f : 0.8f);
-				drops[i] = drop;
-				add(drop);
-			}
-
-			if (showLabel) {
-				label = PixelScene.renderTextBlock(6, false);
-				label.text(Messages.get(Sweat.class, "exhausted"));
-				label.hardlight(0xFFE3AE);
-				labelBack = new ColorBlock(label.width() + 4, label.height() + 2, 0xE0272523);
-				add(labelBack);
-				add(label);
-			} else {
-				label = null;
-				labelBack = null;
-			}
-			position();
-		}
-
-		@Override
-		public void update() {
-			elapsed = (elapsed + Game.elapsed) % CYCLE;
-			position();
-		}
-
-		private void position() {
-			Camera camera = owner.camera();
-			float center = owner.x + owner.width() / 2f;
-			float head = owner.y;
-			for (int i = 0; i < drops.length; i++) {
-				Image drop = drops[i];
-				float phase = (elapsed / CYCLE + (float) i / drops.length) % 1f;
-				float side = i == 2 ? -1 : 1;
-				float lane = i == 1 ? 12 : 7;
-				drop.x = PixelScene.align(camera, center + side * (lane + phase * 2) - drop.width() / 2f);
-				drop.y = PixelScene.align(camera, head - (i == 1 ? 5 : 1) + phase * 8);
-				drop.alpha(1 - 0.45f * phase);
-			}
-
-			if (labelBack != null) {
-				labelBack.x = PixelScene.align(camera, center - labelBack.width() / 2f);
-				labelBack.y = PixelScene.align(camera, head - labelBack.height() - 7);
-				label.setPos(labelBack.x + 2, labelBack.y + 1);
-			}
-		}
-
-		private static SmartTexture drop() {
-			if (dropTexture != null && dropTexture.bitmap != null) return dropTexture;
-			String[] pixels = {
-					"  #  ",
-					" #+  ",
-					" #+# ",
-					"#+..#",
-					"#+..#",
-					" #.# ",
-					"  #  "
-			};
-			Pixmap bitmap = new Pixmap(pixels[0].length(), pixels.length, Pixmap.Format.RGBA8888);
-			for (int y = 0; y < pixels.length; y++) {
-				for (int x = 0; x < pixels[y].length(); x++) {
-					switch (pixels[y].charAt(x)) {
-						case '#': bitmap.drawPixel(x, y, 0x204C64FF); break;
-						case '+': bitmap.drawPixel(x, y, 0xC5F5FAFF); break;
-						case '.': bitmap.drawPixel(x, y, 0x69C6E3FF); break;
-					}
-				}
-			}
-			dropTexture = TextureCache.get(bitmap);
-			return dropTexture;
-		}
-	}
-
 	public static class Sleep extends EmoIcon {
 		
 		public Sleep( CharSprite owner ) {

@@ -77,6 +77,8 @@ public class AutoTest {
 		return "runs=" + runs + " deepest=" + deepest + " enabled=" + enabled + " depth=" + Dungeon.depth + " hp=" + hero.HP + "/" + hero.HT + " lvl=" + hero.lvl
 				+ " pos=" + hero.pos + " exit=" + (Dungeon.level == null ? -1 : Dungeon.level.exit())
 				+ " ready=" + hero.ready + " alive=" + hero.isAlive() + " actions=" + actions + " last=" + last
+				//game time in turns; it only advances when the player acts
+				+ " turns=" + (com.shatteredpixel.shatteredpixeldungeon.Statistics.duration + Actor.now())
 				+ " scene=" + Game.scene().getClass().getSimpleName() + (stuck > 0 ? "\n" + around(hero.pos, 9) : "");
 	}
 

@@ -1,0 +1,277 @@
+{
+ "frameWidth": 16,
+ "frameHeight": 20,
+ "frames": 18,
+ "anchor": {
+  "x": 8,
+  "y": 19,
+  "note": "feet rest on row 19; centre column 7.5"
+ },
+ "animations": {
+  "idle": [
+   0,
+   1
+  ],
+  "run": [
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "die": [
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "attack": [
+   13,
+   14,
+   15
+  ],
+  "operate": [
+   16,
+   17
+  ]
+ },
+ "layerOrder": [
+  "back",
+  "hair_back",
+  "outfit_back",
+  "body",
+  "outfit",
+  "hair_front",
+  "face",
+  "hat"
+ ],
+ "rows": [
+  "body",
+  "outfit:warrior",
+  "outfit:mage",
+  "outfit_back:rogue",
+  "outfit:rogue",
+  "outfit:huntress",
+  "outfit_back:duelist",
+  "outfit:duelist",
+  "outfit:cleric",
+  "hair_front:crop",
+  "hair_front:spiky",
+  "hair_front:swept",
+  "hair_front:bob",
+  "hair_back:long",
+  "hair_front:long",
+  "hair_back:ponytail",
+  "hair_front:ponytail",
+  "hair_back:bun",
+  "hair_front:bun",
+  "hat:hood",
+  "hat:wizard",
+  "hat:helm",
+  "hat:bandana",
+  "hat:feathercap",
+  "hat:circlet",
+  "face:glasses",
+  "face:eyepatch",
+  "face:mask",
+  "face:monocle",
+  "face:freckles",
+  "back:cape",
+  "back:backpack",
+  "back:quiver",
+  "back:greatsword",
+  "back:shield"
+ ],
+ "paletteStripY": 700,
+ "recolour": {
+  "skin": {
+   "light": [
+    "6b3a2e",
+    "a9654b",
+    "d4936c",
+    "eeb98f",
+    "fbdcb4"
+   ],
+   "pale": [
+    "70423c",
+    "ad7766",
+    "d9a58e",
+    "f1cbb4",
+    "fde8d8"
+   ],
+   "tan": [
+    "5c3121",
+    "925234",
+    "bd7a4b",
+    "d99e68",
+    "efc38e"
+   ],
+   "olive": [
+    "4d3020",
+    "7c5232",
+    "a5784a",
+    "c49d65",
+    "dcbf87"
+   ],
+   "brown": [
+    "3d2117",
+    "683a27",
+    "925a3a",
+    "b47a50",
+    "cf9a68"
+   ],
+   "deep": [
+    "28140f",
+    "46271b",
+    "66402b",
+    "86583b",
+    "a5724c"
+   ],
+   "ash": [
+    "35364a",
+    "5a5f78",
+    "8389a3",
+    "a9b0c6",
+    "cdd3e2"
+   ],
+   "moss": [
+    "2b3a22",
+    "4c6338",
+    "708a4c",
+    "94ab66",
+    "b7c986"
+   ]
+  },
+  "hair": {
+   "chestnut": [
+    "3b2117",
+    "5e3522",
+    "834e2f",
+    "a86d40",
+    "c78f58"
+   ],
+   "black": [
+    "15141c",
+    "26242f",
+    "393644",
+    "4e4a5a",
+    "6a6577"
+   ],
+   "blonde": [
+    "6b4a1a",
+    "a07a2a",
+    "c9a73e",
+    "e3cd62",
+    "f5e89a"
+   ],
+   "ginger": [
+    "4a1a0e",
+    "7f2c12",
+    "b2481b",
+    "d6692a",
+    "ef9446"
+   ],
+   "silver": [
+    "4a4d5a",
+    "737886",
+    "a0a6b2",
+    "c8ccd4",
+    "eceef1"
+   ],
+   "blue": [
+    "1c2448",
+    "2c3c78",
+    "3f5cab",
+    "5d84cf",
+    "8fb2e8"
+   ],
+   "pink": [
+    "5a2440",
+    "8e3a63",
+    "bf5a8a",
+    "de82ac",
+    "f2b2cd"
+   ],
+   "green": [
+    "1e3a24",
+    "2f5c36",
+    "45824a",
+    "66a95f",
+    "98cf84"
+   ]
+  },
+  "outfit": {
+   "crimson": [
+    "3e1218",
+    "6d1f27",
+    "9c2f33",
+    "c44a43",
+    "e07a63"
+   ],
+   "navy": [
+    "141a33",
+    "233059",
+    "344a85",
+    "4b68ad",
+    "7290cc"
+   ],
+   "forest": [
+    "16291c",
+    "25442b",
+    "39643a",
+    "52864b",
+    "7aa868"
+   ],
+   "violet": [
+    "25163a",
+    "412665",
+    "5e3a8e",
+    "7d58b3",
+    "a283d1"
+   ],
+   "ochre": [
+    "3d2a0e",
+    "6a4a17",
+    "977024",
+    "bf9637",
+    "dcbd5e"
+   ],
+   "slate": [
+    "22252c",
+    "3a3f4a",
+    "565d6b",
+    "767f8e",
+    "9aa3b1"
+   ],
+   "teal": [
+    "0f2b2e",
+    "1a4a4c",
+    "276d6b",
+    "3d938b",
+    "69b9a8"
+   ],
+   "cream": [
+    "5a4d3e",
+    "8f7f69",
+    "bdae93",
+    "dcd0b6",
+    "f2ead8"
+   ]
+  },
+  "keys": {
+   "skin": "light",
+   "hair": "chestnut",
+   "outfit": "crimson"
+  }
+ },
+ "hatHidesHairAboveRow": {
+  "hood": 4,
+  "wizard": 5,
+  "helm": 5,
+  "bandana": 0,
+  "feathercap": 4,
+  "circlet": 0
+ }
+}

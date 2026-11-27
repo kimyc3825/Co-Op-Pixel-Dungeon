@@ -34,8 +34,8 @@ public final class InnAdventureScene extends PixelScene {
             return;
         }
 
-        if (InnAdventure.atb()) {
-            enter(InnAdventure.startAtbRun(), false);
+        if (InnAdventure.expedition()) {
+            enter(InnAdventure.startExpedition(), false);
             return;
         }
 

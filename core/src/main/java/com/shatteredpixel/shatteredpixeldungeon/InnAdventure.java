@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.shatteredpixel.shatteredpixeldungeon;
 
-import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroClass;
 import com.shatteredpixel.shatteredpixeldungeon.items.food.Food;
@@ -35,9 +34,9 @@ public final class InnAdventure {
     }
 
     private static Profile profile;
-    private static volatile boolean atb;
+    private static volatile boolean expedition;
     private static volatile boolean practice;
-    private static volatile AtbRun activeAtbRun;
+    private static volatile ExpeditionRun activeRun;
     private static Preparation nextPreparation;
 
     private static final class Preparation {
@@ -50,11 +49,11 @@ public final class InnAdventure {
         }
     }
 
-    static final class AtbRun {
+    static final class ExpeditionRun {
         private final int slot;
         private Preparation preparation;
 
-        private AtbRun(int slot, Preparation preparation) {
+        private ExpeditionRun(int slot, Preparation preparation) {
             this.slot = slot;
             this.preparation = preparation;
         }
@@ -74,20 +73,18 @@ public final class InnAdventure {
     }
 
     public static void configure(String name, String job, String hairColor, String outfitColor,
-                                 String hairStyle, String accessory, boolean realTime) {
-        configure(name, job, hairColor, outfitColor, hairStyle, accessory, realTime, 0, 0);
+                                 String hairStyle, String accessory, boolean expedition) {
+        configure(name, job, hairColor, outfitColor, hairStyle, accessory, expedition, 0, 0);
     }
 
     public static void configure(String name, String job, String hairColor, String outfitColor,
-                                 String hairStyle, String accessory, boolean realTime, int hp, int food) {
+                                 String hairStyle, String accessory, boolean expedition, int hp, int food) {
         InnOriginalParty.clear();
-        InnAtb.setSlowTime(false);
         profile = makeProfile(name, job, hairColor, outfitColor, hairStyle, accessory);
-        InnAtb.reset();
-        activeAtbRun = null;
+        activeRun = null;
         practice = false;
-        nextPreparation = realTime ? new Preparation(hp, food) : null;
-        atb = realTime;
+        nextPreparation = expedition ? new Preparation(hp, food) : null;
+        InnAdventure.expedition = expedition;
     }
 
     public static Profile makeProfile(String name, String job, String hairColor, String outfitColor,
@@ -106,12 +103,13 @@ public final class InnAdventure {
         return profile;
     }
 
-    public static boolean atb() {
-        return atb;
+    /** True for an inn expedition: temporary save slot, retreat ends the run. */
+    public static boolean expedition() {
+        return expedition;
     }
 
     public static void enablePractice() {
-        if (!atb) throw new IllegalStateException("Practice requires an ATB adventure");
+        if (!expedition) throw new IllegalStateException("Practice requires an inn expedition");
         practice = true;
         nextPreparation = null;
     }
@@ -121,19 +119,19 @@ public final class InnAdventure {
     }
 
     /** Allocate the temporary checkpoint slot before generating the new expedition. */
-    public static int startAtbRun() {
+    public static int startExpedition() {
         int slot = GamesInProgress.firstSlot();
-        if (!GamesInProgress.isAtbSlot(slot)) throw new IllegalStateException("ATB adventure is not active");
+        if (!GamesInProgress.isExpeditionSlot(slot)) throw new IllegalStateException("Inn expedition is not active");
         if (!practice) {
             Dungeon.deleteGame(slot, true);
-            activeAtbRun = new AtbRun(slot, nextPreparation);
+            activeRun = new ExpeditionRun(slot, nextPreparation);
         }
         nextPreparation = null;
         return slot;
     }
 
     static void applyPreparation(Hero hero) {
-        AtbRun run = atbRunForSlot(GamesInProgress.curSlot);
+        ExpeditionRun run = expeditionRunForSlot(GamesInProgress.curSlot);
         if (run == null) return;
         Preparation preparation = run.takePreparation();
         if (preparation == null) return;
@@ -151,31 +149,29 @@ public final class InnAdventure {
         }
     }
 
-    static AtbRun atbRunForSlot(int slot) {
-        AtbRun run = activeAtbRun;
+    static ExpeditionRun expeditionRunForSlot(int slot) {
+        ExpeditionRun run = activeRun;
         return run != null && run.slot == slot ? run : null;
     }
 
-    static boolean ownsAtbRun(AtbRun run) {
-        return run != null && activeAtbRun == run;
+    static boolean ownsExpeditionRun(ExpeditionRun run) {
+        return run != null && activeRun == run;
     }
 
     /** Retire this expedition before returning to the inn. */
     public static void retreat() {
         InnOriginalParty.finish();
-        AtbRun run = activeAtbRun;
+        ExpeditionRun run = activeRun;
         if (run == null) return;
-        activeAtbRun = null;
-        Actor.updateAtb(0, true);
+        activeRun = null;
         Dungeon.deleteGame(run.slot, true);
     }
 
     public static void clear() {
         InnOriginalParty.clear();
-        InnAtb.setSlowTime(false);
-        activeAtbRun = null;
+        activeRun = null;
         nextPreparation = null;
-        atb = false;
+        expedition = false;
         practice = false;
         profile = null;
     }

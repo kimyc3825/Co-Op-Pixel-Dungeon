@@ -23,8 +23,6 @@ package com.shatteredpixel.shatteredpixeldungeon.ui;
 
 import com.shatteredpixel.shatteredpixeldungeon.Assets;
 import com.shatteredpixel.shatteredpixeldungeon.Dungeon;
-import com.shatteredpixel.shatteredpixeldungeon.InnAdventure;
-import com.shatteredpixel.shatteredpixeldungeon.InnAtb;
 import com.shatteredpixel.shatteredpixeldungeon.QuickSlot;
 import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
@@ -197,15 +195,8 @@ public class Toolbar extends Component {
 		});
 		
 		add(btnWait = new Tool(24, 0, 20, 26) {
-			private RenderedTextBlock timeLabel;
-			private boolean lastSlowTime;
-
 			@Override
 			protected void onClick() {
-				if (InnAdventure.atb()) {
-					GameScene.toggleAtbTime();
-					return;
-				}
 				if (Dungeon.hero != null &&  Dungeon.hero.ready && !GameScene.cancel()) {
 					examining = false;
 					Dungeon.hero.rest(false);
@@ -214,64 +205,25 @@ public class Toolbar extends Component {
 			
 			@Override
 			public GameAction keyAction() {
-				return InnAdventure.atb() ? null : SPDAction.WAIT;
+				return SPDAction.WAIT;
 			}
 
 			@Override
 			public GameAction secondaryTooltipAction() {
-				return InnAdventure.atb() ? null : SPDAction.WAIT_OR_PICKUP;
+				return SPDAction.WAIT_OR_PICKUP;
 			}
 
 			@Override
 			protected String hoverText() {
-				if (InnAdventure.atb()) return Messages.get(Toolbar.class, "slow_time");
 				return Messages.titleCase(Messages.get(WndKeyBindings.class, "wait"));
 			}
 
-			@Override
-			protected boolean tracksLongClick() {
-				return !InnAdventure.atb();
-			}
-
-			@Override
 			protected boolean onLongClick() {
 				if (Dungeon.hero != null && Dungeon.hero.ready && !GameScene.cancel()) {
 					examining = false;
 					Dungeon.hero.rest(true);
 				}
 				return true;
-			}
-
-			@Override
-			protected void layout() {
-				super.layout();
-				if (timeLabel == null && InnAdventure.atb()) {
-					timeLabel = PixelScene.renderTextBlock(5);
-					add(timeLabel);
-					updateTimeLabel();
-				} else {
-					layoutTimeLabel();
-				}
-			}
-
-			private void layoutTimeLabel() {
-				if (timeLabel != null) {
-					timeLabel.setPos(x + (width - timeLabel.width()) / 2f, bottom() - timeLabel.height() - 2);
-					PixelScene.align(timeLabel);
-				}
-			}
-
-			private void updateTimeLabel() {
-				lastSlowTime = InnAtb.slowTime();
-				timeLabel.text(lastSlowTime ? "0.5×" : "1×");
-				timeLabel.hardlight(lastSlowTime ? 0xFFCE78 : 0xFFFFFF);
-				layoutTimeLabel();
-			}
-
-			@Override
-			public void update() {
-				super.update();
-				if (timeLabel != null && lastSlowTime != InnAtb.slowTime()) updateTimeLabel();
 			}
 		});
 		btnWait.icon( 176, 0, 16, 16 );
@@ -705,7 +657,7 @@ public class Toolbar extends Component {
 			
 			for (Gizmo tool : members.toArray(new Gizmo[0])) {
 				if (tool instanceof Tool) {
-					((Tool)tool).enable(tool == btnWait && InnAdventure.atb() ? Dungeon.hero.isAlive() : lastEnabled);
+					((Tool)tool).enable( lastEnabled );
 				}
 			}
 		}
