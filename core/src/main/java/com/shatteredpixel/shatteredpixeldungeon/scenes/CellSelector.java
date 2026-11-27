@@ -26,6 +26,7 @@ import com.shatteredpixel.shatteredpixeldungeon.SPDAction;
 import com.shatteredpixel.shatteredpixeldungeon.SPDSettings;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
 import com.shatteredpixel.shatteredpixeldungeon.actors.Char;
+import com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.items.Heap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTilemap;
@@ -162,6 +163,12 @@ public class CellSelector extends ScrollArea {
 					break;
 			}
 			GameScene.ready();
+			
+		} else if (TurnClock.partyActive() && !Dungeon.hero.ready
+				&& Dungeon.hero.curAction == null && !Dungeon.hero.resting) {
+			
+			//party play: the hero only waits while the partner's turn is processed. The click is
+			// ignored rather than cancelling an open selection the hero will get back.
 			
 		} else {
 			

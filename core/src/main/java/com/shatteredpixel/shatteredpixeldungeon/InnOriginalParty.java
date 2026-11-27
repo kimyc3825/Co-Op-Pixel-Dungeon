@@ -66,6 +66,7 @@ public final class InnOriginalParty {
     private float sendIn;
     // Host: time since the last snapshot, whether the guest's last command must be answered, last content.
     private float sinceSent = HEARTBEAT_INTERVAL;
+    private float sinceChecked = MIN_SNAPSHOT_INTERVAL;
     private volatile boolean answerNow = true;
     private String lastBody;
     private int nextSequence;
@@ -238,9 +239,14 @@ public final class InnOriginalParty {
     public void updateHost(float elapsed) {
         if (member == null || level != Dungeon.level) return;
         sinceSent += elapsed;
+        sinceChecked += elapsed;
         if (sinceSent < MIN_SNAPSHOT_INTERVAL || closed || level.length() > MAX_CELLS || !Actor.parked()) return;
+        boolean due = answerNow || sinceSent >= HEARTBEAT_INTERVAL;
+        // Content is compared at most every MIN_SNAPSHOT_INTERVAL, not on every frame.
+        if (!due && sinceChecked < MIN_SNAPSHOT_INTERVAL) return;
+        sinceChecked = 0;
         String body = snapshotBody();
-        if (!answerNow && sinceSent < HEARTBEAT_INTERVAL && body.equals(lastBody)) return;
+        if (!due && body.equals(lastBody)) return;
         answerNow = false;
         lastBody = body;
         sinceSent = 0;
@@ -291,8 +297,12 @@ public final class InnOriginalParty {
         return Math.max(0, Math.min(MAX_GRACE_TENTHS, (int) Math.ceil(TurnClock.graceRemaining() * 10 - 0.001f)));
     }
 
+    // Number of snapshot bodies built, for the send-rate tests.
+    int bodiesBuilt;
+
     /** Snapshot fields from floor to texture: everything but the revision and the remaining grace. */
     private String snapshotBody() {
+        bodiesBuilt++;
         Arrays.fill(visible, false);
         if (member.isAlive()) level.updateFieldOfView(member, visible);
         int[] tiles = new int[level.length()];

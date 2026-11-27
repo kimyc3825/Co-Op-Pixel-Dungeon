@@ -232,6 +232,7 @@ public abstract class Actor implements Bundlable {
 			a.fixTime(min);
 		}
 		TargetedCell.fixTime(min);
+		TurnClock.fixTime(min);
 
 		if (Dungeon.hero != null && all.contains( Dungeon.hero )) {
 			Statistics.duration += min;

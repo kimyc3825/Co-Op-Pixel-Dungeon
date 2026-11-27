@@ -274,7 +274,8 @@ public class Game implements ApplicationListener {
 		
 		Game.realTime = TimeUtils.millis();
 
-		inputHandler.processAllEvents();
+		//input stays queued, in order, while the game asks to hold it (see holdInput)
+		if (!holdInput()) inputHandler.processAllEvents();
 
 		Music.INSTANCE.update();
 		Sample.INSTANCE.update();
@@ -282,6 +283,11 @@ public class Game implements ApplicationListener {
 		Camera.updateAll();
 	}
 	
+	/** True while queued input must not be dispatched this frame. Never true by default. */
+	protected boolean holdInput() {
+		return false;
+	}
+
 	public static void reportException( Throwable tr ) {
 		if (instance != null && Gdx.app != null) {
 			instance.logException(tr);

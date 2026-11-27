@@ -21,6 +21,8 @@
 
 package com.shatteredpixel.shatteredpixeldungeon;
 
+import com.shatteredpixel.shatteredpixeldungeon.actors.Actor;
+import com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.GameScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.PixelScene;
 import com.shatteredpixel.shatteredpixeldungeon.scenes.TitleScene;
@@ -126,6 +128,16 @@ public class ShatteredPixelDungeon extends Game {
 		seamlessResetScene(null);
 	}
 	
+	/**
+	 * Party play: interface input waits while the actor thread is in the middle of a pass, so no window or
+	 * button callback can run while the partner's or a monster's turn changes the game state. Solo play never
+	 * holds input, as in the original game.
+	 */
+	@Override
+	protected boolean holdInput() {
+		return scene instanceof GameScene && TurnClock.partyActive() && !Actor.parked();
+	}
+
 	@Override
 	protected void switchScene() {
 		super.switchScene();

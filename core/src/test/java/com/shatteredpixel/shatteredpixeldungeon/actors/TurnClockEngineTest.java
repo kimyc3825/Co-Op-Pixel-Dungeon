@@ -614,6 +614,279 @@ public class TurnClockEngineTest {
 		assertEquals(null, GameScene.cellSelectionPrompt());
 	}
 
+	@Test
+	public void clickWhileWaitingForThePartnerKeepsTheSelection() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		Aim aim = new Aim();
+		GameScene.selectCell(aim);
+		member.sprite.isMoving = true;
+		guest("M", 1, 0);
+		TurnClock.update(FRAME);
+		Actor.notifyActorThread(actorThread);
+		Thread.sleep(50);
+		assertFalse(hero.ready);
+		selector().select(cell(4, 6), com.watabou.input.PointerEvent.LEFT); // a click landing in this frame
+		assertSame("a click while waiting cancelled the selection", aim, selector().listener);
+		assertEquals(0, aim.cancels);
+		assertEquals(null, aim.chosen);
+		synchronized (member.sprite) {
+			member.sprite.isMoving = false;
+			member.sprite.notifyAll();
+		}
+		settle();
+		frames(4, FRAME);
+		assertTrue(hero.ready);
+		assertSame(aim, selector().listener);
+	}
+
+	@Test
+	public void inputIsHeldWhileTheActorThreadRunsInPartyPlayOnly() throws Exception {
+		Field sceneField = com.watabou.noosa.Game.class.getDeclaredField("scene");
+		sceneField.setAccessible(true);
+		java.lang.reflect.Method hold = com.watabou.noosa.Game.class.getDeclaredMethod("holdInput");
+		hold.setAccessible(true);
+		Object previous = sceneField.get(com.watabou.noosa.Game.instance);
+		try {
+			newParty(15, 15, cell(3, 3), cell(5, 3));
+			frames(3, FRAME);
+			sceneField.set(com.watabou.noosa.Game.instance, alloc(GameScene.class));
+			assertFalse("input held while the actor thread is parked", (Boolean) hold.invoke(com.watabou.noosa.Game.instance));
+			member.sprite.isMoving = true;
+			guest("M", 1, 0);
+			TurnClock.update(FRAME);
+			Actor.notifyActorThread(actorThread);
+			Thread.sleep(50);
+			assertTrue("input dispatched mid-pass", (Boolean) hold.invoke(com.watabou.noosa.Game.instance));
+			synchronized (member.sprite) {
+				member.sprite.isMoving = false;
+				member.sprite.notifyAll();
+			}
+			settle();
+			frames(4, FRAME);
+			assertFalse((Boolean) hold.invoke(com.watabou.noosa.Game.instance));
+
+			// Solo: never held, as in the original game.
+			newSolo(15, 15, cell(3, 3));
+			frames(3, FRAME);
+			hero.busy();
+			Thread.sleep(20);
+			assertFalse((Boolean) hold.invoke(com.watabou.noosa.Game.instance));
+			hero.spendAndNext(1f);
+			for (int i = 0; i < 20; i++) assertFalse((Boolean) hold.invoke(com.watabou.noosa.Game.instance));
+			frames(3, FRAME);
+		} finally {
+			sceneField.set(com.watabou.noosa.Game.instance, previous);
+		}
+	}
+
+	// ---- second review: fixTime, lost input, leftovers, wire and input bookkeeping ----
+
+	/** Two host expiries in a row: the host is AFK and its next grace is the short one. */
+	private static Dummy hostAfk() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		Dummy monster = addDummy(cell(3, 8));
+		monster.sleepNow();
+		frames(3, FRAME);
+		for (int i = 0; i < 6; i++) {
+			guest("W", 0, 0);
+			frames(2, FRAME);
+			hero.rest(false);
+			frames(2, FRAME);
+		}
+		monster.hunt(hero);
+		for (int i = 0; i < TurnPolicy.AFK_EXPIRIES; i++) {
+			guest("W", 0, 0);
+			frames(3, FRAME);
+			assertEquals(state(), TurnClock.WAIT_HOST, TurnClock.waitingOn());
+			countdownSeconds(FRAME, 10);
+			frames(3, FRAME);
+		}
+		return monster;
+	}
+
+	private static float nextHostGrace() {
+		guest("W", 0, 0);
+		frames(3, FRAME);
+		assertEquals(state(), TurnClock.WAIT_HOST, TurnClock.waitingOn());
+		return TurnClock.graceRemaining();
+	}
+
+	@Test
+	public void inputCountsAgainAfterFixTime() throws Exception {
+		hostAfk();
+		assertTrue(nextHostGrace() <= TurnPolicy.AFK_GRACE_SECONDS);
+		Actor.fixTime(); // Dungeon.saveAll() when the host's game is paused
+		hero.rest(false); // the host is back and acts
+		frames(3, FRAME);
+		assertEquals("the host's input after a pause did not restore the grace",
+				TurnPolicy.TURN_GRACE_SECONDS, nextHostGrace(), 0.1f);
+	}
+
+	@Test
+	public void skippedTurnsDoNotCountAsInput() throws Exception {
+		Dummy monster = hostAfk();
+		monster.sleepNow();
+		for (int i = 0; i < 3; i++) {
+			guest("W", 0, 0);
+			frames(3, FRAME);
+			assertEquals(TurnClock.WAIT_NONE, TurnClock.waitingOn());
+		}
+		monster.hunt(hero);
+		assertTrue("a skipped host's followed clock counted as input", nextHostGrace() <= TurnPolicy.AFK_GRACE_SECONDS);
+	}
+
+	@Test
+	public void paralysedTurnsDoNotCountAsInput() throws Exception {
+		hostAfk();
+		Buff.affect(hero, Paralysis.class, 2f);
+		for (int i = 0; i < 4 && TurnClock.waitingOn() != TurnClock.WAIT_HOST; i++) {
+			guest("W", 0, 0);
+			frames(3, FRAME);
+		}
+		for (int i = 0; i < 4 && hero.paralysed > 0; i++) {
+			guest("W", 0, 0);
+			frames(3, FRAME);
+		}
+		assertEquals(0, hero.paralysed);
+		float grace = TurnClock.waitingOn() == TurnClock.WAIT_HOST ? TurnClock.graceRemaining() : nextHostGrace();
+		assertTrue("paralysed turns counted as input: grace " + grace, grace <= TurnPolicy.AFK_GRACE_SECONDS);
+	}
+
+	@Test
+	public void clickLandingBeforeTheHoldIsCarriedOut() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		assertSame(hero, Actor.currentActor());
+		int pos = hero.pos;
+		// The click's next() was lost: the action is queued while the scheduler holds the hero.
+		hero.curAction = new com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroAction.Move(cell(3, 4));
+		frames(4, FRAME);
+		assertNotEquals("the queued click was never carried out", pos, hero.pos);
+	}
+
+	@Test
+	public void hostCountdownEndsWhenThePartnerDies() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		addDummy(cell(3, 8)).hunt(hero);
+		frames(3, FRAME);
+		guest("M", 1, 0);
+		frames(3, FRAME);
+		assertEquals(TurnClock.WAIT_HOST, TurnClock.waitingOn());
+		member.die(null);
+		frames(2, FRAME);
+		assertEquals(TurnClock.WAIT_NONE, TurnClock.waitingOn());
+		assertTrue(hero.ready);
+		float heroTime = time(hero);
+		frames(400, FRAME);
+		assertEquals("the host still waited automatically", heroTime, time(hero), 1e-4f);
+	}
+
+	@Test
+	public void aPausedFrameIsNotChargedToTheGrace() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		addDummy(cell(3, 8)).hunt(hero);
+		frames(3, FRAME);
+		guest("M", 1, 0);
+		frames(3, FRAME);
+		float grace = TurnClock.graceRemaining();
+		frame(3f); // the first frame after the host's game resumes
+		assertEquals(grace, TurnClock.graceRemaining(), 1e-4f);
+		frame(1f); // a slow but running game is still counted
+		assertEquals(grace - 1f, TurnClock.graceRemaining(), 1e-3f);
+	}
+
+	@Test
+	public void hostEmitsTheTurnAndGraceOnTheWire() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		Dummy monster = addDummy(cell(3, 8));
+		monster.hunt(hero);
+		frames(3, FRAME);
+		sent.clear();
+		guest("M", 1, 0);
+		frames(10, FRAME);
+		String[] host = lastPacket();
+		assertEquals("1", host[8]);
+		int grace = Integer.parseInt(host[15]);
+		assertTrue("grace on the wire " + grace, grace > 30 && grace <= 50);
+		hero.rest(false);
+		frames(3, FRAME);
+		monster.hunt(member);
+		hero.rest(false);
+		sent.clear();
+		frames(10, FRAME);
+		if (TurnClock.waitingOn() == TurnClock.WAIT_GUEST) {
+			String[] guest = lastPacket();
+			assertEquals("2", guest[8]);
+			assertTrue(Integer.parseInt(guest[15]) > 30);
+		}
+		// No countdown: turn 0 and grace 0.
+		guest("W", 0, 0);
+		frames(3, FRAME);
+		while (TurnClock.waitingOn() != TurnClock.WAIT_NONE) { hero.rest(false); guest("W", 0, 0); frames(3, FRAME); }
+		sent.clear();
+		frames(70, FRAME);
+		String[] idle = lastPacket();
+		assertEquals("0", idle[8]);
+		assertEquals("0", idle[15]);
+	}
+
+	private static String[] lastPacket() {
+		assertFalse("no snapshot was sent", sent.isEmpty());
+		return sent.get(sent.size() - 1).split("\\|", -1);
+	}
+
+	@Test
+	public void snapshotContentIsComparedAtTheSendInterval() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(10, FRAME);
+		Field built = InnOriginalParty.class.getDeclaredField("bodiesBuilt");
+		built.setAccessible(true);
+		int before = built.getInt(party);
+		frames(125, FRAME); // two idle seconds
+		int count = built.getInt(party) - before;
+		assertTrue("snapshot bodies built in 2 s: " + count, count <= 22);
+	}
+
+	/** Walks up to the hero and hunts it during its own turn, while the host is skipped. */
+	public static class Stalker extends Dummy {
+		volatile boolean armed;
+		int goTo;
+		@Override protected boolean act() {
+			if (armed) {
+				armed = false;
+				pos = goTo;
+				hunt(Dungeon.hero);
+			}
+			return super.act();
+		}
+	}
+
+	@Test
+	public void heroReachedDuringASkippedTurnTakesANormalTurn() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(8, 8));
+		Stalker stalker = new Stalker();
+		stalker.pos = cell(3, 9);
+		alloc(TestSprite.class).link(stalker);
+		level.mobs.add(stalker);
+		Actor.add(stalker);
+		stalker.sleepNow();
+		frames(3, FRAME);
+		guest("M", 1, 0);
+		frames(3, FRAME);
+		int acts = heroActs;
+		stalker.goTo = cell(3, 4);
+		stalker.armed = true;
+		guest("M", -1, 0);
+		frames(4, FRAME);
+		assertTrue("Hero.act() did not run after the skipped turn", heroActs > acts);
+		assertEquals(1, hero.visibleEnemies());
+		assertEquals(1, attackCandidates());
+		assertTrue(hero.ready);
+		assertEquals(state(), TurnClock.WAIT_HOST, TurnClock.waitingOn());
+		assertAlive();
+	}
+
 	// ---- real monsters still notice, hunt and fight in both modes ----
 
 	private static com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Rat addRat(int cell) throws Exception {

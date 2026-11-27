@@ -38,7 +38,7 @@ public final class TurnClock {
 	public static final int WAIT_HOST = 1;
 	public static final int WAIT_GUEST = 2;
 
-	/** Longest render frame counted against a grace; longer gaps (a paused or stalled game) are discarded. */
+	/** Longest render frame counted against a grace; a longer gap (a paused or stalled game) is not charged at all. */
 	public static final float MAX_FRAME_SECONDS = 1f;
 
 	private static final Object LOCK = new Object();
@@ -75,6 +75,17 @@ public final class TurnClock {
 		p.alive = true;
 		p.waitingSince = 0;
 		p.grace.input();
+	}
+
+	/** {@link Actor#fixTime()} pulled every actor's time back: move the clock's own time marks with it. */
+	static void fixTime(float decrement) {
+		synchronized (LOCK) {
+			for (TurnPolicy.Player p : new TurnPolicy.Player[]{heroState, memberState}) {
+				p.time -= decrement;
+				p.waitingSince -= decrement;
+			}
+			suspendedAtMemberTime -= decrement;
+		}
 	}
 
 	/** The host's party member while it takes part in scheduling, otherwise null. */
@@ -380,7 +391,10 @@ public final class TurnClock {
 			return;
 		}
 		InnPartyMember member = activeMember();
-		boolean gone = held != hero && (held != member || !held.isAlive());
+		// A held member that died or left, or a host countdown whose partner is gone: nothing to wait for.
+		boolean gone = held != hero ? held != member || !held.isAlive() : countdown && member == null;
+		// Input that reached the hero between Hero.ready() and the scheduler taking its hold: its next() was lost.
+		boolean heroInput = held == hero && (hero.curAction != null || hero.resting);
 		boolean memberInput = member != null && member.isAlive() && hasReadyAction(member);
 		float memberTime = member == null ? Float.NaN : Actor.timeOf(member);
 		boolean partnerMayAct = held == hero && memberInput && !stopsTime(hero) && memberTime <= Actor.timeOf(hero);
@@ -388,10 +402,11 @@ public final class TurnClock {
 		boolean suspend = false;
 		synchronized (LOCK) {
 			if (blocked != held) return;
-			if (gone) {
+			if (gone || heroInput) {
 				release = true;
 			} else if (countdown) {
-				boolean expired = state(held).grace.tick(Math.max(0f, Math.min(seconds, MAX_FRAME_SECONDS)));
+				// Frames longer than MAX_FRAME_SECONDS are a paused or stalled game: they are not charged at all.
+				boolean expired = state(held).grace.tick(seconds > 0f && seconds <= MAX_FRAME_SECONDS ? seconds : 0f);
 				// Partners ahead keep their queued input; only the waited-for member's command or the clock releases.
 				release = expired || held == member && memberInput;
 			} else {
