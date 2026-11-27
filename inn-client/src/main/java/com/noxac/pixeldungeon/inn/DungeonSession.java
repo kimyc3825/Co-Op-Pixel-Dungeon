@@ -192,6 +192,7 @@ final class DungeonSession implements AutoCloseable {
     }
 
     private void disconnected(int code) {
+        boolean wasLinked = linked;
         channel = null;
         linked = false;
         if (leaving) {
@@ -210,19 +211,25 @@ final class DungeonSession implements AutoCloseable {
             case 4001, 4003 -> finish("파티 연결 정보를 확인할 수 없습니다.");
             // §8/§9: on a joined link these mean the server ended the run for both sides.
             case 4000, 1003, 1009 -> finish("파티 연결에 문제가 생겨 원정이 끝났습니다.");
-            case 4008 -> finish("파티 연결 요청이 너무 많아 원정이 끝났습니다.");
-            default -> {
-                // 1001, 1006, 1011, 4002, 4013 link_full (§8: like a drop), a missing pong, …
-                long time = now();
-                if (lostAt == 0) lostAt = time;
-                if (time - lostAt >= RECONNECT_WINDOW_MS) {
-                    finish("파티 연결이 끊겼습니다.");
-                    return;
-                }
-                long base = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
-                reconnect = schedule(this::connect, (long) (base * (0.75 + ThreadLocalRandom.current().nextDouble() / 2)));
+            // After `link` the server ended the run; before it only this socket was refused (§8).
+            case 4008 -> {
+                if (wasLinked) finish("파티 연결 요청이 너무 많아 원정이 끝났습니다.");
+                else retryConnect();
             }
+            // 1001, 1006, 1011, 4002, 4013 link_full (§8: like a drop), a missing pong, …
+            default -> retryConnect();
         }
+    }
+
+    private void retryConnect() {
+        long time = now();
+        if (lostAt == 0) lostAt = time;
+        if (time - lostAt >= RECONNECT_WINDOW_MS) {
+            finish("파티 연결이 끊겼습니다.");
+            return;
+        }
+        long base = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
+        reconnect = schedule(this::connect, (long) (base * (0.75 + ThreadLocalRandom.current().nextDouble() / 2)));
     }
 
     private void receive(JsonObject frame) {

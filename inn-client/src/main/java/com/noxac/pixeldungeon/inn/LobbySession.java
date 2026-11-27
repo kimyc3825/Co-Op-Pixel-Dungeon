@@ -239,11 +239,11 @@ final class LobbySession implements AutoCloseable {
             // profile (updateProfile) tries again.
             case 4000 -> stop("여관 서버가 이 클라이언트의 요청을 거부했습니다 (" +
                 (error != null ? error : reason) + "). 모험가 정보를 고치거나 클라이언트를 업데이트해 주세요.", code);
+            // §8/§9: these waits are required; the jitter only ever lengthens them.
             case 4013 -> retry("여관이 가득 찼습니다. 자리가 나면 입장합니다.",
-                jitter(1_000 * (retryAfterSeconds != null && retryAfterSeconds > 0 ? Math.min(retryAfterSeconds, 600) : 30)));
-            case 4029 -> retry("같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.", jitter(30_000));
-            case 4008 -> retry("room_busy".equals(error) ? "여관이 붐빕니다. 잠시 뒤 다시 연결합니다."
-                : "접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.", jitter(10_000));
+                atLeast(1_000 * (retryAfterSeconds != null && retryAfterSeconds > 0 ? Math.min(retryAfterSeconds, 600) : 30)));
+            case 4029 -> retry("같은 곳에서 접속한 모험가가 많습니다. 잠시 뒤 다시 연결합니다.", atLeast(30_000));
+            case 4008 -> retry("접속 요청이 많습니다. 잠시 뒤 다시 연결합니다.", atLeast(10_000));
             default -> retry(source.wasOpened() ? RECONNECTING : unreachable(reason), backoff());
         }
         publish();
@@ -281,6 +281,11 @@ final class LobbySession implements AutoCloseable {
 
     private static long jitter(long base) {
         return (long) (base * (0.75 + ThreadLocalRandom.current().nextDouble() / 2));
+    }
+
+    /** A required wait plus up to 25 % jitter, never shorter. */
+    private static long atLeast(long base) {
+        return (long) (base * (1 + ThreadLocalRandom.current().nextDouble() / 4));
     }
 
     private void retry(String message, long delayMs) {
@@ -568,6 +573,8 @@ final class LobbySession implements AutoCloseable {
             // Chat: the room's shared budget is spent; the caller keeps the unsent text.
             case "room_busy" -> notice("여관이 붐벼서 지금은 말을 전할 수 없습니다. 잠시 뒤 다시 보내 주세요.");
             case "not_in_inn" -> notice("여관에 들어온 뒤에 할 수 있습니다.");
+            // One preparation roll per entry (§4.4); not a fault of the connection.
+            case "preparation_used" -> notice("이번 입장에서는 이미 원정 준비를 했습니다.");
             case "invalid_message" -> notice("대화는 한 줄, 160자까지 보낼 수 있습니다.");
             case "invalid_profile" -> notice("닉네임을 1~20자로 입력하세요.");
             case "offline", "timeout" -> notice(RECONNECTING);
