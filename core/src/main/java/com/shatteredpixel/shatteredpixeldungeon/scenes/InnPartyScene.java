@@ -51,9 +51,12 @@ import com.watabou.utils.RectF;
 import com.watabou.utils.Reflection;
 import com.watabou.utils.Signal;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -65,6 +68,10 @@ public final class InnPartyScene extends PixelScene {
      * react to the fight turn by turn.
      */
     private static final int STEPS_AHEAD = 3;
+    /** A figure further behind the host than this many queued steps jumps to its newest cell. */
+    private static final int MAX_BEHIND = 12;
+    /** After taking one step, a figure with at least this many steps still queued moves at twice the speed. */
+    private static final int CATCH_UP_STEPS = 1;
     private final Map<Integer, ActorView> actors = new HashMap<>();
     private final Map<Integer, ItemSprite> drops = new HashMap<>();
     /** Cells with a chest, tomb or remains: stepping there opens it instead of moving. */
@@ -102,6 +109,8 @@ public final class InnPartyScene extends PixelScene {
     private Integer attackTarget;
     private boolean spaceHeld;
     private int revision;
+    /** Sequence of the newest host step already queued. */
+    private int lastMove;
     private int floor;
     private int player;
     private float repeatIn;
@@ -213,6 +222,7 @@ public final class InnPartyScene extends PixelScene {
             }
             apply(state);
         }
+        advanceWalks();
         super.update();
         if (water != null) {
             waterOffset -= 5 * Game.elapsed;
@@ -379,6 +389,15 @@ public final class InnPartyScene extends PixelScene {
                 }
             }
         }
+        // The host's steps not replayed yet, per actor in order; each step comes in several snapshots.
+        Map<Integer, List<Integer>> steps = new HashMap<>();
+        for (int[] move : InnOriginalParty.parseTrail(state.trail)) {
+            if (move[0] <= lastMove || move[2] >= state.tiles.length) continue;
+            lastMove = move[0];
+            List<Integer> cells = steps.get(move[1]);
+            if (cells == null) steps.put(move[1], cells = new ArrayList<>());
+            cells.add(move[2]);
+        }
         for (String row : rows) {
             String[] columns = row.split(",", -1);
             if (columns.length != 6 || row.startsWith(InnOriginalParty.DETECTION_RECORD)) continue;
@@ -403,17 +422,14 @@ public final class InnPartyScene extends PixelScene {
                     sprite.link(actor);
                     if (id == player) Camera.main.panFollow(sprite, 5f);
                 } else {
-                    int previous = view.actor.pos;
                     view.actor.HP = hp;
                     view.actor.HT = maxHp;
                     // Keep the local player's predicted step until the host has answered that command.
                     boolean predicted = id == player && predictedSequence > 0 && state.ack < predictedSequence;
                     if (id == player && !predicted) predictedSequence = 0;
-                    if (!predicted) view.actor.pos = cell;
-                    if (!predicted && previous != cell) {
-                        if (view.sprite.isMoving) view.sprite.interruptMotion();
-                        if (Dungeon.level.adjacent(previous, cell)) view.sprite.move(previous, cell);
-                        else view.sprite.place(cell);
+                    if (!predicted) {
+                        view.actor.pos = cell;
+                        follow(view, steps.get(id), cell);
                     }
                 }
                 view.sprite.alpha(hp == 0 ? 0.4f : 1f);
@@ -611,9 +627,58 @@ public final class InnPartyScene extends PixelScene {
         }
         // A step sent while the previous one is still animating finishes that one at once.
         if (self.sprite.isMoving) self.sprite.interruptMotion();
+        self.walk.clear();
+        // A host snapshot can put the logical cell ahead of the sprite. Snap to it before the new
+        // step so the sprite does not slide diagonally across the cells it had not reached yet.
+        if (self.shown != from) self.sprite.place(from);
         self.sprite.move(from, cell);
+        self.shown = cell;
         self.actor.pos = cell;
         predictedSequence = sequence;
+    }
+
+    /**
+     * Queues the host's recorded steps of a figure, then its newest cell in case the steps do not end there
+     * (a teleport or knockback, or steps the trail no longer holds). The logical position is already the new
+     * cell; only the sprite follows, step by step like a player in the inn.
+     */
+    private void follow(ActorView view, List<Integer> steps, int cell) {
+        if (steps != null) for (int step : steps) queueStep(view, step);
+        queueStep(view, cell);
+        if (view.walk.size() > MAX_BEHIND) {
+            view.walk.clear();
+            view.walk.addLast(-1 - cell);
+        }
+    }
+
+    /** A step to a neighbouring cell is walked; anything else is a jump, stored as {@code -1 - cell}. */
+    private void queueStep(ActorView view, int cell) {
+        int tail = view.walk.isEmpty() ? view.shown : walkCell(view.walk.peekLast());
+        if (tail == cell) return;
+        view.walk.addLast(Dungeon.level.adjacent(tail, cell) ? cell : -1 - cell);
+    }
+
+    private static int walkCell(int entry) {
+        return entry < 0 ? -1 - entry : entry;
+    }
+
+    /** Starts the next queued step of every figure that has finished its last one. */
+    private void advanceWalks() {
+        for (ActorView view : actors.values()) {
+            if (view.walk.isEmpty() || view.sprite.isMoving) continue;
+            int next = view.walk.pollFirst();
+            if (next < 0) {
+                view.shown = -1 - next;
+                view.sprite.place(view.shown);
+                continue;
+            }
+            // The move interval is shared by every sprite and is only read when a move starts.
+            boolean behind = view.walk.size() >= CATCH_UP_STEPS;
+            if (behind) CharSprite.setMoveInterval(CharSprite.DEFAULT_MOVE_INTERVAL / 2);
+            view.sprite.move(view.shown, next);
+            if (behind) CharSprite.setMoveInterval(CharSprite.DEFAULT_MOVE_INTERVAL);
+            view.shown = next;
+        }
     }
 
     private int direction(GameAction straight, GameAction diagonalA, GameAction diagonalB) {
@@ -696,11 +761,16 @@ public final class InnPartyScene extends PixelScene {
         final Mob actor;
         final CharSprite sprite;
         final int kind;
+        /** Cells the sprite still has to walk through, oldest first. */
+        final ArrayDeque<Integer> walk = new ArrayDeque<>();
+        /** The cell the sprite stands on or is walking to. */
+        int shown;
 
         ActorView(Mob actor, CharSprite sprite, int kind) {
             this.actor = actor;
             this.sprite = sprite;
             this.kind = kind;
+            this.shown = actor.pos;
         }
     }
 

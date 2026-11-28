@@ -26,7 +26,7 @@ final class InnApi {
     /** Wire version sent in every `hello` (PROTOCOL.md §11). */
     static final int WIRE_VERSION = 1;
     /** Party payload format: the turn-clock packets of InnOriginalParty. Matching pairs only equal values. */
-    static final int DUNGEON_PROTOCOL = 14;
+    static final int DUNGEON_PROTOCOL = 15;
     static final String INN_PATH = "/api/v5/inn";
     static final String LINK_PATH = "/api/v5/link";
     static final String SEWERS = "sewers";
