@@ -141,6 +141,35 @@ public class InnPartyGearTest {
 	}
 
 	@Test
+	public void steppingIntoAChestOpensItInsteadOfStandingOnIt() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		Heap chest = new Heap();
+		chest.pos = cell(6, 3);
+		chest.type = Heap.Type.CHEST;
+		chest.drop(new PotionOfHealing());
+		level.heaps.put(chest.pos, chest);
+		Heap locked = new Heap();
+		locked.pos = cell(5, 4);
+		locked.type = Heap.Type.LOCKED_CHEST;
+		locked.drop(new Food());
+		level.heaps.put(locked.pos, locked);
+
+		command("M", 1, 0);
+		assertEquals("the companion stood on the chest", cell(5, 3), member.pos);
+		assertEquals(Heap.Type.HEAP, chest.type);
+
+		command("M", 0, 1);
+		assertEquals(cell(5, 3), member.pos);
+		assertEquals("the companion opened a locked chest", Heap.Type.LOCKED_CHEST, locked.type);
+
+		// The opened chest is a plain heap now: stepping on it picks up its item.
+		command("M", 1, 0);
+		assertEquals(cell(6, 3), member.pos);
+		assertTrue(member.bag().get(member.bag().size() - 1) instanceof PotionOfHealing);
+	}
+
+	@Test
 	public void queuedStepsAreCarriedOutInOrder() throws Exception {
 		newParty(15, 15, cell(3, 3), cell(5, 3));
 		frames(3, FRAME);

@@ -32,7 +32,8 @@ Use `wss://` for an `https://` origin and `ws://` only for a loopback developmen
   next time the server looks at the room (§2, sweeps).
 * **Pipelining is allowed**: a client may send further frames right after `hello` without waiting;
   they are processed after the `hello`, in order. (`welcome`/`link` still arrives first.)
-* **Keep-alive and liveness**: send the literal text frame `ping` (not JSON) every **25 s**; the
+* **Keep-alive and liveness**: send the literal text frame `ping` (not JSON) at least every **25 s**
+  (both clients send it every 5 s and show the time to its `pong` as the round trip); the
   server answers the literal text `pong` without waking its Durable Object. **Only this text
   `ping` and real messages count as signs of life.** WebSocket protocol ping frames are answered by
   the runtime with protocol pongs, but they do **not** count: a socket that sends only protocol pings

@@ -449,3 +449,11 @@ kbd { font: inherit; font-size: .78em; color: #e6cfa4; margin-left: .18em; }
   .profile-form { gap: 6px; }
   .profile-name-field, .profile-job-field { grid-column: auto; }
 }
+
+/* Release, commit and round trip to the server, over every screen including the dungeon. */
+.build-info {
+  position: fixed; z-index: 1000; left: max(4px, env(safe-area-inset-left)); bottom: max(2px, env(safe-area-inset-bottom));
+  margin: 0; padding: 1px 4px; border-radius: 3px; background: #0d0e0a99; color: var(--muted);
+  font: 10px/1.3 ui-monospace, Consolas, monospace; pointer-events: none; user-select: none; white-space: nowrap;
+}
+.build-info:empty { display: none; }

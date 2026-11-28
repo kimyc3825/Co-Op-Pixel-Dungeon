@@ -9,10 +9,12 @@ const WIRE_VERSION = 1;
 const INN_PATH = '/api/v5/inn';
 const LINK_PATH = '/api/v5/link';
 // 12: turn-clock party packets (6-field commands with `W` wait, 16-field snapshots). 11 was the ATB build.
-const ORIGINAL_PROTOCOL = 14;
+// 15: snapshots carry a trail of recent steps (19 fields) so the guest replays every step.
+const ORIGINAL_PROTOCOL = 15;
 const LEGACY_PROTOCOL = 9;
 export const INN_MOVE_MS = 150;
-const PING_MS = 25000;
+// Keep-alive and round-trip measurement (PROTOCOL.md §2 asks for at least one `ping` every 25 s).
+const PING_MS = 5000;
 const REQUEST_TIMEOUT_MS = 8000;
 const CONNECT_TIMEOUT_MS = 10000;
 const RECONNECT_MS = [500, 1000, 2000, 4000, 8000];
@@ -49,22 +51,47 @@ function socketUrl(path, params) {
   return url.href;
 }
 
+const latencyListeners = new Set();
+
+/** Calls `listener(ms)` with every measured round trip to the server, from whichever socket is open. */
+export function onLatency(listener) {
+  latencyListeners.add(listener);
+  return () => latencyListeners.delete(listener);
+}
+
+function reportLatency(ms) {
+  for (const listener of latencyListeners) listener(ms);
+}
+
 /** One WebSocket with request/response correlation (`ref`) and keep-alive pings. */
 class Channel {
   constructor(url, { onOpen, onFrame, onClose }) {
     this.refs = new Map();
     this.nextRef = 0;
+    // Sent ping times, oldest first. The server answers every ping in order, so each pong takes
+    // the oldest one; keeping them (rather than one shared timestamp) stops a lost pong from
+    // inflating the next measurement by a whole interval.
+    this.pings = [];
     this.ws = new WebSocket(url);
     // A handshake that hangs would otherwise never report a close.
     const connectTimer = setTimeout(() => { if (this.ws.readyState === WebSocket.CONNECTING) this.ws.close(); }, CONNECT_TIMEOUT_MS);
     this.ws.addEventListener('open', () => {
       clearTimeout(connectTimer);
-      // The server answers the literal `ping` without waking its Durable Object.
-      this.pinger = setInterval(() => this.sendText('ping'), PING_MS);
+      // The server answers the literal `ping` without waking its Durable Object. The time to its
+      // `pong` is the round trip to the server, shown in the corner of the page.
+      this.pinger = setInterval(() => {
+        const sentAt = performance.now();
+        if (this.sendText('ping')) this.pings.push(sentAt);
+      }, PING_MS);
       onOpen();
     });
     this.ws.addEventListener('message', event => {
-      if (typeof event.data !== 'string' || event.data === 'pong') return;
+      if (event.data === 'pong') {
+        const sentAt = this.pings.shift();
+        if (sentAt != null) reportLatency(performance.now() - sentAt);
+        return;
+      }
+      if (typeof event.data !== 'string') return;
       let frame;
       try { frame = JSON.parse(event.data); } catch { return; }
       if (!frame || typeof frame.t !== 'string') return;
@@ -81,6 +108,7 @@ class Channel {
     this.ws.addEventListener('close', event => {
       clearTimeout(connectTimer);
       clearInterval(this.pinger);
+      this.pings.length = 0;
       for (const pending of this.refs.values()) {
         clearTimeout(pending.timer);
         pending.reject(new ApiError('offline'));

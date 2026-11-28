@@ -1322,6 +1322,7 @@ public abstract class Char extends Actor {
 			previousPos = -1;
 		}
 		pos = step;
+		if (travelling) com.shatteredpixel.shatteredpixeldungeon.InnOriginalParty.recordMove(this);
 		
 		if (this != Dungeon.hero) {
 			sprite.visible = Dungeon.level.heroFOV[pos];

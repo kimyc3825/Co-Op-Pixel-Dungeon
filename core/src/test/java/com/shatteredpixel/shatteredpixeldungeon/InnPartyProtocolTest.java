@@ -34,7 +34,7 @@ public class InnPartyProtocolTest {
 	/** A valid snapshot with one field replaced. */
 	private static String[] snapshot(int field, String value) {
 		String[] fields = ("S|7|2|3|0|3|3|5|1|42|" + tiles(9) + "|42,4,10,20,1,x|4,1|play|environment/tiles_sewers.png|30"
-				+ "|w,10,1,64,worn shortsword +1;0,20,3,12,healing%2C x3|4,120,11")
+				+ "|w,10,1,64,worn shortsword +1;0,20,3,12,healing%2C x3|4,120,11|3,42,5;4,42,4")
 				.split("\\|", -1);
 		if (field >= 0) fields[field] = value;
 		return fields;
@@ -154,8 +154,54 @@ public class InnPartyProtocolTest {
 		none[15] = "0";
 		assertNotNull(parse(none));
 		// Field count.
-		assertNull(parse(Arrays.copyOf(snapshot(-1, null), 17)));
-		assertNull(parse(Arrays.copyOf(snapshot(-1, null), 19)));
+		assertNull(parse(Arrays.copyOf(snapshot(-1, null), 18)));
+		assertNull(parse(Arrays.copyOf(snapshot(-1, null), 20)));
+	}
+
+	@Test
+	public void trailParsesSkippingInvalidSteps() {
+		assertEquals("3,42,5;4,42,4", parse(snapshot(-1, null)).trail);
+		assertNotNull("an empty trail is valid", parse(snapshot(18, "")));
+		List<int[]> steps = InnOriginalParty.parseTrail("1,42,10;x,1,2;2,0,5;3,42,-1;4,42,11;5,42;6,42,16000");
+		assertEquals(2, steps.size());
+		assertEquals("[1, 42, 10]", Arrays.toString(steps.get(0)));
+		assertEquals("[4, 42, 11]", Arrays.toString(steps.get(1)));
+		assertTrue(InnOriginalParty.parseTrail("").isEmpty());
+	}
+
+	@SuppressWarnings("unchecked")
+	private static java.util.Set<Integer> shownIds(InnOriginalParty link) throws Exception {
+		Field shown = InnOriginalParty.class.getDeclaredField("shownIds");
+		shown.setAccessible(true);
+		return (java.util.Set<Integer>) shown.get(link);
+	}
+
+	@Test
+	public void hostRepeatsEachStepInSeveralSnapshotsForShownActorsOnly() throws Exception {
+		InnOriginalParty.configure(true, "guest", "MAGE", "a", "b", "c", "d", 1L, false, sent::add);
+		InnOriginalParty link = InnOriginalParty.current();
+		shownIds(link).add(42);
+		link.addMove(42, 10);
+		link.addMove(99, 11);
+		link.addMove(42, 11);
+		String trail = link.trailRecord(1);
+		assertEquals("steps of actors the guest cannot see are left out", "1,42,10;3,42,11", trail);
+		for (int next = 2; next <= InnOriginalParty.TRAIL_SNAPSHOTS; next++) {
+			assertEquals("a step is repeated in following snapshots", trail, link.trailRecord(next));
+		}
+		assertEquals("", link.trailRecord(InnOriginalParty.TRAIL_SNAPSHOTS + 1));
+	}
+
+	@Test
+	public void hostSendsOnlyTheNewestSteps() throws Exception {
+		InnOriginalParty.configure(true, "guest", "MAGE", "a", "b", "c", "d", 1L, false, sent::add);
+		InnOriginalParty link = InnOriginalParty.current();
+		shownIds(link).add(42);
+		for (int cell = 0; cell < 200; cell++) link.addMove(42, cell);
+		List<int[]> steps = InnOriginalParty.parseTrail(link.trailRecord(1));
+		assertEquals(InnOriginalParty.MAX_TRAIL, steps.size());
+		assertEquals(200, steps.get(steps.size() - 1)[0]);
+		assertEquals(199, steps.get(steps.size() - 1)[2]);
 	}
 
 	@Test
