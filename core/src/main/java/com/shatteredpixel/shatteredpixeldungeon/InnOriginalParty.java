@@ -20,6 +20,7 @@ import com.watabou.utils.PathFinder;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -34,11 +35,13 @@ import java.util.function.Consumer;
  * The guest may have several commands in flight; the host queues them and carries them out one per companion turn
  * in sequence order, acknowledging each (ack is the last sequence carried out or dropped).
  * Host snapshot: {@code S|revision|floor|depth|branch|width|height|ack|turn|player|tiles|actors|loot|result
- * |texture|grace|gear|hud}, where turn says whose input the world is waiting for with a countdown
+ * |texture|grace|gear|hud|trail}, where turn says whose input the world is waiting for with a countdown
  * ({@link TurnClock#WAIT_NONE}, {@link TurnClock#WAIT_HOST}, {@link TurnClock#WAIT_GUEST}), grace is the
  * remaining countdown in tenths of a second, gear lists the companion's items as {@code slot,image,quantity,
  * flags,title} records (slot {@code w}, {@code a} or a bag index; title escaped, see {@link #escape}) and hud is
- * {@code level,gold,strength} of the party.
+ * {@code level,gold,strength} of the party. Trail lists the recent steps of the shown actors as
+ * {@code seq,id,cell} records, oldest first, so the guest can replay every step in order like the inn does; each
+ * step is repeated in {@link #TRAIL_SNAPSHOTS} snapshots and the guest skips sequences it has already seen.
  */
 public final class InnOriginalParty {
     private static final String DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -61,7 +64,16 @@ public final class InnOriginalParty {
     static final int MAX_BRANCH = 9;
     static final int MAX_FLOOR = 100000;
     private static final int COMMAND_FIELDS = 6;
-    private static final int SNAPSHOT_FIELDS = 18;
+    private static final int SNAPSHOT_FIELDS = 19;
+    /**
+     * Snapshots a recorded step is repeated in. A snapshot can be replaced by a newer one on the way (the web
+     * client sends only the newest, and the guest reads only the newest), so a single copy could be lost.
+     */
+    static final int TRAIL_SNAPSHOTS = 4;
+    /** Most steps sent in one snapshot. */
+    static final int MAX_TRAIL = 96;
+    /** Most steps the host keeps between snapshots, including those of actors the guest cannot see. */
+    private static final int MAX_RECORDED = 512;
     /** Upper bound of the grace field, in tenths of a second. */
     public static final int MAX_GRACE_TENTHS = Math.round(com.shatteredpixel.shatteredpixeldungeon.actors.TurnPolicy.TURN_GRACE_SECONDS * 10);
     public static final String DETECTION_RECORD = "^";
@@ -90,7 +102,12 @@ public final class InnOriginalParty {
     private boolean[] explored;
     private int[] rememberedTerrain;
     private volatile int ack;
-    private int revision;
+    private volatile int revision;
+    /** Host: steps recorded on the actor thread as {seq, actor id, cell, first snapshot}, oldest first. Guarded by itself. */
+    private final ArrayDeque<int[]> moves = new ArrayDeque<>();
+    private int moveSequence;
+    /** Host: ids of the actors in the last snapshot body; only their steps are sent. */
+    private final HashSet<Integer> shownIds = new HashSet<>();
     private float sendIn;
     // Host: time since the last snapshot, whether the guest's last command must be answered, last content.
     private float sinceSent = HEARTBEAT_INTERVAL;
@@ -189,6 +206,9 @@ public final class InnOriginalParty {
         link.rememberedTerrain = new int[level.length()];
         link.answerNow = true;
         link.lastBody = null;
+        synchronized (link.moves) {
+            link.moves.clear();
+        }
         for (Mob mob : level.mobs) {
             if (mob instanceof InnPartyMember) {
                 link.member = (InnPartyMember) mob;
@@ -316,8 +336,64 @@ public final class InnOriginalParty {
         answerNow = false;
         lastBody = content;
         sinceSent = 0;
-        String packet = "S|" + ++revision + "|" + body + "|" + graceTenths() + "|" + extra;
+        int next = revision + 1;
+        String packet = "S|" + next + "|" + body + "|" + graceTenths() + "|" + extra + "|" + trailRecord(next);
+        revision = next;
         if (packet.length() <= MAX_PACKET) send.accept(packet);
+    }
+
+    /**
+     * Host, actor thread: remembers a step of a character (called from {@link Char#move}) so the guest can replay
+     * it cell by cell. Positions changed without a step, such as teleports and knockback, are not recorded and
+     * show as a jump.
+     */
+    public static void recordMove(Char ch) {
+        InnOriginalParty link = current;
+        if (link == null || !link.host || link.level == null || link.level != Dungeon.level) return;
+        link.addMove(ch.id(), ch.pos);
+    }
+
+    /** Records a step for the next snapshot. */
+    void addMove(int id, int cell) {
+        synchronized (moves) {
+            moves.addLast(new int[]{++moveSequence, id, cell, revision + 1});
+            while (moves.size() > MAX_RECORDED) moves.pollFirst();
+        }
+    }
+
+    /** The trail field of snapshot {@code next}: the newest steps of shown actors from the last few snapshots. */
+    String trailRecord(int next) {
+        List<int[]> shown = new ArrayList<>();
+        synchronized (moves) {
+            while (!moves.isEmpty() && moves.peekFirst()[3] <= next - TRAIL_SNAPSHOTS) moves.pollFirst();
+            for (int[] move : moves) if (shownIds.contains(move[1])) shown.add(move);
+        }
+        StringBuilder result = new StringBuilder();
+        for (int[] move : shown.subList(Math.max(0, shown.size() - MAX_TRAIL), shown.size())) {
+            if (result.length() > 0) result.append(';');
+            result.append(move[0]).append(',').append(move[1]).append(',').append(move[2]);
+        }
+        return result.toString();
+    }
+
+    /** Parses trail records as {seq, actor id, cell}, oldest first, skipping invalid ones. */
+    public static List<int[]> parseTrail(String trail) {
+        List<int[]> result = new ArrayList<>();
+        if (trail.isEmpty()) return result;
+        for (String row : trail.split(";")) {
+            String[] columns = row.split(",", -1);
+            if (columns.length != 3 || result.size() >= MAX_TRAIL) continue;
+            try {
+                int seq = Integer.parseInt(columns[0]);
+                int id = Integer.parseInt(columns[1]);
+                int cell = Integer.parseInt(columns[2]);
+                if (seq < 1 || id < 1 || cell < 0 || cell >= MAX_CELLS) continue;
+                result.add(new int[]{seq, id, cell});
+            } catch (NumberFormatException ignored) {
+                // Skip invalid trail records.
+            }
+        }
+        return result;
     }
 
     public Snapshot latest() { return incoming; }
@@ -400,12 +476,16 @@ public final class InnOriginalParty {
 
         StringBuilder actors = new StringBuilder();
         StringBuilder detections = new StringBuilder();
+        shownIds.clear();
         appendActor(actors, Dungeon.hero, Dungeon.hero.heroClass.name(), 1, Dungeon.hero.pos);
         appendActor(actors, member, peer.heroClass().name(), 1, member.isAlive() ? member.pos : level.entrance());
+        shownIds.add(Dungeon.hero.id());
+        shownIds.add(member.id());
         for (Mob mob : level.mobs.toArray(new Mob[0])) {
             if (mob != member && mob.isAlive() && visible[mob.pos] && mob.sprite != null) {
                 appendActor(actors, mob, mob.sprite.getClass().getName(),
                         mob.alignment == Char.Alignment.ENEMY ? 2 : 0, mob.pos);
+                shownIds.add(mob.id());
                 if (mob.alignment == Char.Alignment.ENEMY && mob.sprite.isShowingAlert()) {
                     appendActorId(detections, mob);
                 }
@@ -605,6 +685,8 @@ public final class InnOriginalParty {
         public final int grace;
         public final int[] tiles;
         public final String actors, loot, result, texture;
+        /** Recent steps of the shown actors, see {@link #parseTrail}. */
+        public final String trail;
 
         private Snapshot(String[] fields, int width, int height, int[] tiles) {
             revision = Integer.parseInt(fields[1]);
@@ -627,6 +709,7 @@ public final class InnOriginalParty {
             level = Integer.parseInt(hud[0]);
             gold = Integer.parseInt(hud[1]);
             strength = Integer.parseInt(hud[2]);
+            trail = fields[18];
         }
 
         static Snapshot parse(String[] fields) {
