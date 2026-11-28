@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Paints the hearth hall for both clients: the lit background, its animated regions and the NPC sheet.
 // Run from the repository root with `node web-client/scripts/generate-inn.mjs`, then commit the outputs.
-import { crc32, deflateSync } from 'node:zlib';
-import { writeFileSync } from 'node:fs';
+import { crc32, deflateSync, inflateSync } from 'node:zlib';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const OUT = new URL('../play/', import.meta.url);
 const TILE = 16;
@@ -325,39 +325,125 @@ function paintHall(t, animated) {
   return g;
 }
 
-// ---------- NPC sheet: one 16px column per role, idle and breathing rows ----------
-const SKIN = { s: '#b89070', S: '#7d5d48', e: '#140c10', f: '#1c1612' };
-const NPC_SPRITES = [ // guard, innkeeper, vendor, bard, adventurer
-  [{ m: '#6c7078', M: '#474a52', k: '#0c0a0c', c: '#6a1e1e', R: '#7a5236' }, [
-    '...mmmmmm...', '..mmmmmmmm..', '..mMMMMMMm..', '..mkkkkkkm..', '..mmmMmmmm..', '...mmMmmm...',
-    '..MmmmmmmM..', '.MMmccccmMM.', '.mmmccccmmm.', '.mRmccccmmm.', '.MM.cccc.MM.', '...mccccm...',
-    '...mm..mm...', '...mR..mm...', '...MM..MM...', '..MMM..MMM..']],
-  [{ d: '#4a3020', w: '#857a62', a: '#5e5646', p: '#2e2a26' }, [
-    '....ssss....', '...ssssss...', '...ssssss...', '...sesses...', '...SddddS...', '....dddd....',
-    '..wwaddaww..', '.wwwaaaawww.', '.wwwaaaawww.', '.sswaaaawss.', '...waaaaw...', '...aaaaaa...',
-    '...ppaapp...', '...pp..pp...', '...pp..pp...', '...ff..ff...']],
-  [{ b: '#3d2e1c', o: '#63492a', O: '#44321c', q: '#75643f', y: '#c9a83e', p: '#2e2a26' }, [
-    '...bbbbbb...', '.bbbbbbbbbb.', '...ssssss...', '...sesses...', '...ssssss...', 'qq..ssss....',
-    'qqooooooo...', 'qqoooyoooo..', 'qqoOooooOo..', 'qqsOooooOs..', '.q.oooooo...', '...oooooo...',
-    '...oOooOo...', '...pp..pp...', '...pp..pp...', '...ff..ff...']],
-  [{ t: '#3f5238', F: '#a02c2c', h: '#5a3a1e', g: '#51633f', G: '#394a2e', l: '#9a6630', L: '#5e3c18', p: '#3a2a22' }, [
-    '.....tttF...', '...ttttttF..', '..tttttttt..', '...hsssss...', '...hsesse...', '....sss.....',
-    '..gggggggg..', '.gggGggGggg.', '.gslllLggsg.', '.gglllllLLL.', '..gllllgg...', '..gggggg....',
-    '..pppppp....', '...pp..pp...', '...pp..pp...', '...ff..ff...']],
-  [{ h: '#70401c', a: '#75522f', A: '#4f3722', B: '#2a1c12', p: '#3c3c44', x: '#9a9aa2' }, [
-    '....hhhh....', '...hhhhhh...', '...hsssss...', '...hsesse...', '...ssssss...', '....ssss..x.',
-    '..aaaaaaaax.', '.aaaAaaAaax.', '.aaaAaaAaax.', '.saaaaaaasx.', '..BBBBBBBB..', '...aaaaaa...',
-    '...pp..pp...', '...pp..pp...', '...pp..pp...', '...ff..ff...']],
+// ---------- NPC sheet: one 16px column per role, idle and head-turn rows ----------
+// Each NPC is cut from an original sprite sheet (a hero armour tier or the shopkeeper) so it shares the
+// original proportions, outlines and shading, then recoloured and dressed with small overlays.
+// Overlays are 16x16 cell pixels: '.' keeps, '_' clears, letters use `colors`. `head` turns with the
+// head like the heroes' idle frame; `body` stays put. `flip` faces the NPC left.
+const SPRITES = new URL('../../core/src/main/assets/sprites/', import.meta.url);
+const BLANK = '................';
+const NPC_SPRITES = [
+  { // guard: mail with a kettle helm, red tabard and spear
+    sheet: 'warrior', tier: 3, flip: true,
+    recolor: { '#be390c': '#5a3a22', '#97310d': '#432a18', '#dc7937': '#7a5232', '#752b0e': '#33200f', '#ad693c': '#6e4a30', '#c4703a': '#6a4529',
+      '#552674': '#4a3b2e', '#753297': '#66513e', '#360a59': '#2b2119', '#9363ac': '#8a7056' },
+    colors: { K: '#28323b', L: '#c4c4c4', M: '#9da8b1', D: '#65717b', C: '#6e1717', c: '#a32a2a', Y: '#d9a72a', W: '#6b4a2e' },
+    head: ['......KKKKKK....', '.....KLLMMMDK...', '....KLLMMMMMDK..', '....KMMMMMMMDK..', '...KDDDDDDDDDDK.'],
+    body: ['..L.............', '..M.............', '.DMD............', ...Array(6).fill('..W.............'),
+      '..W....CccC.....', '..W....CYcC.....', '..W....CccC.....', '..W....CccC.....', '..W....CCCC.....', '..W.............', '..W.............'],
+  },
+  { // innkeeper: wine dress, apron and a mug of ale
+    sheet: 'cleric', tier: 1, flip: true,
+    recolor: { '#8a580f': '#a8552c', '#774b0f': '#8c4424', '#753b0f': '#843f22', '#63400f': '#73391e', '#582a0f': '#4f220f', '#411e0f': '#3a170a',
+      '#fbf2e7': '#c25a5a', '#f7e6d1': '#c25a5a', '#c9c1b9': '#9e3a44', '#a59f98': '#8a3240', '#9e9286': '#7a2833', '#6b635b': '#4f1820',
+      '#afc2d3': '#c25a5a', '#7da3c6': '#9e3a44', '#0054a6': '#7a2833', '#3d689a': '#8a3240', '#00468c': '#5c1c26', '#00134d': '#3d0f17' },
+    colors: { A: '#fbf2e7', a: '#d8cfc4', S: '#9e9286', w: '#fbf2e7', M: '#d9a23a', B: '#a8742a', g: '#6b4a2e' },
+    body: [BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK,
+      '..ww....aA......', '.gMM..SaAAaS....', '..BB...aAAa.....', '.......aAAa.....', '.......SaaS.....', BLANK],
+  },
+  { // vendor: the original shopkeeper
+    sheet: 'shopkeeper', frame: [14, 14], frames: [0, 1], at: [1, 2], turn: false, flip: true,
+  },
+  { // bard: green leathers, feathered cap and lute
+    sheet: 'huntress', tier: 2,
+    recolor: { '#f9ed43': '#c98a4a', '#e2da5f': '#b0703a', '#c8ba23': '#8f5428', '#9e791c': '#6e3c1c',
+      '#a67c52': '#5f8f3e', '#8c6845': '#4c7632', '#735538': '#3c5e28', '#6c3c1a': '#2f4a1e', '#4d2a13': '#26391a' },
+    colors: { K: '#1a2a12', T: '#a02c2c', t: '#c8463a', D: '#6e1717', F: '#f2e6c8', V: '#5a3418', w: '#8a5428', W: '#c08040', O: '#2a1608' },
+    head: ['...F..KKKK......', '....FKTTttK.....', '...KTTTTTTTK....', '...KDDDDDDDDK...'],
+    body: [BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, '..........VV....', '.........V......',
+      '....VwwwV.......', '...VwWOWwV......', '...VwWWWwV......', '....VVVVV.......', BLANK, BLANK],
+  },
+  { // adventurer: leathers, red scarf and a sword on the back
+    sheet: 'rogue', tier: 2,
+    recolor: { '#d19b3f': '#5a4e58', '#b88837': '#463c46', '#ab5e10': '#3a3038', '#85490c': '#2a2228', '#623709': '#1c161c' },
+    colors: { Y: '#d9a72a', H: '#5a3418', G: '#9da8b1', S: '#c4c4c4', R: '#b8342a', r: '#7a1e18' },
+    body: [BLANK, BLANK, BLANK, BLANK, '...Y............', '...H............', '..GGG...........', '...S............',
+      BLANK, '....rRRRRRr.....', BLANK, BLANK, BLANK, BLANK, BLANK, BLANK],
+  },
 ];
+
+// Reads the 8-bit RGB/RGBA or palette PNGs that ship with the original game.
+function readPng(url) {
+  const file = readFileSync(url), idat = [];
+  let w, h, depth, type, palette, alpha;
+  for (let p = 8; p < file.length;) {
+    const length = file.readUInt32BE(p), kind = file.toString('ascii', p + 4, p + 8), data = file.subarray(p + 8, p + 8 + length);
+    if (kind === 'IHDR') [w, h, depth, type] = [data.readUInt32BE(0), data.readUInt32BE(4), data[8], data[9]];
+    else if (kind === 'PLTE') palette = data;
+    else if (kind === 'tRNS') alpha = data;
+    else if (kind === 'IDAT') idat.push(data);
+    p += length + 12;
+  }
+  const channels = { 2: 3, 3: 1, 6: 4 }[type];
+  if (!channels || (depth !== 8 && type !== 3)) throw new Error(`${url} uses an unsupported PNG format.`);
+  const bpp = Math.max(1, channels * depth / 8), stride = Math.ceil(w * channels * depth / 8);
+  const raw = inflateSync(Buffer.concat(idat)), out = new Uint8ClampedArray(w * h * 4);
+  let previous = new Uint8Array(stride);
+  for (let y = 0; y < h; y++) {
+    const filter = raw[y * (stride + 1)], line = raw.slice(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    for (let i = 0; i < stride; i++) {
+      const a = i >= bpp ? line[i - bpp] : 0, b = previous[i], c = i >= bpp ? previous[i - bpp] : 0;
+      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+      line[i] += [0, a, b, (a + b) >> 1, pa <= pb && pa <= pc ? a : pb <= pc ? b : c][filter];
+    }
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      if (type === 3) {
+        const index = (line[(x * depth) >> 3] >> (8 - depth - ((x * depth) & 7))) & ((1 << depth) - 1);
+        out.set([...palette.subarray(index * 3, index * 3 + 3), alpha && index < alpha.length ? alpha[index] : 255], o);
+      } else out.set(type === 6 ? line.subarray(x * 4, x * 4 + 4) : [...line.subarray(x * 3, x * 3 + 3), 255], o);
+    }
+    previous = line;
+  }
+  return { w, h, buf: out };
+}
+
 function paintNpcs() {
   const g = canvas(NPC_SPRITES.length * 16, 32);
-  NPC_SPRITES.forEach(([palette, rows], column) => {
-    const colors = { ...SKIN, ...palette };
-    const breathing = ['............', ...rows.slice(0, 11), ...rows.slice(12)];
-    [rows, breathing].forEach((frame, row) => frame.forEach((line, y) => {
-      if (line.length !== 12) throw new Error(`NPC ${column} row ${y} must be 12 pixels wide.`);
-      [...line].forEach((ch, x) => { if (ch !== '.') g.px(column * 16 + 2 + x, row * 16 + y, colors[ch]); });
-    }));
+  const hex = (b, i) => '#' + [b[i], b[i + 1], b[i + 2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+  NPC_SPRITES.forEach((npc, column) => {
+    const sheet = readPng(new URL(`${npc.sheet}.png`, SPRITES));
+    const [fw, fh] = npc.frame ?? [12, 15], [ox, oy] = npc.at ?? [2, 1];
+    const overlay = (cell, rows = []) => rows.forEach((line, y) => {
+      if (line.length !== 16) throw new Error(`NPC ${column} overlay row ${y} must be 16 pixels wide.`);
+      [...line].forEach((ch, x) => {
+        if (ch === '.') return;
+        if (ch !== '_' && !npc.colors[ch]) throw new Error(`NPC ${column} has no color ${ch}.`);
+        cell[y * 16 + x] = ch === '_' ? null : npc.colors[ch];
+      });
+    });
+    for (let row = 0; row < 2; row++) {
+      let cell = new Array(256).fill(null);
+      const source = npc.frames?.[row] ?? 0;
+      for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
+        const i = (((npc.tier ?? 0) * fh + y) * sheet.w + source * fw + x) * 4;
+        if (sheet.buf[i + 3] < 128) continue;
+        const color = hex(sheet.buf, i);
+        cell[(y + oy) * 16 + x + ox] = npc.recolor?.[color] ?? color;
+      }
+      overlay(cell, npc.head);
+      // The second row turns the head the way the heroes' idle frame does: rows 0-8 mirror around x = 8.
+      if (row === 1 && npc.turn !== false) {
+        const turned = cell.slice();
+        for (let y = 0; y <= 8; y++) for (let x = 0; x < 16; x++) turned[y * 16 + x] = x === 0 ? null : cell[y * 16 + 16 - x];
+        cell = turned;
+      }
+      overlay(cell, npc.body);
+      cell.forEach((color, i) => {
+        const x = i % 16, y = i >> 4;
+        if (color) g.px(column * 16 + (npc.flip ? 15 - x : x), row * 16 + y, color);
+      });
+    }
   });
   return g;
 }
