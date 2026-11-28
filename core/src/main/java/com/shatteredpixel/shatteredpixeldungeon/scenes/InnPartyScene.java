@@ -70,7 +70,7 @@ public final class InnPartyScene extends PixelScene {
     private static final int STEPS_AHEAD = 3;
     /** A figure further behind the host than this many queued steps jumps to its newest cell. */
     private static final int MAX_BEHIND = 12;
-    /** A figure with at least this many more steps queued walks at twice the speed until it has caught up. */
+    /** After taking one step, a figure with at least this many steps still queued moves at twice the speed. */
     private static final int CATCH_UP_STEPS = 1;
     private final Map<Integer, ActorView> actors = new HashMap<>();
     private final Map<Integer, ItemSprite> drops = new HashMap<>();
@@ -628,6 +628,9 @@ public final class InnPartyScene extends PixelScene {
         // A step sent while the previous one is still animating finishes that one at once.
         if (self.sprite.isMoving) self.sprite.interruptMotion();
         self.walk.clear();
+        // A host snapshot can put the logical cell ahead of the sprite. Snap to it before the new
+        // step so the sprite does not slide diagonally across the cells it had not reached yet.
+        if (self.shown != from) self.sprite.place(from);
         self.sprite.move(from, cell);
         self.shown = cell;
         self.actor.pos = cell;
