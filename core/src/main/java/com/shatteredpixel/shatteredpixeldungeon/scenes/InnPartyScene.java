@@ -22,12 +22,15 @@ import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonWallsTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.FogOfWar;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.RaisedTerrainTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.ui.IconButton;
+import com.shatteredpixel.shatteredpixeldungeon.ui.InnGuestStatus;
+import com.shatteredpixel.shatteredpixeldungeon.ui.InnGuestTool;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Icons;
 import com.shatteredpixel.shatteredpixeldungeon.ui.InnTurnIndicator;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RenderedTextBlock;
 import com.shatteredpixel.shatteredpixeldungeon.ui.RedButton;
 import com.shatteredpixel.shatteredpixeldungeon.ui.Window;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndGame;
+import com.shatteredpixel.shatteredpixeldungeon.windows.WndInnGuestBag;
 import com.shatteredpixel.shatteredpixeldungeon.windows.WndKeyBindings;
 import com.watabou.glwrap.Blending;
 import com.watabou.input.GameAction;
@@ -43,6 +46,7 @@ import com.watabou.noosa.NoosaScript;
 import com.watabou.noosa.NoosaScriptNoLighting;
 import com.watabou.noosa.PointerArea;
 import com.watabou.noosa.SkinnedBlock;
+import com.watabou.utils.RectF;
 import com.watabou.utils.Reflection;
 import com.watabou.utils.Signal;
 
@@ -75,6 +79,9 @@ public final class InnPartyScene extends PixelScene {
     private float waterOffset;
     private int predictedSequence;
     private RenderedTextBlock status;
+    private InnGuestStatus statusPane;
+    private InnGuestTool bagButton;
+    private InnGuestTool waitTool;
     private IconButton menuButton;
     private RedButton attackButton;
     private RedButton waitButton;
@@ -87,14 +94,23 @@ public final class InnPartyScene extends PixelScene {
     private int floor;
     private int player;
     private float repeatIn;
+    /** Bag index of the potion the player is aiming, or -1. */
+    private int throwIndex = -1;
+    private RectF insets;
 
     @Override
     public void create() {
         super.create();
         party = InnOriginalParty.current();
+        insets = getCommonInsets();
+        statusPane = new InnGuestStatus(InnAdventure.profile().heroClass());
+        statusPane.camera = uiCamera;
+        statusPane.setPos(insets.left, insets.top);
+        statusPane.visible = false;
+        add(statusPane);
         status = renderTextBlock("파티장이 원본 던전에 입장하는 중", 8);
         status.camera = uiCamera;
-        status.setPos(5, 5);
+        status.setPos(insets.left + 5, insets.top + 5);
         add(status);
         menuButton = new IconButton(Icons.get(Icons.PREFS)) {
             @Override
@@ -108,7 +124,7 @@ public final class InnPartyScene extends PixelScene {
             }
         };
         menuButton.camera = uiCamera;
-        menuButton.setRect(uiCamera.width - 23, 4, 19, 19);
+        menuButton.setRect(uiCamera.width - getCommonInsets().right - 23, getCommonInsets().top + 4, 19, 19);
         add(menuButton);
         attackButton = new RedButton("공격 (Q)") {
             @Override
@@ -116,8 +132,44 @@ public final class InnPartyScene extends PixelScene {
                 attackSelected();
             }
         };
+        float right = uiCamera.width - insets.right;
+        float bottom = uiCamera.height - insets.bottom;
+        // The original toolbar's inventory and wait buttons, in the same order at the bottom right.
+        bagButton = new InnGuestTool(0, 0, 24, 26, 160, 0) {
+            @Override
+            protected void onClick() {
+                openBag();
+            }
+
+            @Override
+            public GameAction keyAction() {
+                return SPDAction.INVENTORY;
+            }
+
+            @Override
+            protected String hoverText() {
+                return Messages.titleCase(Messages.get(WndKeyBindings.class, "inventory"));
+            }
+        };
+        bagButton.camera = uiCamera;
+        bagButton.setPos(right - bagButton.width(), bottom - bagButton.height());
+        add(bagButton);
+        waitTool = new InnGuestTool(24, 0, 20, 26, 176, 0) {
+            @Override
+            protected void onClick() {
+                waitTurn();
+            }
+
+            @Override
+            protected String hoverText() {
+                return "대기 (Space)";
+            }
+        };
+        waitTool.camera = uiCamera;
+        waitTool.setPos(bagButton.left() - waitTool.width(), bagButton.top());
+        add(waitTool);
         attackButton.camera = uiCamera;
-        attackButton.setRect(uiCamera.width - 54, uiCamera.height - 22, 48, 16);
+        attackButton.setRect(right - 48, bagButton.top() - 18, 48, 16);
         attackButton.visible = attackButton.active = false;
         add(attackButton);
         waitButton = new RedButton("대기 (Space)", 7) {
@@ -126,13 +178,10 @@ public final class InnPartyScene extends PixelScene {
                 waitTurn();
             }
         };
-        waitButton.camera = uiCamera;
-        waitButton.setRect(uiCamera.width - 110, uiCamera.height - 22, 52, 16);
         waitButton.visible = waitButton.active = false;
-        add(waitButton);
         turnIndicator = new InnTurnIndicator();
         turnIndicator.camera = uiCamera;
-        turnIndicator.setRect(0, 26, uiCamera.width, InnTurnIndicator.HEIGHT);
+        turnIndicator.setRect(0, insets.top + InnGuestStatus.HEIGHT + 2, uiCamera.width, InnTurnIndicator.HEIGHT);
         add(turnIndicator);
         KeyEvent.addKeyListener(keys);
         KeyEvent.captureKey(Input.Keys.SPACE, space);
@@ -168,7 +217,10 @@ public final class InnPartyScene extends PixelScene {
     private void apply(InnOriginalParty.Snapshot state) {
         revision = state.revision;
         graceShown = state.grace / 10f;
-        waitButton.visible = waitButton.active = state.result.equals("play");
+        boolean playing = state.result.equals("play");
+        waitTool.enable(playing);
+        bagButton.enable(playing);
+        if (!playing) throwIndex = -1;
         player = state.player;
         if (state.floor != floor) {
             floor = state.floor;
@@ -215,10 +267,10 @@ public final class InnPartyScene extends PixelScene {
         }
         attackButton.visible = attackButton.active = attackTarget != null;
         if (self != null) {
-            status.text(state.depth + "층 · HP " + self.actor.HP + "/" + self.actor.HT
-                    + (self.actor.HP <= 0 ? " · 쓰러짐" : "")
-                    + "\n방향키 이동 · 클릭/Q 평타 · Space 대기 · Esc 메뉴");
+            statusPane.visible = true;
+            statusPane.show(self.actor.HP, self.actor.HT, state.level, state.depth + "층 · 금화 " + state.gold);
         }
+        refreshStatusLine(self);
     }
 
     private void rebuild(InnOriginalParty.Snapshot state) {
@@ -274,22 +326,23 @@ public final class InnPartyScene extends PixelScene {
             protected void onClick(PointerEvent event) {
                 if (showingMenu()) return;
                 int cell = ground.screenToTile((int) event.current.x, (int) event.current.y, true);
+                if (throwIndex >= 0) {
+                    int index = throwIndex;
+                    throwIndex = -1;
+                    refreshStatusLine(actors.get(player));
+                    if (cell >= 0) party.command("H", index, cell);
+                    return;
+                }
                 party.command("T", cell, 0);
             }
         });
-        erase(status);
-        erase(menuButton);
-        erase(attackButton);
-        erase(waitButton);
-        erase(turnIndicator);
+        Gizmo[] hud = {statusPane, status, turnIndicator, menuButton, attackButton, waitTool, bagButton};
+        for (Gizmo component : hud) erase(component);
         add(world);
-        add(status);
-        add(turnIndicator);
-        add(menuButton);
-        add(attackButton);
-        add(waitButton);
+        for (Gizmo component : hud) add(component);
         attackButton.givePointerPriority();
-        waitButton.givePointerPriority();
+        waitTool.givePointerPriority();
+        bagButton.givePointerPriority();
         menuButton.givePointerPriority();
         for (var component : members.toArray(new Gizmo[0])) {
             if (component instanceof Window) {
@@ -441,6 +494,10 @@ public final class InnPartyScene extends PixelScene {
             if (event.pressed) attackSelected();
             return true;
         }
+        if (action == SPDAction.INVENTORY) {
+            if (event.pressed) openBag();
+            return true;
+        }
         return false;
     }
 
@@ -534,7 +591,44 @@ public final class InnPartyScene extends PixelScene {
 
     @Override
     protected void onBackPressed() {
+        if (throwIndex >= 0) {
+            throwIndex = -1;
+            refreshStatusLine(actors.get(player));
+            return;
+        }
         openMenu();
+    }
+
+    /** The line under the status pane: aiming prompt, a fallen notice, or nothing. */
+    private void refreshStatusLine(ActorView self) {
+        String line = throwIndex >= 0 ? "던질 곳을 선택하세요 · Esc 취소"
+                : self != null && self.actor.HP <= 0 ? "쓰러졌습니다 · 파티장을 지켜봅니다" : "";
+        // An empty text keeps the old words on screen, so hide the line instead.
+        status.visible = !line.isEmpty();
+        if (status.visible) status.text(line);
+        status.setPos(insets.left + 3, insets.top + InnGuestStatus.HEIGHT + InnTurnIndicator.HEIGHT + 4);
+    }
+
+    private void openBag() {
+        InnOriginalParty.Snapshot state = party == null ? null : party.latest();
+        if (state == null || showingMenu() || !state.result.equals("play")) return;
+        ActorView self = actors.get(player);
+        if (self == null || !self.actor.isAlive()) return;
+        movement.clear();
+        tappedMovement.clear();
+        throwIndex = -1;
+        refreshStatusLine(self);
+        add(new WndInnGuestBag(state.gear, state.gold, new WndInnGuestBag.Actions() {
+            @Override public void equip(int index) { party.command("E", index, 0); }
+            @Override public void unequip(int slot) { party.command("R", slot, 0); }
+            @Override public void use(int index, int target) { party.command("U", index, target); }
+            @Override public void throwAt(int index) {
+                throwIndex = index;
+                refreshStatusLine(actors.get(player));
+            }
+            @Override public void drop(int index) { party.command("D", index, 0); }
+            @Override public void give(int index) { party.command("G", index, 0); }
+        }));
     }
 
     private void openMenu() {

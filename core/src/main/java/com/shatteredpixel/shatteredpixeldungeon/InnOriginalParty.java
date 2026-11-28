@@ -7,24 +7,35 @@ import com.shatteredpixel.shatteredpixeldungeon.actors.TurnClock;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Mob;
 import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.npcs.InnPartyMember;
 import com.shatteredpixel.shatteredpixeldungeon.items.Heap;
+import com.shatteredpixel.shatteredpixeldungeon.items.armor.Armor;
+import com.shatteredpixel.shatteredpixeldungeon.items.potions.Potion;
+import com.shatteredpixel.shatteredpixeldungeon.items.weapon.melee.MeleeWeapon;
+import com.shatteredpixel.shatteredpixeldungeon.items.Item;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Level;
 import com.shatteredpixel.shatteredpixeldungeon.levels.Terrain;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
 import com.watabou.noosa.Game;
 import com.watabou.utils.PathFinder;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.function.Consumer;
 
 /**
  * Original-engine party link. The host runs actors and the guest sends intents.
  *
  * Guest command: {@code C|floor|seq|kind|first|second}, kind M (step dx,dy), A (attack actor id),
- * T (step toward or attack a cell), W (wait one turn, both values 0).
+ * T (step toward or attack a cell), W (wait one turn, both values 0), and for the companion's own items
+ * E (equip bag index), R (unequip slot {@link InnPartyMember#SLOT_WEAPON} or {@link InnPartyMember#SLOT_ARMOR}),
+ * U (use bag index; second is the upgrade target for a scroll of upgrade, else 0), H (throw bag index at cell),
+ * D (drop bag index), G (give bag index to the host).
  * Host snapshot: {@code S|revision|floor|depth|branch|width|height|ack|turn|player|tiles|actors|loot|result
- * |texture|grace}, where turn says whose input the world is waiting for with a countdown
- * ({@link TurnClock#WAIT_NONE}, {@link TurnClock#WAIT_HOST}, {@link TurnClock#WAIT_GUEST}) and grace is the
- * remaining countdown in tenths of a second.
+ * |texture|grace|gear|hud}, where turn says whose input the world is waiting for with a countdown
+ * ({@link TurnClock#WAIT_NONE}, {@link TurnClock#WAIT_HOST}, {@link TurnClock#WAIT_GUEST}), grace is the
+ * remaining countdown in tenths of a second, gear lists the companion's items as {@code slot,image,quantity,
+ * flags,title} records (slot {@code w}, {@code a} or a bag index; title escaped, see {@link #escape}) and hud is
+ * {@code level,gold,strength} of the party.
  */
 public final class InnOriginalParty {
     private static final String DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -40,10 +51,15 @@ public final class InnOriginalParty {
     static final int MAX_BRANCH = 9;
     static final int MAX_FLOOR = 100000;
     private static final int COMMAND_FIELDS = 6;
-    private static final int SNAPSHOT_FIELDS = 16;
+    private static final int SNAPSHOT_FIELDS = 18;
     /** Upper bound of the grace field, in tenths of a second. */
     public static final int MAX_GRACE_TENTHS = Math.round(com.shatteredpixel.shatteredpixeldungeon.actors.TurnPolicy.TURN_GRACE_SECONDS * 10);
     public static final String DETECTION_RECORD = "^";
+    /** Gear flags: what the guest may do with an item. */
+    public static final int FLAG_WEAPON = 1, FLAG_ARMOR = 2, FLAG_DRINK = 4, FLAG_THROW = 8, FLAG_UPGRADE = 16,
+            FLAG_CURSED = 32, FLAG_UPGRADABLE = 64;
+    static final int MAX_TITLE = 60;
+    static final int MAX_IMAGE = 512;
 
     private static volatile InnOriginalParty current;
     public final boolean host;
@@ -132,8 +148,17 @@ public final class InnOriginalParty {
             case "A": return first > 0 && second == 0;
             case "T": return first >= 0 && first < MAX_CELLS && second == 0;
             case "W": return first == 0 && second == 0;
+            case "E": case "D": case "G": return validIndex(first) && second == 0;
+            case "R": return (first == InnPartyMember.SLOT_WEAPON || first == InnPartyMember.SLOT_ARMOR) && second == 0;
+            case "U": return validIndex(first) && (second == 0 || second == InnPartyMember.UPGRADE_WEAPON
+                    || second == InnPartyMember.UPGRADE_ARMOR);
+            case "H": return validIndex(first) && second >= 0 && second < MAX_CELLS;
             default: return false;
         }
+    }
+
+    private static boolean validIndex(int index) {
+        return index >= 0 && index < InnPartyMember.BAG_SIZE;
     }
 
     /** Called during the original floor transition, before registering its actors. */
@@ -177,7 +202,10 @@ public final class InnOriginalParty {
     }
 
     private void placeMember(Level level, int cell) {
-        if (member == null) member = new InnPartyMember();
+        if (member == null) {
+            member = new InnPartyMember();
+            member.equipStarterKit(peer.heroClass());
+        }
         member.pos = cell;
         level.mobs.add(member);
     }
@@ -246,11 +274,13 @@ public final class InnOriginalParty {
         if (!due && sinceChecked < MIN_SNAPSHOT_INTERVAL) return;
         sinceChecked = 0;
         String body = snapshotBody();
-        if (!due && body.equals(lastBody)) return;
+        String extra = gearRecords(member) + "|" + hudRecord();
+        String content = body + "|" + extra;
+        if (!due && content.equals(lastBody)) return;
         answerNow = false;
-        lastBody = body;
+        lastBody = content;
         sinceSent = 0;
-        String packet = "S|" + ++revision + "|" + body + "|" + graceTenths();
+        String packet = "S|" + ++revision + "|" + body + "|" + graceTenths() + "|" + extra;
         if (packet.length() <= MAX_PACKET) send.accept(packet);
     }
 
@@ -346,6 +376,61 @@ public final class InnOriginalParty {
                 + "|" + result + "|" + level.tilesTex();
     }
 
+    /** The companion's equipment and bag, see the class comment. */
+    static String gearRecords(InnPartyMember member) {
+        StringBuilder result = new StringBuilder();
+        if (member.weapon() != null) appendGear(result, "w", member.weapon(), true);
+        if (member.armor() != null) appendGear(result, "a", member.armor(), true);
+        List<Item> bag = member.bag();
+        for (int i = 0; i < bag.size(); i++) appendGear(result, Integer.toString(i), bag.get(i), false);
+        return result.toString();
+    }
+
+    private static void appendGear(StringBuilder result, String slot, Item item, boolean equipped) {
+        int flags = 0;
+        if (!equipped) {
+            if (item instanceof MeleeWeapon) flags |= FLAG_WEAPON;
+            if (item instanceof Armor) flags |= FLAG_ARMOR;
+            if (InnPartyMember.drinkable(item)) flags |= FLAG_DRINK;
+            if (item instanceof Potion) flags |= FLAG_THROW;
+            if (InnPartyMember.readableUpgrade(item)) flags |= FLAG_UPGRADE;
+        } else if (item.isUpgradable()) {
+            flags |= FLAG_UPGRADABLE;
+        }
+        if (item.cursed && item.cursedKnown) flags |= FLAG_CURSED;
+        int image = item.image();
+        if (image < 0 || image >= MAX_IMAGE) image = 0;
+        String title = item.title();
+        if (title.length() > MAX_TITLE) title = title.substring(0, MAX_TITLE);
+        if (result.length() > 0) result.append(';');
+        result.append(slot).append(',').append(image).append(',').append(item.quantity()).append(',')
+                .append(flags).append(',').append(escape(title));
+    }
+
+    private static String hudRecord() {
+        return Dungeon.hero.lvl + "," + Math.max(0, Dungeon.gold) + "," + Dungeon.hero.STR();
+    }
+
+    /** Escapes the record separators of the snapshot ({@code % | ; ,}) as percent codes. */
+    static String escape(String text) {
+        StringBuilder result = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            switch (c) {
+                case '%': result.append("%25"); break;
+                case '|': result.append("%7C"); break;
+                case ';': result.append("%3B"); break;
+                case ',': result.append("%2C"); break;
+                default: result.append(c);
+            }
+        }
+        return result.toString();
+    }
+
+    static String unescape(String text) {
+        return text.replace("%2C", ",").replace("%3B", ";").replace("%7C", "|").replace("%25", "%");
+    }
+
     private static int heapImage(Heap heap) {
         switch (heap.type) {
             case CHEST: return ItemSpriteSheet.CHEST;
@@ -412,8 +497,58 @@ public final class InnOriginalParty {
         String encode() { return "C|" + floor + "|" + seq + "|" + kind + "|" + first + "|" + second; }
     }
 
+    /** One item of the companion as the guest sees it. */
+    public static final class Gear {
+        /** {@link #GEAR_WEAPON} or {@link #GEAR_ARMOR} for an equipped item, otherwise the bag index. */
+        public final int slot;
+        public final int image, quantity, flags;
+        public final String title;
+
+        Gear(int slot, int image, int quantity, int flags, String title) {
+            this.slot = slot;
+            this.image = image;
+            this.quantity = quantity;
+            this.flags = flags;
+            this.title = title;
+        }
+
+        public boolean equipped() { return slot < 0; }
+
+        public boolean has(int flag) { return (flags & flag) != 0; }
+    }
+
+    public static final int GEAR_WEAPON = -1;
+    public static final int GEAR_ARMOR = -2;
+
+    /** Parses gear records, skipping invalid ones. */
+    static List<Gear> parseGear(String records) {
+        List<Gear> result = new ArrayList<>();
+        if (records.isEmpty()) return result;
+        for (String row : records.split(";")) {
+            String[] columns = row.split(",", -1);
+            if (columns.length != 5) continue;
+            try {
+                int slot = columns[0].equals("w") ? GEAR_WEAPON : columns[0].equals("a") ? GEAR_ARMOR
+                        : Integer.parseInt(columns[0]);
+                int image = Integer.parseInt(columns[1]);
+                int quantity = Integer.parseInt(columns[2]);
+                int flags = Integer.parseInt(columns[3]);
+                String title = unescape(columns[4]);
+                if (slot < GEAR_ARMOR || slot >= InnPartyMember.BAG_SIZE || image < 0 || image >= MAX_IMAGE
+                        || quantity < 1 || flags < 0 || flags > 127 || title.isEmpty() || title.length() > MAX_TITLE) continue;
+                result.add(new Gear(slot, image, quantity, flags, title));
+            } catch (NumberFormatException ignored) {
+                // Skip invalid gear records.
+            }
+        }
+        return result;
+    }
+
     public static final class Snapshot {
         public final int revision, floor, depth, branch, width, height, ack, player;
+        /** The party's level, gold and strength, all from the host hero. */
+        public final int level, gold, strength;
+        public final List<Gear> gear;
         /** Whose input the world waits for with a countdown, see {@link TurnClock#waitingOn()}. */
         public final int turn;
         /** Remaining countdown in tenths of a second, 0 when {@link #turn} is none. */
@@ -437,6 +572,11 @@ public final class InnOriginalParty {
             result = fields[13];
             texture = fields[14];
             grace = Integer.parseInt(fields[15]);
+            gear = parseGear(fields[16]);
+            String[] hud = fields[17].split(",", -1);
+            level = Integer.parseInt(hud[0]);
+            gold = Integer.parseInt(hud[1]);
+            strength = Integer.parseInt(hud[2]);
         }
 
         static Snapshot parse(String[] fields) {
@@ -451,6 +591,12 @@ public final class InnOriginalParty {
             int turn = Integer.parseInt(fields[8]);
             int player = Integer.parseInt(fields[9]);
             int grace = Integer.parseInt(fields[15]);
+            String[] hud = fields[17].split(",", -1);
+            if (hud.length != 3) return null;
+            int level = Integer.parseInt(hud[0]);
+            int gold = Integer.parseInt(hud[1]);
+            int strength = Integer.parseInt(hud[2]);
+            if (level < 1 || level > 99 || gold < 0 || strength < 0 || strength > 999) return null;
             // The guest seeds its terrain variance from depth and branch, which loops over them: keep them small.
             if (revision < 1 || floor < 1 || floor > MAX_FLOOR || depth < 1 || depth > MAX_DEPTH
                     || branch < 0 || branch > MAX_BRANCH || ack < 0 || player < 1) return null;

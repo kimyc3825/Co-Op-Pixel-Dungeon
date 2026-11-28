@@ -181,6 +181,11 @@ public class HeroSprite extends CharSprite {
 		}
 	}
 	
+	/** The local inn profile's portrait for a class, as the hero's own portrait shows it. */
+	public static Image innAvatar( HeroClass cl, int armorTier ) {
+		return avatar(InnHeroAppearance.texture(cl), armorTier);
+	}
+
 	public static Image avatar( HeroClass cl, int armorTier ) {
 		return avatar(cl.spritesheet(), armorTier);
 	}

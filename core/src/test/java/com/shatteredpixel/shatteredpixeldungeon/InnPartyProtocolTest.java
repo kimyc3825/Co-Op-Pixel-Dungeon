@@ -33,7 +33,8 @@ public class InnPartyProtocolTest {
 
 	/** A valid snapshot with one field replaced. */
 	private static String[] snapshot(int field, String value) {
-		String[] fields = ("S|7|2|3|0|3|3|5|1|42|" + tiles(9) + "|42,4,10,20,1,x|4,1|play|environment/tiles_sewers.png|30")
+		String[] fields = ("S|7|2|3|0|3|3|5|1|42|" + tiles(9) + "|42,4,10,20,1,x|4,1|play|environment/tiles_sewers.png|30"
+				+ "|w,10,1,64,worn shortsword +1;0,20,3,12,healing%2C x3|4,120,11")
 				.split("\\|", -1);
 		if (field >= 0) fields[field] = value;
 		return fields;
@@ -64,6 +65,52 @@ public class InnPartyProtocolTest {
 		assertFalse(InnOriginalParty.validCommand("W", 1, 0));
 		assertFalse(InnOriginalParty.validCommand("N", 0, 0));
 		assertFalse(InnOriginalParty.validCommand("", 0, 0));
+		assertTrue(InnOriginalParty.validCommand("E", 0, 0));
+		assertTrue(InnOriginalParty.validCommand("E", 19, 0));
+		assertFalse(InnOriginalParty.validCommand("E", 20, 0));
+		assertFalse(InnOriginalParty.validCommand("E", -1, 0));
+		assertTrue(InnOriginalParty.validCommand("R", 1, 0));
+		assertFalse(InnOriginalParty.validCommand("R", 2, 0));
+		assertTrue(InnOriginalParty.validCommand("U", 3, 2));
+		assertFalse(InnOriginalParty.validCommand("U", 3, 3));
+		assertTrue(InnOriginalParty.validCommand("H", 3, 15999));
+		assertFalse(InnOriginalParty.validCommand("H", 3, 16000));
+		assertFalse(InnOriginalParty.validCommand("D", 0, 1));
+		assertTrue(InnOriginalParty.validCommand("G", 5, 0));
+	}
+
+	@Test
+	public void gearAndPartyStatsParse() {
+		InnOriginalParty.Snapshot state = parse(snapshot(-1, null));
+		assertNotNull(state);
+		assertEquals(4, state.level);
+		assertEquals(120, state.gold);
+		assertEquals(11, state.strength);
+		assertEquals(2, state.gear.size());
+		InnOriginalParty.Gear weapon = state.gear.get(0);
+		assertEquals(InnOriginalParty.GEAR_WEAPON, weapon.slot);
+		assertTrue(weapon.equipped());
+		assertTrue(weapon.has(InnOriginalParty.FLAG_UPGRADABLE));
+		InnOriginalParty.Gear potion = state.gear.get(1);
+		assertEquals(0, potion.slot);
+		assertEquals(3, potion.quantity);
+		assertEquals("healing, x3", potion.title);
+		assertTrue(potion.has(InnOriginalParty.FLAG_DRINK) && potion.has(InnOriginalParty.FLAG_THROW));
+		// Invalid gear records are skipped, not fatal.
+		assertEquals(1, parse(snapshot(16, "w,10,1,64,ok;99,1,1,0,bad;0,1,0,0,none;0,x,1,0,y")).gear.size());
+		assertEquals(0, parse(snapshot(16, "")).gear.size());
+		// The stats line is required and range checked.
+		assertNull(parse(snapshot(17, "0,1,10")));
+		assertNull(parse(snapshot(17, "1,-1,10")));
+		assertNull(parse(snapshot(17, "1,1")));
+	}
+
+	@Test
+	public void titlesRoundTripThroughTheEscaping() {
+		String title = "50% off | a;b, c %2C";
+		assertEquals(title, InnOriginalParty.unescape(InnOriginalParty.escape(title)));
+		String escaped = InnOriginalParty.escape(title);
+		assertFalse(escaped.contains("|") || escaped.contains(";") || escaped.contains(","));
 	}
 
 	@Test
@@ -107,8 +154,8 @@ public class InnPartyProtocolTest {
 		none[15] = "0";
 		assertNotNull(parse(none));
 		// Field count.
-		assertNull(parse(Arrays.copyOf(snapshot(-1, null), 15)));
 		assertNull(parse(Arrays.copyOf(snapshot(-1, null), 17)));
+		assertNull(parse(Arrays.copyOf(snapshot(-1, null), 19)));
 	}
 
 	@Test

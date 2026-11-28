@@ -186,6 +186,8 @@ public final class EngineHarness {
 
 	public static synchronized void boot() throws Exception {
 		if (booted) return;
+		// Journal classes check the build version when items are identified.
+		if (com.watabou.noosa.Game.version == null) com.watabou.noosa.Game.version = "0.0.0-test";
 		Field f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
 		f.setAccessible(true);
 		unsafe = (sun.misc.Unsafe) f.get(null);

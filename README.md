@@ -1,7 +1,7 @@
 # Co-Op-Pixel-Dungeon
 
 Shattered Pixel Dungeon을 바탕으로 만든 웹·Windows 2인 협동 던전입니다.
-여관에서 플레이(첫 Cloudflare 배포 뒤 주소를 적습니다) · [Windows 다운로드](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases) · [빌드와 조작법](docs/inn.md)
+[여관에서 플레이](https://co-op-pixel-dungeon.sidecat.workers.dev/play/) · [Windows 다운로드](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/releases) · [빌드와 조작법](docs/inn.md)
 
 ## 서버 연결
 
