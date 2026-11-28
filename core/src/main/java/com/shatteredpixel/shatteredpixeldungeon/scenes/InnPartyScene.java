@@ -67,7 +67,7 @@ public final class InnPartyScene extends PixelScene {
     private static final int STEPS_AHEAD = 3;
     /** Longest gap between two snapshots that is walked out cell by cell; a longer one is shown as a jump. */
     private static final int MAX_WALK = 8;
-    /** A figure with more steps than this still to walk moves at twice the speed until it has caught up. */
+    /** After taking one step, a figure with at least this many steps still queued moves at twice the speed. */
     private static final int CATCH_UP_STEPS = 1;
     private final Map<Integer, ActorView> actors = new HashMap<>();
     private final Map<Integer, ItemSprite> drops = new HashMap<>();
@@ -597,6 +597,9 @@ public final class InnPartyScene extends PixelScene {
         // A step sent while the previous one is still animating finishes that one at once.
         if (self.sprite.isMoving) self.sprite.interruptMotion();
         self.walk.clear();
+        // A host snapshot can put the logical cell ahead of the sprite. Snap to it before the new
+        // step so the sprite does not slide diagonally across the cells it had not reached yet.
+        if (self.shown != from) self.sprite.place(from);
         self.sprite.move(from, cell);
         self.shown = cell;
         self.actor.pos = cell;
