@@ -13,6 +13,7 @@ import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Invisibility;
 import com.shatteredpixel.shatteredpixeldungeon.actors.buffs.Levitation;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.Hero;
 import com.shatteredpixel.shatteredpixeldungeon.actors.hero.HeroClass;
+import com.shatteredpixel.shatteredpixeldungeon.actors.mobs.Wraith;
 import com.shatteredpixel.shatteredpixeldungeon.items.Dewdrop;
 import com.shatteredpixel.shatteredpixeldungeon.items.Gold;
 import com.shatteredpixel.shatteredpixeldungeon.items.Heap;
@@ -274,11 +275,51 @@ public final class InnPartyMember extends DirectableAlly {
             if (cell < 0) return false;
         }
 
+        Heap container = level.heaps.get(cell);
+        if (container != null && container.type != Heap.Type.HEAP && container.type != Heap.Type.FOR_SALE) {
+            // Like the hero, the companion does not walk over a chest or remains: stepping into one opens it.
+            return openContainer(container);
+        }
         if (rooted || !level.passable[cell] || level.pit[cell] || Actor.findChar(cell) != null) return false;
         sprite.move(pos, cell);
         move(cell);
         spend(1 / speed());
         pickUpAt(cell);
+        return true;
+    }
+
+    /**
+     * Opens a chest, tomb or remains next to the companion, as {@code Hero.actOpenChest} and {@code Heap.open} do
+     * for the hero. Locked and crystal chests need the host's keys, so they stay shut for the companion.
+     */
+    private boolean openContainer(Heap heap) {
+        if (!Dungeon.level.adjacent(pos, heap.pos)) return false;
+        if (heap.type == Heap.Type.LOCKED_CHEST || heap.type == Heap.Type.CRYSTAL_CHEST) {
+            sprite.showStatus(CharSprite.NEUTRAL, "잠김");
+            return false;
+        }
+        sprite.turnTo(pos, heap.pos);
+        switch (heap.type) {
+            case TOMB:
+                Sample.INSTANCE.play(Assets.Sounds.TOMB);
+                Wraith.spawnAround(pos);
+                break;
+            case SKELETON:
+            case REMAINS:
+                break;
+            default:
+                Sample.INSTANCE.play(Assets.Sounds.UNLOCK);
+        }
+        if (heap.haunted) {
+            if (Wraith.spawnAt(heap.pos) == null) damage(HP / 2, heap);
+            Sample.INSTANCE.play(Assets.Sounds.CURSED);
+        }
+        heap.type = Heap.Type.HEAP;
+        if (heap.sprite != null) {
+            heap.sprite.link();
+            heap.sprite.drop();
+        }
+        spend(1f);
         return true;
     }
 
