@@ -15,6 +15,7 @@ import com.shatteredpixel.shatteredpixeldungeon.messages.Messages;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.CharSprite;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.InnPartySprite;
 import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSprite;
+import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTerrainTilemap;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTileSheet;
 import com.shatteredpixel.shatteredpixeldungeon.tiles.DungeonTilemap;
@@ -66,6 +67,10 @@ public final class InnPartyScene extends PixelScene {
     private static final int STEPS_AHEAD = 3;
     private final Map<Integer, ActorView> actors = new HashMap<>();
     private final Map<Integer, ItemSprite> drops = new HashMap<>();
+    /** Cells with a chest, tomb or remains: stepping there opens it instead of moving. */
+    private final Set<Integer> containers = new HashSet<>();
+    /** Cells with a chest the companion cannot open (locked or crystal). */
+    private final Set<Integer> lockedContainers = new HashSet<>();
     private final Set<GameAction> movement = new HashSet<>();
     private final Set<GameAction> tappedMovement = new HashSet<>();
     private final Signal.Listener<KeyEvent> keys = this::key;
@@ -286,6 +291,8 @@ public final class InnPartyScene extends PixelScene {
         }
         actors.clear();
         drops.clear();
+        containers.clear();
+        lockedContainers.clear();
         Dungeon.hero = null;
         Dungeon.depth = state.depth;
         Dungeon.branch = state.branch;
@@ -447,6 +454,8 @@ public final class InnPartyScene extends PixelScene {
 
     private void applyLoot(InnOriginalParty.Snapshot state) {
         Set<Integer> present = new HashSet<>();
+        containers.clear();
+        lockedContainers.clear();
         for (String row : state.loot.split(";")) {
             String[] columns = row.split(",", -1);
             if (columns.length != 2) continue;
@@ -455,6 +464,13 @@ public final class InnPartyScene extends PixelScene {
                 int image = Integer.parseInt(columns[1]);
                 if (cell < 0 || cell >= state.tiles.length || image < 0 || image >= 512) continue;
                 present.add(cell);
+                if (image == ItemSpriteSheet.LOCKED_CHEST || image == ItemSpriteSheet.CRYSTAL_CHEST) {
+                    containers.add(cell);
+                    lockedContainers.add(cell);
+                } else if (image == ItemSpriteSheet.CHEST || image == ItemSpriteSheet.TOMB
+                        || image == ItemSpriteSheet.BONES || image == ItemSpriteSheet.REMAINS) {
+                    containers.add(cell);
+                }
                 ItemSprite sprite = drops.get(cell);
                 if (sprite == null) {
                     sprite = new ItemSprite(image);
@@ -572,6 +588,7 @@ public final class InnPartyScene extends PixelScene {
         int cell = from + dx + dy * level.width();
         if (!level.insideMap(cell) || !level.adjacent(from, cell)) return true;
         if (level.visited[cell] && (!level.passable[cell] || level.pit[cell])) return true;
+        if (lockedContainers.contains(cell)) return true;
         for (ActorView other : actors.values()) {
             if (other != self && other.actor.pos == cell && other.actor.HP > 0) return true;
         }
@@ -587,7 +604,8 @@ public final class InnPartyScene extends PixelScene {
         if (self == null || state == null || !self.actor.isAlive() || state.turn == TurnClock.WAIT_HOST) return;
         int from = self.actor.pos;
         int cell = from + dx + dy * level.width();
-        if (!level.insideMap(cell) || !level.adjacent(from, cell) || !level.passable[cell] || level.pit[cell]) return;
+        if (!level.insideMap(cell) || !level.adjacent(from, cell) || !level.passable[cell] || level.pit[cell]
+                || containers.contains(cell)) return;
         for (ActorView other : actors.values()) {
             if (other != self && other.actor.pos == cell && other.actor.HP > 0) return;
         }
