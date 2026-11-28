@@ -28,6 +28,7 @@ import com.watabou.noosa.Image;
 import com.watabou.noosa.NinePatch;
 import com.watabou.noosa.PointerArea;
 import com.watabou.noosa.TextInput;
+import com.watabou.noosa.audio.Music;
 import com.watabou.noosa.ui.Component;
 import com.watabou.utils.RectF;
 
@@ -90,6 +91,8 @@ public final class NativeInnScene extends PixelScene {
     @Override
     public void create() {
         super.create();
+        // The inn has no music of its own; a dungeon or title track must not follow the player here.
+        Music.INSTANCE.end();
         Game.inputHandler.addInputProcessor(movementKeys);
         float w = Camera.main.width;
         float h = Camera.main.height;
