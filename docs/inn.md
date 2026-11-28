@@ -39,7 +39,7 @@
 
 웹의 바닥, 가구, 조명은 [inn-decor.mjs](../web-client/play/inn-decor.mjs)에서 그립니다. Windows판의 같은 작업은 [NativeInnBoard.java](../inn-client/src/main/java/com/noxac/pixeldungeon/inn/NativeInnBoard.java)의 `rebuildFloor`, `paintTerrain`, `paintHallFeatures`에서 합니다. 새 배치로 옮기는 벽난로, 바, 원정 출입구의 그림도 여기에서 조정합니다.
 
-현재 배치의 여관 홀은 미리 그린 그림 한 장을 씁니다. 배경, 불꽃 애니메이션, NPC 그림은 `web-client/scripts/generate-inn.mjs`가 그리며, 저장소 루트에서 `node web-client/scripts/generate-inn.mjs`를 실행하면 두 클라이언트가 함께 쓰는 `inn-hall.png`, `inn-hall-fx.png`, `inn-npcs.png`와 `inn-hall.mjs`가 다시 생성됩니다. 이 그림은 `map`이 스크립트의 맵과 정확히 같을 때만 쓰이고, 다르면 위 코드로 타일을 그립니다. 칸 배치를 바꾸면 스크립트의 `MAP`과 `NativeInnBoard.java`의 `HALL_MAP`, `HALL_FX`도 같은 값으로 맞춥니다.
+현재 배치의 여관 홀은 미리 그린 그림 한 장을 씁니다. 배경, 불꽃 애니메이션, NPC 그림은 `web-client/scripts/generate-inn.mjs`가 그리며, 저장소 루트에서 `node web-client/scripts/generate-inn.mjs`를 실행하면 두 클라이언트가 함께 쓰는 `inn-hall.png`, `inn-hall-fx.png`, `inn-npcs.png`와 `inn-hall.mjs`가 다시 생성됩니다. NPC는 원본 스프라이트(영웅의 갑옷 단계 그림과 상점 주인)를 잘라 색을 바꾸고 모자·앞치마·악기 같은 덧그림을 얹어 만들므로, 원본과 같은 비율·외곽선·명암을 유지합니다. 새 NPC도 스크립트의 `NPC_SPRITES`에 같은 방식으로 추가합니다. 이 그림은 `map`이 스크립트의 맵과 정확히 같을 때만 쓰이고, 다르면 위 코드로 타일을 그립니다. 칸 배치를 바꾸면 스크립트의 `MAP`과 `NativeInnBoard.java`의 `HALL_MAP`, `HALL_FX`도 같은 값으로 맞춥니다.
 
 저장소 루트에서 다음 명령을 실행한 뒤 [여관 전체 지도 미리보기](http://127.0.0.1:8000/preview/)를 엽니다. Python 3과 브라우저가 필요하며, 공개 파일로 실제 웹 렌더러를 실행합니다.
 
