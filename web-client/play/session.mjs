@@ -12,7 +12,8 @@ const LINK_PATH = '/api/v5/link';
 const ORIGINAL_PROTOCOL = 14;
 const LEGACY_PROTOCOL = 9;
 export const INN_MOVE_MS = 150;
-const PING_MS = 25000;
+// Keep-alive and round-trip measurement (PROTOCOL.md §2 asks for at least one `ping` every 25 s).
+const PING_MS = 5000;
 const REQUEST_TIMEOUT_MS = 8000;
 const CONNECT_TIMEOUT_MS = 10000;
 const RECONNECT_MS = [500, 1000, 2000, 4000, 8000];
@@ -49,6 +50,18 @@ function socketUrl(path, params) {
   return url.href;
 }
 
+const latencyListeners = new Set();
+
+/** Calls `listener(ms)` with every measured round trip to the server, from whichever socket is open. */
+export function onLatency(listener) {
+  latencyListeners.add(listener);
+  return () => latencyListeners.delete(listener);
+}
+
+function reportLatency(ms) {
+  for (const listener of latencyListeners) listener(ms);
+}
+
 /** One WebSocket with request/response correlation (`ref`) and keep-alive pings. */
 class Channel {
   constructor(url, { onOpen, onFrame, onClose }) {
@@ -59,12 +72,20 @@ class Channel {
     const connectTimer = setTimeout(() => { if (this.ws.readyState === WebSocket.CONNECTING) this.ws.close(); }, CONNECT_TIMEOUT_MS);
     this.ws.addEventListener('open', () => {
       clearTimeout(connectTimer);
-      // The server answers the literal `ping` without waking its Durable Object.
-      this.pinger = setInterval(() => this.sendText('ping'), PING_MS);
+      // The server answers the literal `ping` without waking its Durable Object. The time to its
+      // `pong` is the round trip to the server, shown in the corner of the page.
+      this.pinger = setInterval(() => {
+        if (this.sendText('ping')) this.pingSentAt ??= performance.now();
+      }, PING_MS);
       onOpen();
     });
     this.ws.addEventListener('message', event => {
-      if (typeof event.data !== 'string' || event.data === 'pong') return;
+      if (event.data === 'pong') {
+        if (this.pingSentAt != null) reportLatency(performance.now() - this.pingSentAt);
+        this.pingSentAt = null;
+        return;
+      }
+      if (typeof event.data !== 'string') return;
       let frame;
       try { frame = JSON.parse(event.data); } catch { return; }
       if (!frame || typeof frame.t !== 'string') return;

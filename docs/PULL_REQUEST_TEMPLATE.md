@@ -2,6 +2,8 @@
 
 <!-- 바꾼 내용과 이유. 관련 이슈가 있으면 "Closes #번호". -->
 
+배포 버전: <!-- VERSION에 적은 값, 예: 0.17.1 -->
+
 ## 확인한 것
 
 <!-- 실행한 명령과 결과, 직접 띄워 본 화면. 해당 없는 줄은 지웁니다. -->
@@ -19,3 +21,4 @@
 - [ ] 파티 패킷을 바꿨다면 `DUNGEON_PROTOCOL`과 `ORIGINAL_PROTOCOL`을 같은 값으로 올림
 - [ ] 서버 메시지를 바꿨다면 `server/PROTOCOL.md`를 고침
 - [ ] 게임 동작이나 조작이 바뀌었다면 `docs/inn.md`를 고침
+- [ ] `VERSION`을 올리고 `docs/changelog.md`에 적음

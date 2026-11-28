@@ -36,8 +36,11 @@ final class InnChannel {
 
     /** No close frame was received: the network failed or the handshake did not complete. */
     static final int ABNORMAL = 1006;
-    /** PROTOCOL.md §2: every 25 s (a system property shortens it for network tests). */
-    private static final long PING_SECONDS = Math.max(1, Long.getLong("noxac.inn.pingSeconds", 25));
+    /**
+     * PROTOCOL.md §2 asks for one at least every 25 s; every 5 s also measures the round trip shown by
+     * {@link BuildInfo}. A system property changes it for network tests.
+     */
+    private static final long PING_SECONDS = Math.max(1, Long.getLong("noxac.inn.pingSeconds", 5));
     /** A `ping` that is not followed by any frame within this time means the connection is dead. */
     private static final long PONG_TIMEOUT_SECONDS = 10;
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(8);
@@ -56,6 +59,8 @@ final class InnChannel {
     private volatile boolean ownerClosed;
     /** System.nanoTime() of the last fragment received; any frame, `pong` included, is a sign of life. */
     private volatile long lastHeard = System.nanoTime();
+    /** System.nanoTime() of the oldest `ping` not answered yet, or 0. */
+    private volatile long pingSentAt;
     private ScheduledFuture<?> pinger;
     private ScheduledFuture<?> pongCheck;
     private CompletableFuture<?> sends = CompletableFuture.completedFuture(null);
@@ -185,6 +190,7 @@ final class InnChannel {
     private void keepAlive() {
         long sentAt = System.nanoTime();
         if (!sendText("ping")) return;
+        if (pingSentAt == 0) pingSentAt = sentAt;
         try {
             ScheduledFuture<?> check = executor.schedule(() -> {
                 WebSocket current = socket;
@@ -258,7 +264,11 @@ final class InnChannel {
             if (last) {
                 String text = partial.toString();
                 partial.setLength(0);
-                if (!text.equals("pong")) {
+                if (text.equals("pong")) {
+                    long sentAt = pingSentAt;
+                    pingSentAt = 0;
+                    if (sentAt != 0) BuildInfo.reportLatency(System.nanoTime() - sentAt);
+                } else {
                     JsonObject frame = parse(text);
                     if (frame != null) deliver(() -> {
                         if (!ownerClosed) handler.frame(InnChannel.this, frame);

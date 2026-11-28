@@ -4,8 +4,9 @@
 //   ./gradlew -PwebOnly html:dist && node scripts/stage-web-client.mjs
 //   node scripts/stage-web-client.mjs --lobby-only      (lobby without the dungeon runtime, for local work)
 //
-// Layout (every versioned path is immutable; only the three entry files change between deploys):
+// Layout (every versioned path is immutable; only the entry files change between deploys):
 //   /play/index.html                                  lobby page, <base href> points at the client folder
+//   /play/version.json                                { version, revision } of this deploy (VERSION, Git commit)
 //   /play/client/<revision>-<signature>/...           lobby modules and art (web-client/play)
 //   /play/client/.../runtime-manifest.json            legacy mini-battle runtime (runtime-loader.mjs)
 //   /play/client/.../runtime/<version>/...
@@ -40,6 +41,9 @@ if (!revision) {
   } catch { /* checked below */ }
 }
 if (!/^[a-f0-9]{40}$/.test(revision ?? '')) throw new Error('Set COOP_CLIENT_REVISION to the client Git commit.');
+// The release version shown in the corner of the lobby and the Windows client (see AGENTS.md).
+const release = (await readFile(join(project, 'VERSION'), 'utf8')).trim();
+if (!/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(release)) throw new Error('VERSION must hold a version like 0.17.0.');
 
 const validPath = path => typeof path === 'string' && path.length <= 320 &&
   path.split('/').every(segment => /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,119}$/.test(segment));
@@ -124,12 +128,15 @@ await writeFile(join(staging, 'runtime-manifest.json'), JSON.stringify({
 }));
 const html = await readFile(join(staging, 'index.html'), 'utf8');
 if (!html.includes('<head>')) throw new Error('Missing web client document head.');
-const page = html.replace('<head>', `<head>\n  <base href="${base}">`);
+const page = html.replace('<head>', `<head>\n  <base href="${base}">\n` +
+  `  <meta name="coop-version" content="${release}">\n  <meta name="coop-revision" content="${revision}">`);
 await writeFile(join(staging, 'index.html'), page);
 await mkdir(join(play, 'client'), { recursive: true });
 await cp(staging, join(play, 'client', clientName), { recursive: true });
 await rm(staging, { recursive: true });
 await writeFile(join(play, 'index.html'), page);
+// The deployed release, read by the Windows client to show which deploy it is talking to.
+await writeFile(join(play, 'version.json'), JSON.stringify({ version: release, revision }));
 
 // ---- earlier deploys ----
 // play/generations.json lists the versioned folders of the last GENERATIONS deploys, newest first.

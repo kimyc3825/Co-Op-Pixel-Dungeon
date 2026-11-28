@@ -101,7 +101,8 @@ $env:NOXAC_INN_URL = 'http://127.0.0.1:8787'
 
 - **웹과 서버**: 풀 리퀘스트가 `main`에 합쳐지면 자동으로 배포됩니다. [Actions 기록](https://github.com/kimyc3825/Co-Op-Pixel-Dungeon/actions)에서 "Deploy to Cloudflare"가 성공했는지 확인합니다. 배포 도중 `main`에 새 커밋이 들어오면 앞선 실행은 배포를 건너뛰고 최신 실행만 배포합니다.
 - **새 버전이 배포된 뒤** 이미 열려 있던 브라우저 탭은 새로고침해야 새 화면과 그림을 받습니다.
-- **Windows 배포본**: `.\gradlew.bat -p inn-client packageWindows`로 만들고 GitHub Releases에 올립니다. `inn-client/build.gradle`의 `version`을 올리고, 프로토콜이 바뀐 배포에는 반드시 새 배포본을 냅니다.
+- **배포 버전**: 버전은 저장소 루트의 `VERSION` 파일 하나에만 적습니다(예: `0.17.0`). 웹 여관은 이 값과 커밋을 화면 왼쪽 아래에 보여 주고 `/play/version.json`에 적으며, Windows 클라이언트도 같은 값을 빌드 버전으로 씁니다. `main`에 합쳐지는 풀 리퀘스트는 모두 곧바로 배포되므로, 풀 리퀘스트마다 `VERSION`을 올리고 [changelog.md](changelog.md) 맨 위에 그 버전과 바뀐 내용을 적습니다. 화면만 고친 작은 수정은 마지막 자리, 기능 추가나 프로토콜 변경은 가운데 자리를 올립니다. 다른 풀 리퀘스트가 먼저 합쳐져 번호가 겹치면 합치기 전에 다음 번호로 다시 올립니다.
+- **Windows 배포본**: `.\gradlew.bat -p inn-client packageWindows`로 만들고 GitHub Releases에 올립니다. 프로토콜이 바뀐 배포에는 반드시 새 배포본을 냅니다.
 
 ## 비밀 값
 

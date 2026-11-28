@@ -14,6 +14,7 @@ import com.watabou.utils.PlatformSupport;
 
 final class NativeGame extends ShatteredPixelDungeon {
     private final InnApi api;
+    private final BuildInfo buildInfo = new BuildInfo();
 
     NativeGame(PlatformSupport platform, InnApi api) {
         super(platform, NativeInnScene.class);
@@ -25,7 +26,14 @@ final class NativeGame extends ShatteredPixelDungeon {
         if (platform instanceof DesktopPlatformSupport desktop) desktop.enableWindowImeOnTextInputOnly();
         super.create();
         NativeClient.start(api);
+        BuildInfo.fetchServer(api);
         if (!NativeClient.profileConfirmed()) switchNoFade(NativeAvatarScene.class);
+    }
+
+    @Override
+    protected void draw() {
+        super.draw();
+        buildInfo.draw(scene);
     }
 
     @Override

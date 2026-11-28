@@ -2,7 +2,7 @@
 import { BattleRules, PRISON } from './rules.mjs';
 import { Board, DIRECTIONS, canStep, canStrike, energyBand, nextToward } from './board.mjs';
 import { OriginalGame } from './original.mjs';
-import { PlaySession } from './session.mjs';
+import { PlaySession, onLatency } from './session.mjs';
 import { AvatarCatalog, normalizeAppearance } from './avatar-catalog.mjs';
 import { drawAvatar, getAvatar } from './avatar.mjs';
 import { loadBattleRuntime } from './runtime-loader.mjs';
@@ -23,6 +23,26 @@ const fields = Object.fromEntries([
   'original-launch', 'expedition-window', 'expedition-toggle', 'backpack-window', 'backpack-toggle', 'inn-backpack-toggle', 'chat-toggle', 'hud-scrim',
   'prepare-expedition', 'preparation-result', 'settings-dialog',
 ].map((id) => [id, byId(id)]));
+
+// Corner label: the deployed release and commit (written into the page by stage-web-client.mjs)
+// and the latest round trip to the server. A page served without staging shows only the ping.
+{
+  const label = byId('build-info');
+  const meta = (name) => document.querySelector(`meta[name="${name}"]`)?.content ?? '';
+  const version = meta('coop-version');
+  const revision = meta('coop-revision').slice(0, 7);
+  const build = [version && `v${version}`, revision].filter(Boolean).join(' · ');
+  let latency = null;
+  let measuredAt = 0;
+  const render = () => {
+    // A measurement older than three ping intervals means no socket is answering.
+    const fresh = latency !== null && performance.now() - measuredAt < 16000;
+    label.textContent = [build, `핑 ${fresh ? `${Math.round(latency)}ms` : '—'}`].filter(Boolean).join(' · ');
+  };
+  onLatency((ms) => { latency = ms; measuredAt = performance.now(); render(); });
+  setInterval(render, 4000);
+  render();
+}
 
 const trainingHint = document.createElement('p');
 trainingHint.className = 'party-rules';
