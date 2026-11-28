@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import * as testing from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { enter, layoutId, openLink } from './helpers';
+import { innName } from '../src/placement';
 
 // Evicting tears the instance down and hibernates its sockets, as an idle object would be.
 const evict = (stub: unknown) => (testing as Record<string, any>).evictDurableObject(stub) as Promise<void>;
@@ -15,7 +16,7 @@ describe('hibernation', () => {
     await a.client.next('person');
     await b.client.request({ t: 'queue' });
     await a.client.next(f => f.t === 'person' && f.person.queued);
-    await evict(env.INN.get(env.INN.idFromName(`${layout}:0`)));
+    await evict(env.INN.get(env.INN.idFromName(innName(layout, 0))));
 
     expect(await a.client.request({ t: 'move', x: 6, y: 5 })).toMatchObject({ t: 'ok' });
     expect(await b.client.next('moved')).toEqual({ t: 'moved', id: a.id, x: 6, y: 5 });
