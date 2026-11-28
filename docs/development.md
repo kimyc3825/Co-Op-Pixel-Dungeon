@@ -42,7 +42,7 @@ Gradle 명령은 저장소 루트에서 `-p inn-client`를 붙여 실행합니�
 
 저장소 소유자에게는 GitHub의 Settings → Branches에서 `main`에 "Require a pull request before merging"을 켜 두기를 권합니다. 현재는 풀 리퀘스트에서 자동으로 도는 테스트가 없으므로, 아래 검증은 작성자가 직접 실행하고 결과를 풀 리퀘스트에 적습니다.
 
-이슈나 풀 리퀘스트 댓글에 `@claude`를 쓰면 GitHub Actions에서 Claude Code가 실행되어 답하거나, 리뷰하거나, `claude/<주제>` 브랜치에 커밋합니다(`.github/workflows/claude.yml`). 저장소에 쓰기 권한이 있는 사람이 부를 때만 동작하고, 이 경우에도 합치는 것은 사람이 합니다.
+이슈나 풀 리퀘스트 댓글·리뷰에 `@claude`를 쓰면 GitHub Actions에서 Claude Code가 실행되어 답하거나, 리뷰하거나, `claude/<주제>` 브랜치에 커밋합니다(`.github/workflows/claude.yml`). 저장소에 쓰기 권한이 있는 사람이 부를 때만 동작하고, 포크에서 온 풀 리퀘스트는 건너뜁니다(`allow_fork_prs: "false"`). 같은 이슈·풀 리퀘스트에서는 한 번에 하나만 실행되며, 이 경우에도 합치는 것은 사람이 합니다. `ANTHROPIC_API_KEY`와 `CLAUDE_CODE_OAUTH_TOKEN` 중 하나만 저장소 Secrets에 등록합니다(둘 다 비어 있으면 워크플로가 먼저 실패합니다).
 
 ### 커밋 메시지
 

@@ -14,7 +14,7 @@ on:
   pull_request_review:
     types: [submitted]
   issues:
-    types: [opened, assigned]
+    types: [opened]
 
 jobs:
   claude:
@@ -27,6 +27,10 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # One run per issue/PR; parallel runs would race on the same branch.
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -34,10 +38,23 @@ jobs:
       id-token: write
       actions: read # 풀 리퀘스트의 CI 결과를 읽기 위해
     steps:
+      - name: Check Claude credentials
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [[ -z "$ANTHROPIC_API_KEY" && -z "$CLAUDE_CODE_OAUTH_TOKEN" ]]; then
+            echo "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in repository secrets." >&2
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 1
       - uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1.0.290
         with:
+          # The action skips fork PRs by default; keep that explicit on this public repository.
+          allow_fork_prs: "false"
+          # On PRs from authors without write access, refuse commands that run their code.
+          restrict_untrusted_prs: "true"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
