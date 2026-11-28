@@ -42,6 +42,8 @@ Gradle 명령은 저장소 루트에서 `-p inn-client`를 붙여 실행합니�
 
 저장소 소유자에게는 GitHub의 Settings → Branches에서 `main`에 "Require a pull request before merging"을 켜 두기를 권합니다. 현재는 풀 리퀘스트에서 자동으로 도는 테스트가 없으므로, 아래 검증은 작성자가 직접 실행하고 결과를 풀 리퀘스트에 적습니다.
 
+이슈나 풀 리퀘스트 댓글에 `@claude`를 쓰면 GitHub Actions에서 Claude Code가 실행되어 답하거나, 리뷰하거나, `claude/<주제>` 브랜치에 커밋합니다(`.github/workflows/claude.yml`). 저장소에 쓰기 권한이 있는 사람이 부를 때만 동작하고, 이 경우에도 합치는 것은 사람이 합니다.
+
 ### 커밋 메시지
 
 기존 이력처럼 영어 명령문으로 짧게 씁니다. 첫 줄은 무엇을 바꿨는지(70자 안쪽), 필요하면 빈 줄 뒤에 이유를 씁니다. 예: `Stop dungeon music when returning to the inn`. 문서와 게임 안 문구는 한국어로 씁니다.
@@ -106,6 +108,7 @@ $env:NOXAC_INN_URL = 'http://127.0.0.1:8787'
 ## 비밀 값
 
 - Cloudflare API 토큰과 계정 ID는 GitHub 저장소의 Settings → Secrets and variables → Actions(`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`)에만 둡니다. 코드, 문서, 이슈, 풀 리퀘스트, 채팅에 붙여 넣지 않습니다. 노출되었다면 Cloudflare에서 폐기하고 새로 발급합니다.
+- Claude GitHub 액션(`.github/workflows/claude.yml`)의 인증 값은 같은 곳에 `ANTHROPIC_API_KEY` 또는 `CLAUDE_CODE_OAUTH_TOKEN`으로 둡니다.
 - `server/.dev.vars`, `local.properties` 같은 로컬 설정 파일은 커밋하지 않습니다(이미 `.gitignore`에 있습니다).
 
 ## 원본 업데이트
