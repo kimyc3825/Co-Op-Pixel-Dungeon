@@ -58,6 +58,12 @@ import java.util.Set;
 
 /** Guest view of the host's original dungeon, using the original tiles, camera and sprites. */
 public final class InnPartyScene extends PixelScene {
+    /**
+     * Steps the guest may send ahead of the host's answers while exploring. Each is shown at once; the host
+     * confirms or corrects them in order. With an enemy in view only one step is in flight, so the guest can
+     * react to the fight turn by turn.
+     */
+    private static final int STEPS_AHEAD = 3;
     private final Map<Integer, ActorView> actors = new HashMap<>();
     private final Map<Integer, ItemSprite> drops = new HashMap<>();
     private final Set<GameAction> movement = new HashSet<>();
@@ -211,7 +217,7 @@ public final class InnPartyScene extends PixelScene {
         party.updateGuest(Game.elapsed);
         updateTurnIndicator(state);
         repeatIn -= Game.elapsed;
-        if (repeatIn <= 0 && !party.awaitingAction() && !showingMenu()) moveHeld();
+        if (repeatIn <= 0 && party.inFlight() < stepsAhead() && !showingMenu()) moveHeld();
     }
 
     private void apply(InnOriginalParty.Snapshot state) {
@@ -528,6 +534,14 @@ public final class InnPartyScene extends PixelScene {
         turnIndicator.show(state.turn == TurnClock.WAIT_GUEST, graceShown);
     }
 
+    /** How many steps may be in flight: several while exploring, one with a living enemy in view. */
+    private int stepsAhead() {
+        for (ActorView view : actors.values()) {
+            if (view.kind == 2 && view.actor.isAlive()) return 1;
+        }
+        return STEPS_AHEAD;
+    }
+
     private void attackSelected() {
         if (attackTarget != null && !showingMenu()) party.command("A", attackTarget, 0);
     }
@@ -570,14 +584,15 @@ public final class InnPartyScene extends PixelScene {
         InnOriginalParty.Snapshot state = party.latest();
         Level level = Dungeon.level;
         // While the world waits for the host player the step is queued, so wait for the host's answer instead.
-        if (self == null || state == null || !self.actor.isAlive() || self.sprite.isMoving
-                || state.turn == TurnClock.WAIT_HOST) return;
+        if (self == null || state == null || !self.actor.isAlive() || state.turn == TurnClock.WAIT_HOST) return;
         int from = self.actor.pos;
         int cell = from + dx + dy * level.width();
         if (!level.insideMap(cell) || !level.adjacent(from, cell) || !level.passable[cell] || level.pit[cell]) return;
         for (ActorView other : actors.values()) {
             if (other != self && other.actor.pos == cell && other.actor.HP > 0) return;
         }
+        // A step sent while the previous one is still animating finishes that one at once.
+        if (self.sprite.isMoving) self.sprite.interruptMotion();
         self.sprite.move(from, cell);
         self.actor.pos = cell;
         predictedSequence = sequence;

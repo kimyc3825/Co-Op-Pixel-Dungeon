@@ -190,7 +190,38 @@ public class InnPartyProtocolTest {
 	}
 
 	@Test
-	public void hostAcceptsOnlyNewerCommandsForTheCurrentFloor() throws Exception {
+	public void guestSendsSeveralCommandsWithoutWaiting() {
+		InnOriginalParty.configure(false, "host", "WARRIOR", "a", "b", "c", "d", 1L, false, sent::add);
+		InnOriginalParty link = InnOriginalParty.current();
+		InnOriginalParty.receive(String.join("|", snapshot(7, "0")));
+		assertEquals(1, link.command("M", 1, 0));
+		assertEquals(2, link.command("M", 1, 0));
+		assertEquals(3, link.command("M", 0, 1));
+		assertEquals(Arrays.asList("C|2|1|M|1|0", "C|2|2|M|1|0", "C|2|3|M|0|1"), sent);
+		assertEquals(3, link.inFlight());
+		assertTrue(link.awaitingAction());
+
+		// The host answered the first two: one left, and only it is resent.
+		InnOriginalParty.receive(String.join("|", snapshot(1, "8")).replace("|2|3|0|3|3|5|", "|2|3|0|3|3|2|"));
+		assertEquals(1, link.inFlight());
+		sent.clear();
+		for (int i = 0; i < 70; i++) link.updateGuest(0.016f);
+		assertEquals(Arrays.asList("C|2|3|M|0|1"), sent);
+
+		// All answered.
+		InnOriginalParty.receive(String.join("|", snapshot(1, "9")).replace("|2|3|0|3|3|5|", "|2|3|0|3|3|3|"));
+		assertEquals(0, link.inFlight());
+		assertFalse(link.awaitingAction());
+	}
+
+	private static int queued(InnOriginalParty link) throws Exception {
+		Field inbound = InnOriginalParty.class.getDeclaredField("inbound");
+		inbound.setAccessible(true);
+		return ((java.util.Collection<?>) inbound.get(link)).size();
+	}
+
+	@Test
+	public void hostQueuesCommandsInOrderForTheCurrentFloor() throws Exception {
 		InnOriginalParty.configure(true, "guest", "MAGE", "a", "b", "c", "d", 1L, false, sent::add);
 		InnOriginalParty link = InnOriginalParty.current();
 		Field floor = InnOriginalParty.class.getDeclaredField("floor");
@@ -201,23 +232,27 @@ public class InnPartyProtocolTest {
 		assertFalse("a command for an old floor was accepted", link.hasPendingCommand());
 		InnOriginalParty.receive("C|3|5|M|1|0");
 		assertTrue(link.hasPendingCommand());
+		InnOriginalParty.receive("C|3|6|M|1|0");
+		InnOriginalParty.receive("C|3|7|W|0|0");
+		assertEquals("in-flight commands were not all queued", 3, queued(link));
+		InnOriginalParty.receive("C|3|6|M|1|0");
 		InnOriginalParty.receive("C|3|4|W|0|0");
-		Field inbound = InnOriginalParty.class.getDeclaredField("inbound");
-		inbound.setAccessible(true);
-		Object command = inbound.get(link);
-		Field seq = command.getClass().getDeclaredField("seq");
-		seq.setAccessible(true);
-		assertEquals("an older sequence replaced a newer one", 5, seq.getInt(command));
-		InnOriginalParty.receive("C|3|6|M|5|0");
-		assertEquals("an invalid command was accepted", 5, seq.getInt(inbound.get(link)));
-		InnOriginalParty.receive("C|3|7|W|0|0|extra");
-		assertEquals(5, seq.getInt(inbound.get(link)));
+		assertEquals("a resent or older command was queued again", 3, queued(link));
+		InnOriginalParty.receive("C|3|8|M|5|0");
+		InnOriginalParty.receive("C|3|9|W|0|0|extra");
+		assertEquals("an invalid command was queued", 3, queued(link));
+
+		// A full queue takes nothing more until the member catches up.
+		for (int seq = 10; seq < 10 + InnOriginalParty.MAX_QUEUED; seq++) InnOriginalParty.receive("C|3|" + seq + "|W|0|0");
+		assertEquals(InnOriginalParty.MAX_QUEUED, queued(link));
+
 		link.dropPending();
 		assertFalse(link.hasPendingCommand());
-		InnOriginalParty.receive("C|3|5|M|1|0");
+		assertEquals(0, queued(link));
+		InnOriginalParty.receive("C|3|6|M|1|0");
 		assertFalse("an acknowledged sequence was accepted again", link.hasPendingCommand());
 		InnOriginalParty.close();
-		InnOriginalParty.receive("C|3|9|W|0|0");
+		InnOriginalParty.receive("C|3|99|W|0|0");
 		assertFalse(link.hasPendingCommand());
 	}
 }

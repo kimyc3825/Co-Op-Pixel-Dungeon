@@ -141,6 +141,19 @@ public class InnPartyGearTest {
 	}
 
 	@Test
+	public void queuedStepsAreCarriedOutInOrder() throws Exception {
+		newParty(15, 15, cell(3, 3), cell(5, 3));
+		frames(3, FRAME);
+		guest("M", 1, 0);
+		guest("M", 1, 0);
+		guest("M", 0, 1);
+		int last = seq;
+		for (int i = 0; i < 200 && ack() < last; i++) frame(FRAME);
+		assertEquals(state(), last, ack());
+		assertEquals("the queued steps were not all taken", cell(7, 4), member.pos);
+	}
+
+	@Test
 	public void companionHealthFollowsTheHostLevel() throws Exception {
 		newParty(15, 15, cell(3, 3), cell(5, 3));
 		frames(3, FRAME);

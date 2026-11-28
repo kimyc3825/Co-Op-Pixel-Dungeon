@@ -17,6 +17,7 @@ import com.shatteredpixel.shatteredpixeldungeon.sprites.ItemSpriteSheet;
 import com.watabou.noosa.Game;
 import com.watabou.utils.PathFinder;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -30,6 +31,8 @@ import java.util.function.Consumer;
  * E (equip bag index), R (unequip slot {@link InnPartyMember#SLOT_WEAPON} or {@link InnPartyMember#SLOT_ARMOR}),
  * U (use bag index; second is the upgrade target for a scroll of upgrade, else 0), H (throw bag index at cell),
  * D (drop bag index), G (give bag index to the host).
+ * The guest may have several commands in flight; the host queues them and carries them out one per companion turn
+ * in sequence order, acknowledging each (ack is the last sequence carried out or dropped).
  * Host snapshot: {@code S|revision|floor|depth|branch|width|height|ack|turn|player|tiles|actors|loot|result
  * |texture|grace|gear|hud}, where turn says whose input the world is waiting for with a countdown
  * ({@link TurnClock#WAIT_NONE}, {@link TurnClock#WAIT_HOST}, {@link TurnClock#WAIT_GUEST}), grace is the
@@ -45,8 +48,15 @@ public final class InnOriginalParty {
     private static final float MIN_SNAPSHOT_INTERVAL = 0.1f;
     /** Snapshot heartbeat while nothing changes; it also corrects the guest's local countdown. */
     private static final float HEARTBEAT_INTERVAL = 1f;
-    /** The transport is reliable and ordered; the guest only resends a pending command as a safety net. */
+    /** The transport is reliable and ordered; the guest only resends pending commands as a safety net. */
     private static final float RETRANSMIT_INTERVAL = 1f;
+    /**
+     * Answers to guest commands may go out this soon after the previous snapshot. Together with the regular
+     * snapshots this stays at most 20 packets a second, under the party link's 25 a second.
+     */
+    private static final float MIN_ANSWER_INTERVAL = 0.05f;
+    /** Commands the host keeps queued; a well-behaved guest never has more than a few in flight. */
+    static final int MAX_QUEUED = 8;
     static final int MAX_DEPTH = 30;
     static final int MAX_BRANCH = 9;
     static final int MAX_FLOOR = 100000;
@@ -67,7 +77,9 @@ public final class InnOriginalParty {
     public final boolean friendlyFire;
     public final InnAdventure.Profile peer;
     private final Consumer<String> send;
-    private volatile Command inbound;
+    /** Host: queued guest commands of the current floor, in sequence order. Guarded by this. */
+    private final ArrayDeque<Command> inbound = new ArrayDeque<>();
+    private int lastQueued;
     private volatile Snapshot incoming;
     private volatile boolean closed;
     private boolean finished;
@@ -86,7 +98,8 @@ public final class InnOriginalParty {
     private volatile boolean answerNow = true;
     private String lastBody;
     private int nextSequence;
-    private Command pending;
+    /** Guest: commands sent and not acknowledged yet, oldest first. */
+    private final ArrayDeque<Command> pending = new ArrayDeque<>();
 
     private InnOriginalParty(boolean host, InnAdventure.Profile peer, long seed,
                              boolean friendlyFire, Consumer<String> send) {
@@ -137,9 +150,10 @@ public final class InnOriginalParty {
 
     private synchronized void acceptCommand(int floor, int seq, String kind, int first, int second) {
         if (floor != this.floor || seq <= 0 || !validCommand(kind, first, second)) return;
-        if (inbound == null || inbound.floor != floor || seq > inbound.seq) {
-            inbound = new Command(floor, seq, kind, first, second);
-        }
+        // Resends of queued or answered commands are ignored; so is anything past a full queue.
+        if (seq <= Math.max(ack, lastQueued) || inbound.size() >= MAX_QUEUED) return;
+        inbound.addLast(new Command(floor, seq, kind, first, second));
+        lastQueued = seq;
     }
 
     static boolean validCommand(String kind, int first, int second) {
@@ -165,7 +179,10 @@ public final class InnOriginalParty {
     public static void enterFloor(Level level, int entrance) {
         InnOriginalParty link = current;
         if (link == null || !link.host) return;
-        link.floor++;
+        synchronized (link) {
+            link.floor++;
+            link.inbound.clear();
+        }
         link.level = level;
         link.visible = new boolean[level.length()];
         link.explored = new boolean[level.length()];
@@ -227,19 +244,32 @@ public final class InnOriginalParty {
     }
 
     /** True while the guest has sent a command the member has not consumed yet. */
-    public boolean hasPendingCommand() {
-        Command command = inbound;
-        return acceptsCommands() && command != null && command.floor == floor && command.seq > ack;
+    public synchronized boolean hasPendingCommand() {
+        return acceptsCommands() && nextCommand() != null;
+    }
+
+    /** The oldest queued command of the current floor, dropping stale ones; null if there is none. */
+    private Command nextCommand() {
+        while (!inbound.isEmpty()) {
+            Command command = inbound.peekFirst();
+            if (command.floor == floor && command.seq > ack) return command;
+            inbound.pollFirst();
+        }
+        return null;
     }
 
     /**
-     * Consumes the guest's pending command on the actor thread. Returns false if there was none; a rejected
+     * Consumes the guest's oldest queued command on the actor thread. Returns false if there was none; a rejected
      * command is still acknowledged so the guest stops resending it.
      */
     public boolean act(InnPartyMember player) {
-        Command command = inbound;
-        if (!acceptsCommands() || command == null || command.floor != floor || command.seq <= ack) return false;
-        ack = command.seq;
+        Command command;
+        synchronized (this) {
+            command = acceptsCommands() ? nextCommand() : null;
+            if (command == null) return false;
+            inbound.pollFirst();
+            ack = command.seq;
+        }
         // Answer the guest at the next opportunity so its following step is not held up.
         answerNow = true;
         if (command.kind.equals("T") && (!level.insideMap(command.first)
@@ -250,25 +280,31 @@ public final class InnOriginalParty {
         return true;
     }
 
-    /** Acknowledges and drops a pending command the member cannot carry out (e.g. while paralysed). */
-    public void dropPending() {
-        Command command = inbound;
-        if (command != null && command.floor == floor && command.seq > ack) {
-            ack = command.seq;
+    /**
+     * Acknowledges and drops the queued commands the member cannot carry out (e.g. while paralysed), so held
+     * movement does not replay once it can move again.
+     */
+    public synchronized void dropPending() {
+        Command last = null;
+        for (Command command; (command = nextCommand()) != null; inbound.pollFirst()) last = command;
+        if (last != null) {
+            ack = last.seq;
             answerNow = true;
         }
     }
 
     /**
      * Host, render thread: sends a snapshot while the actor thread is idle, when its content changed, after a
-     * guest command was answered, or as a heartbeat; never more often than {@link #MIN_SNAPSHOT_INTERVAL}.
+     * guest command was answered, or as a heartbeat; never more often than {@link #MIN_SNAPSHOT_INTERVAL}, or
+     * {@link #MIN_ANSWER_INTERVAL} for an answer.
      * The remaining grace is not content: the guest counts it down locally between snapshots.
      */
     public void updateHost(float elapsed) {
         if (member == null || level != Dungeon.level) return;
         sinceSent += elapsed;
         sinceChecked += elapsed;
-        if (sinceSent < MIN_SNAPSHOT_INTERVAL || closed || level.length() > MAX_CELLS || !Actor.parked()) return;
+        if (sinceSent < (answerNow ? MIN_ANSWER_INTERVAL : MIN_SNAPSHOT_INTERVAL) || closed
+                || level.length() > MAX_CELLS || !Actor.parked()) return;
         boolean due = answerNow || sinceSent >= HEARTBEAT_INTERVAL;
         // Content is compared at most every MIN_SNAPSHOT_INTERVAL, not on every frame.
         if (!due && sinceChecked < MIN_SNAPSHOT_INTERVAL) return;
@@ -288,38 +324,52 @@ public final class InnOriginalParty {
 
     public boolean[] explored() { return explored; }
 
-    /** Returns the sequence of the command sent to the host, or 0 when none was sent. */
+    /**
+     * Sends a command to the host without waiting for earlier ones to be answered. Returns its sequence, or 0
+     * when none was sent.
+     */
     public int command(String kind, int first, int second) {
         Snapshot state = incoming;
         if (state == null || closed || !state.result.equals("play")) return 0;
-        pending = new Command(state.floor, ++nextSequence, kind, first, second);
-        sendGuest(state);
-        return pending.seq;
+        prunePending(state);
+        Command command = new Command(state.floor, ++nextSequence, kind, first, second);
+        if (pending.isEmpty()) sendIn = RETRANSMIT_INTERVAL;
+        pending.addLast(command);
+        send.accept(command.encode());
+        return command.seq;
     }
 
-    private void sendGuest(Snapshot state) {
-        if (pending == null || pending.floor != state.floor) return;
-        send.accept(pending.encode());
-        sendIn = RETRANSMIT_INTERVAL;
+    private void prunePending(Snapshot state) {
+        while (!pending.isEmpty() && (pending.peekFirst().floor != state.floor || pending.peekFirst().seq <= state.ack)) {
+            pending.pollFirst();
+            sendIn = RETRANSMIT_INTERVAL;
+        }
     }
 
-    /** Guest: resends the pending command until the host acknowledges it. */
+    /** Guest: resends the unanswered commands, in order, until the host acknowledges them. */
     public void updateGuest(float elapsed) {
         Snapshot state = incoming;
         if (state == null || closed) return;
-        if (pending != null && (pending.floor != state.floor || pending.seq <= state.ack)) {
-            pending = null;
-        }
-        if (pending == null) return;
+        prunePending(state);
+        if (pending.isEmpty()) return;
         sendIn -= elapsed;
         if (sendIn <= 0) {
-            sendGuest(state);
+            for (Command command : pending) send.accept(command.encode());
+            sendIn = RETRANSMIT_INTERVAL;
         }
     }
 
-    public boolean awaitingAction() {
+    /** Guest: commands sent for the current floor that the host has not answered yet. */
+    public int inFlight() {
         Snapshot state = incoming;
-        return pending != null && state != null && pending.floor == state.floor && pending.seq > state.ack;
+        if (state == null) return 0;
+        int count = 0;
+        for (Command command : pending) if (command.floor == state.floor && command.seq > state.ack) count++;
+        return count;
+    }
+
+    public boolean awaitingAction() {
+        return inFlight() > 0;
     }
 
     private static int graceTenths() {
