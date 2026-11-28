@@ -10,6 +10,8 @@ import com.google.gson.JsonPrimitive;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -173,6 +175,33 @@ final class InnApi {
             .collect(Collectors.joining("&"));
         return URI.create(scheme + "://" + host() + path + (parameters.isEmpty() ? "" : "?" + parameters));
     }
+
+    /**
+     * The release and commit of the deployed site, from the {@code /play/version.json} that
+     * scripts/stage-web-client.mjs writes, as "v0.17.0 (abc1234)"; null when it cannot be read.
+     */
+    String deployedVersion() {
+        if (!configured()) return null;
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(origin.getScheme() + "://" + host() + "/play/version.json"))
+                .timeout(Duration.ofSeconds(8)).GET().build();
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() != 200) return null;
+            JsonObject body = gson.fromJson(response.body(), JsonObject.class);
+            String version = body != null && body.get("version") instanceof JsonPrimitive v && v.isString() ? v.getAsString() : "";
+            String revision = body != null && body.get("revision") instanceof JsonPrimitive r && r.isString() ? r.getAsString() : "";
+            if (!RELEASE.matcher(version).matches() || !REVISION.matcher(revision).matches()) return null;
+            return "v" + version + " (" + revision.substring(0, 7) + ")";
+        } catch (java.io.IOException | JsonParseException | IllegalArgumentException error) {
+            return null;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    private static final Pattern RELEASE = Pattern.compile("\\d{1,4}\\.\\d{1,4}\\.\\d{1,4}");
+    private static final Pattern REVISION = Pattern.compile("[0-9a-f]{40}");
 
     InnChannel open(String path, Map<String, String> query, ScheduledExecutorService executor, InnChannel.Handler handler) {
         return InnChannel.open(http, socketUri(path, query), executor, handler);
