@@ -39,6 +39,7 @@ jobs:
       actions: read # 풀 리퀘스트의 CI 결과를 읽기 위해
     steps:
       - name: Check Claude credentials
+        if: (github.event_name != 'pull_request_review' && github.event_name != 'pull_request_review_comment') || github.event.pull_request.head.repo.full_name == github.repository
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
