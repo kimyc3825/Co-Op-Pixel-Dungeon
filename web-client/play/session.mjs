@@ -67,6 +67,10 @@ class Channel {
   constructor(url, { onOpen, onFrame, onClose }) {
     this.refs = new Map();
     this.nextRef = 0;
+    // Sent ping times, oldest first. The server answers every ping in order, so each pong takes
+    // the oldest one; keeping them (rather than one shared timestamp) stops a lost pong from
+    // inflating the next measurement by a whole interval.
+    this.pings = [];
     this.ws = new WebSocket(url);
     // A handshake that hangs would otherwise never report a close.
     const connectTimer = setTimeout(() => { if (this.ws.readyState === WebSocket.CONNECTING) this.ws.close(); }, CONNECT_TIMEOUT_MS);
@@ -75,14 +79,15 @@ class Channel {
       // The server answers the literal `ping` without waking its Durable Object. The time to its
       // `pong` is the round trip to the server, shown in the corner of the page.
       this.pinger = setInterval(() => {
-        if (this.sendText('ping')) this.pingSentAt ??= performance.now();
+        const sentAt = performance.now();
+        if (this.sendText('ping')) this.pings.push(sentAt);
       }, PING_MS);
       onOpen();
     });
     this.ws.addEventListener('message', event => {
       if (event.data === 'pong') {
-        if (this.pingSentAt != null) reportLatency(performance.now() - this.pingSentAt);
-        this.pingSentAt = null;
+        const sentAt = this.pings.shift();
+        if (sentAt != null) reportLatency(performance.now() - sentAt);
         return;
       }
       if (typeof event.data !== 'string') return;
@@ -102,6 +107,7 @@ class Channel {
     this.ws.addEventListener('close', event => {
       clearTimeout(connectTimer);
       clearInterval(this.pinger);
+      this.pings.length = 0;
       for (const pending of this.refs.values()) {
         clearTimeout(pending.timer);
         pending.reject(new ApiError('offline'));

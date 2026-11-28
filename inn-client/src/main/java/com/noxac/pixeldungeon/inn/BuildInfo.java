@@ -17,8 +17,9 @@ final class BuildInfo {
     /** Three ping intervals without an answer: no socket is measuring. */
     private static final long STALE_NANOS = TimeUnit.SECONDS.toNanos(16);
     private static final String CLIENT = readClientVersion();
-    private static volatile long latencyNanos;
-    private static volatile long measuredAt;
+    private record Measurement(long nanos, long at) {}
+    /** Both values in one object so the render thread cannot pair a new latency with an old time. */
+    private static volatile Measurement measurement;
     private static volatile String server;
 
     private RenderedTextBlock label;
@@ -27,8 +28,7 @@ final class BuildInfo {
 
     /** Called by {@link InnChannel} with the time from a `ping` to its `pong`, on any socket. */
     static void reportLatency(long nanos) {
-        latencyNanos = nanos;
-        measuredAt = System.nanoTime();
+        measurement = new Measurement(nanos, System.nanoTime());
     }
 
     /** Asks the server for its deploy once, off the render thread. */
@@ -42,9 +42,9 @@ final class BuildInfo {
         StringBuilder text = new StringBuilder("v").append(CLIENT);
         String deployed = server;
         if (deployed != null) text.append(" · 서버 ").append(deployed);
-        long at = measuredAt;
-        boolean fresh = at != 0 && System.nanoTime() - at < STALE_NANOS;
-        text.append(" · 핑 ").append(fresh ? TimeUnit.NANOSECONDS.toMillis(latencyNanos) + "ms" : "—");
+        Measurement current = measurement;
+        boolean fresh = current != null && System.nanoTime() - current.at() < STALE_NANOS;
+        text.append(" · 핑 ").append(fresh ? TimeUnit.NANOSECONDS.toMillis(current.nanos()) + "ms" : "—");
         return text.toString();
     }
 

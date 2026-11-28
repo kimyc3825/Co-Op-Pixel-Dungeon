@@ -12,6 +12,7 @@ import java.net.http.WebSocket;
 import java.net.http.WebSocketHandshakeException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -59,8 +60,8 @@ final class InnChannel {
     private volatile boolean ownerClosed;
     /** System.nanoTime() of the last fragment received; any frame, `pong` included, is a sign of life. */
     private volatile long lastHeard = System.nanoTime();
-    /** System.nanoTime() of the oldest `ping` not answered yet, or 0. */
-    private volatile long pingSentAt;
+    /** System.nanoTime() of each `ping` not answered yet, oldest first; see {@link #keepAlive()}. */
+    private final ArrayDeque<Long> pings = new ArrayDeque<>();
     private ScheduledFuture<?> pinger;
     private ScheduledFuture<?> pongCheck;
     private CompletableFuture<?> sends = CompletableFuture.completedFuture(null);
@@ -181,6 +182,9 @@ final class InnChannel {
         if (current != null) current.cancel(false);
         ScheduledFuture<?> check = pongCheck;
         if (check != null) check.cancel(false);
+        synchronized (pings) {
+            pings.clear();
+        }
     }
 
     /**
@@ -189,8 +193,17 @@ final class InnChannel {
      */
     private void keepAlive() {
         long sentAt = System.nanoTime();
-        if (!sendText("ping")) return;
-        if (pingSentAt == 0) pingSentAt = sentAt;
+        // Record it before sending: the pong can arrive on the listener thread before sendText returns.
+        // The server answers every ping in order, so the oldest entry belongs to the next pong.
+        synchronized (pings) {
+            pings.addLast(sentAt);
+        }
+        if (!sendText("ping")) {
+            synchronized (pings) {
+                pings.pollLast();
+            }
+            return;
+        }
         try {
             ScheduledFuture<?> check = executor.schedule(() -> {
                 WebSocket current = socket;
@@ -265,9 +278,11 @@ final class InnChannel {
                 String text = partial.toString();
                 partial.setLength(0);
                 if (text.equals("pong")) {
-                    long sentAt = pingSentAt;
-                    pingSentAt = 0;
-                    if (sentAt != 0) BuildInfo.reportLatency(System.nanoTime() - sentAt);
+                    Long sentAt;
+                    synchronized (pings) {
+                        sentAt = pings.pollFirst();
+                    }
+                    if (sentAt != null) BuildInfo.reportLatency(System.nanoTime() - sentAt);
                 } else {
                     JsonObject frame = parse(text);
                     if (frame != null) deliver(() -> {
