@@ -40,5 +40,6 @@ Shattered Pixel Dungeon 4.0.2에서 분기한 웹·Windows 2인 협동 던전입
 
 - 커밋 메시지는 영어 명령문 한 줄(70자 안쪽), 필요하면 빈 줄 뒤에 이유. 예: `Stop dungeon music when returning to the inn`.
 - 문서와 게임 안 문구는 한국어로 씁니다.
+- 풀 리퀘스트와 이슈는 제목, 본문, 댓글 모두 반드시 한국어로 씁니다. 코드, 명령, 파일 이름, 오류 메시지 같은 원문만 그대로 둡니다.
 - 풀 리퀘스트 본문은 템플릿(`docs/PULL_REQUEST_TEMPLATE.md`)을 채웁니다. 합칠 때는 Squash and merge를 씁니다.
 - 작업 도구가 남기는 체크포인트 커밋("WIP: checkpoint…")은 그대로 두어도 되지만, 합칠 때 하나로 합쳐지도록 Squash and merge로만 합칩니다.
