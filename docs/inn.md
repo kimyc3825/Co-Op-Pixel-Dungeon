@@ -10,6 +10,8 @@
 - **원본 1인 저장**에서는 기존 턴제 저장을 엽니다. 원정에서 철수하면 현재 원정이 끝나고, 다음 원정은 1층에서 시작합니다.
 - 여관에서는 나무 팻말을 눌러 모집 중인 상대에게 바로 참가할 수 있습니다. **Enter**로 채팅을 열고, 마우스 휠로 확대·축소합니다.
 
+화면 왼쪽 아래 구석에는 버전과 서버까지의 핑이 늘 표시됩니다. 웹은 `v0.17.0 · abc1234 · 핑 154ms`처럼 배포된 버전과 커밋을, Windows는 `v0.17.0 · 서버 v0.17.0 (abc1234) · 핑 154ms`처럼 클라이언트 버전과 접속한 서버의 배포를 함께 보여 줍니다. 핑은 지금 열려 있는 WebSocket으로 5초마다 잰 서버 왕복 시간입니다. 파티원끼리의 데이터는 서버를 거치므로 실제 파티 지연은 두 사람의 핑을 더한 값에 가깝습니다. 16초 동안 응답이 없으면 `핑 —`로 바뀝니다.
+
 브라우저는 여관에 입장하면 원본 게임과 시작 에셋을 미리 받습니다. 원정에 입장할 때 같은 버전의 다운로드를 이어 쓰고, 캐시된 에셋을 재사용합니다.
 
 ## 입장 프로필과 외관 추가
@@ -89,7 +91,7 @@ Windows x64에서 JDK 21을 지정한 뒤 저장소 루트에서 실행한다.
 .\gradlew.bat -p inn-client packageWindows
 ```
 
-출력은 `inn-client/build/jpackage/0.16.10/NoxacPixelDungeon/NoxacPixelDungeon.exe`입니다. 실행 폴더에 Java와 게임 에셋이 포함됩니다.
+출력은 `inn-client/build/jpackage/<버전>/NoxacPixelDungeon/NoxacPixelDungeon.exe`입니다. 버전은 저장소 루트의 `VERSION` 파일 값입니다. 실행 폴더에 Java와 게임 에셋이 포함됩니다.
 
 원본 브라우저판은 저장소 루트에서 `.\gradlew.bat -PwebOnly html:dist`로 빌드한다. 결과는 `html/build/dist/web`에 생성된다.
 
