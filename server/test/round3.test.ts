@@ -5,9 +5,10 @@ import * as testing from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { appearance, enter, inObject, layoutId, newKey, open, openLink, sleep } from './helpers';
 import { addressKey } from '../src/util';
+import { innName } from '../src/placement';
 
 const t = testing as Record<string, any>;
-const innStub = (layout: string, shard = 0) => env.INN.get(env.INN.idFromName(`${layout}:${shard}`)) as unknown as DurableObjectStub;
+const innStub = (layout: string, shard = 0) => env.INN.get(env.INN.idFromName(innName(layout, shard))) as unknown as DurableObjectStub;
 const linkStub = (id: string) => env.LINK.get(env.LINK.idFromName(id)) as unknown as DurableObjectStub;
 const hello = () => ({ t: 'hello', v: 1, key: newKey(), name: 'x', appearance, dungeonProtocol: 12, x: 1, y: 1 });
 

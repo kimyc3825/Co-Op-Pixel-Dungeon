@@ -13,6 +13,7 @@ import {
   isCoord, isDungeonProtocol, isRef, parseFrame,
   type Appearance, type Json, type Preparation, type Theme,
 } from './protocol';
+import { linkStub } from './placement';
 import { Bucket, BucketMap, acknowledgeClose, close, digest, randomIndex, randomUint32, refuse, send } from './util';
 
 /** `closed`: the server closed or replaced the socket; every path ignores it from then on. */
@@ -443,7 +444,7 @@ export class InnRoom extends DurableObject<Env> {
     };
     const ours = (conn: Conn) => conn.member.phase === 'matched' && conn.member.match?.id === id;
     try {
-      await this.env.LINK.get(this.env.LINK.idFromName(id)).init(config);
+      await linkStub(this.env, id).init(config);
     } catch {
       // Sides that left in the meantime stay gone; the others get their preparation back.
       sides.forEach(([ws, conn], index) => {

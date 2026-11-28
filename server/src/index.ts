@@ -3,6 +3,7 @@
 // only sees the socket endpoints, the health check and paths that matched no file.
 import type { Env } from './env';
 import { CLOSE, LAYOUT_ID, LIMITS, MATCH_ID, PATHS, WIRE_VERSION } from './protocol';
+import { innStub, linkStub } from './placement';
 import { addressKey, refuse } from './util';
 
 export { InnRoom } from './inn';
@@ -53,7 +54,7 @@ async function connectInn(request: Request, env: Env, url: URL): Promise<Respons
     headers.set('X-Inn-Shard', String(shard));
     headers.set('X-Inn-Layout', layout);
     headers.set('X-Client-Address', address);
-    const stub = env.INN.get(env.INN.idFromName(`${layout}:${shard}`));
+    const stub = innStub(env, layout, shard);
     const response = await stub.fetch(url.toString(), { headers });
     // 409 is about this shard's capacity (or this address's share of it): try the next shard.
     if (response.status === 409) {
@@ -70,7 +71,7 @@ async function connectInn(request: Request, env: Env, url: URL): Promise<Respons
 function connectLink(request: Request, env: Env, url: URL): Promise<Response> | Response {
   const id = url.searchParams.get('id') ?? '';
   if (!MATCH_ID.test(id)) return refusal(CLOSE.notFound, 'link_not_found');
-  return env.LINK.get(env.LINK.idFromName(id)).fetch(request);
+  return linkStub(env, id).fetch(request);
 }
 
 export default {

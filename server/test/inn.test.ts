@@ -2,6 +2,7 @@
 import { env, exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { appearance, enter, inObject, layoutId, newKey, open, sleep } from './helpers';
+import { innName } from '../src/placement';
 
 describe('worker', () => {
   it('answers the health check', async () => {
@@ -223,7 +224,7 @@ describe('inn limits', () => {
     const watcher = await enter(layout);
     const a = await enter(layout);
     await watcher.client.next('person');
-    const stub = env.INN.get(env.INN.idFromName(`${layout}:0`)) as unknown as DurableObjectStub;
+    const stub = env.INN.get(env.INN.idFromName(innName(layout, 0))) as unknown as DurableObjectStub;
     await inObject(stub, async (instance: any, state: DurableObjectState) => {
       for (const ws of state.getWebSockets()) {
         const member = ws.deserializeAttachment();
