@@ -25,6 +25,10 @@ npx wrangler dev                        # http://127.0.0.1:8787/play/
 
 [여관 배경 작업과 로컬 미리보기](docs/inn.md#여관-배경-작업)
 
+## 함께 개발하기
+
+`main`에 푸시하면 바로 운영 서버에 배포되므로, 작업은 브랜치와 풀 리퀘스트로 합니다. 절차와 검증 명령은 [개발과 협업 가이드](docs/development.md)에, AI 코딩 에이전트가 지킬 규칙은 [AGENTS.md](AGENTS.md)에 있습니다.
+
 ## 원본 프로젝트
 
 [Shattered Pixel Dungeon](https://shatteredpixel.com/shatteredpd/) is an open-source traditional roguelike dungeon crawler with randomized levels and enemies, and hundreds of items to collect and use. It's based on the [source code of Pixel Dungeon](https://github.com/00-Evan/pixel-dungeon-gradle), by [Watabou](https://watabou.itch.io/).
