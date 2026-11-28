@@ -1157,13 +1157,14 @@ public class TurnClockEngineTest {
 		assertFalse(sent.isEmpty());
 		String[] fields = sent.get(0).split("\\|", -1);
 		assertEquals("1", fields[7]);
-		// Never more than about ten frames per second, even while things change.
+		// Answers to guest commands may go out every 0.05 s; never more than 20 frames per second,
+		// under the party link's limit of 25 a second.
 		sent.clear();
 		for (int i = 0; i < 20; i++) {
 			guest("M", i % 2 == 0 ? -1 : 1, 0);
 			frames(4, FRAME);
 		}
 		float seconds = 20 * 4 * FRAME;
-		assertTrue("rate " + sent.size() / seconds, sent.size() / seconds <= 10.5f);
+		assertTrue("rate " + sent.size() / seconds, sent.size() / seconds <= 20.5f);
 	}
 }
